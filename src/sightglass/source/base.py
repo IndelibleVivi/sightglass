@@ -6,6 +6,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
+from sightglass.contracts.capture import CaptureRequest, ResourceCaptureBinding
 from sightglass.contracts.common import SourceSortKey
 from sightglass.contracts.identity import (
     ConversationCandidate,
@@ -22,7 +23,7 @@ from sightglass.contracts.messages import (
 from sightglass.contracts.resources import SourceResourcePayload
 from sightglass.operations import check_operation_budget
 
-SourceScopeKind = Literal["catalog", "conversation", "message", "resource"]
+SourceScopeKind = Literal["catalog", "conversation", "conversations", "message", "resource"]
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class SourceScope:
     conversation_source_id: str | None = None
     source_message_id: str | None = None
     source_resource_key: str | None = None
+    conversation_source_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         values = {
@@ -54,6 +56,18 @@ class SourceScope:
         }
         if any(value is not None and not value for value in values.values()):
             raise ValueError("source scope identifiers must be non-empty")
+        if self.kind == "conversations":
+            if (
+                self.account_id is None or self.conversation_source_id is not None
+                or self.source_message_id is not None or self.source_resource_key is not None
+                or not 1 <= len(self.conversation_source_ids) <= 200
+                or len(set(self.conversation_source_ids)) != len(self.conversation_source_ids)
+                or any(not value for value in self.conversation_source_ids)
+            ):
+                raise ValueError("conversations scope requires one exact bounded target set")
+            return
+        if self.conversation_source_ids:
+            raise ValueError("only conversations scope carries a target set")
         if self.kind == "catalog":
             if any(value is not None for value in values.values()):
                 raise ValueError("catalog scope cannot carry a target")
@@ -92,6 +106,13 @@ class SourceScope:
             account_id=account_id,
             conversation_source_id=conversation_source_id,
         )
+
+    @classmethod
+    def conversations(
+        cls, account_id: str, conversation_source_ids: tuple[str, ...],
+    ) -> SourceScope:
+        return cls(kind="conversations", account_id=account_id,
+                   conversation_source_ids=conversation_source_ids)
 
     @classmethod
     def message(
@@ -275,6 +296,13 @@ class WeChatSourceProvider(Protocol):
         self, account_id: str, snapshot: SourceSnapshot
     ) -> list[SourceConversation]: ...
 
+    def get_conversation(
+        self,
+        account_id: str,
+        conversation_source_id: str,
+        snapshot: SourceSnapshot,
+    ) -> SourceConversation | None: ...
+
     def resolve_conversation(
         self, account_id: str, query: str, snapshot: SourceSnapshot
     ) -> list[ConversationCandidate]: ...
@@ -367,6 +395,10 @@ class WeChatSourceProvider(Protocol):
         max_bytes: int,
         snapshot: SourceSnapshot,
     ) -> SourceResourcePayload: ...
+
+    def capture_resource_binding(
+        self, request: CaptureRequest, snapshot: SourceSnapshot,
+    ) -> ResourceCaptureBinding: ...
 
     def catalog_complete(self, snapshot: SourceSnapshot) -> bool: ...
 

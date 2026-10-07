@@ -254,10 +254,14 @@ class ReaderTools:
                 ),
             ),
         ] = False,
+        view: Literal["replica", "fresh"] | None = None,
+        request_id: str | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
         """Read message pages; updates require ACK. Use refresh for a bounded source reread.
 
+        view=replica reads admitted resident bodies offline; fresh requires current source evidence.
+        Updates request_id gives bounded durable replay after a committed response is lost.
         Compact columns use fields/people; next_actions gives each continuation slot.
         Default recent limit is 30. diagnostic preserves full receipts; updates replay exactly.
         """
@@ -285,6 +289,8 @@ class ReaderTools:
                 strict=strict,
                 voice=voice,
                 refresh=refresh,
+                view=view,
+                request_id=request_id,
             )
 
         participant_scope = tuple(sorted(set(participant_ids or ())))
@@ -318,10 +324,13 @@ class ReaderTools:
         reading_token: str | None = None,
         limit: int | None = None,
         strict: Literal[True] = True,
+        view: Literal["replica", "fresh"] | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
         """Search canonical text with hard conversation/time/sender filters; default limit 20.
 
+        view=replica searches admitted resident bodies offline.
+        view=fresh requires current source evidence.
         Use next_actions; poll, result_page and source_scan have distinct tokens.
         """
         selected_conversations = tuple(conversation_ids or ())
@@ -340,6 +349,7 @@ class ReaderTools:
                 reading_token=reading_token,
                 limit=limit,
                 strict=strict,
+                view=view,
             ),
             conversation_id=(
                 selected_conversations[0] if len(selected_conversations) == 1 else None
@@ -358,10 +368,13 @@ class ReaderTools:
         hints: list[str] | None = None, after: str | None = None,
         before: str | None = None, cursor: str | None = None,
         reading_token: str | None = None, limit: int | None = None,
+        view: Literal["replica", "fresh"] | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
         """Find observed URLs (including query/fragment); default limit 20. No URL is fetched.
 
+        view=replica accepts partial resident coverage.
+        view=fresh validates every returned source message.
         Use next_actions; poll, result_page and source_scan have distinct tokens.
         """
         return self._safe(
@@ -370,6 +383,7 @@ class ReaderTools:
                 query=query, account_id=account_id, conversation_ids=tuple(conversation_ids or ()),
                 domains=tuple(domains or ()), hints=tuple(hints or ()), after=after,
                 before=before, cursor=cursor, reading_token=reading_token, limit=limit,
+                view=view,
             ), scope_kind="link_catalog",
             scope_values=tuple(value for value in (account_id, *(conversation_ids or ())) if value),
         )
@@ -380,10 +394,13 @@ class ReaderTools:
         kinds: list[Literal["message", "link", "image", "file", "voice"]] | None = None,
         count_hint: int | None = None, after: str | None = None, before: str | None = None,
         cursor: str | None = None, reading_token: str | None = None, limit: int | None = None,
+        view: Literal["replica", "fresh"] | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
         """Retrieve candidate contexts; default limit 3. Proximity does not prove topic identity.
 
+        view=replica accepts partial resident coverage.
+        view=fresh validates every returned source message.
         Use next_actions; poll, result_page and source_scan have distinct tokens.
         """
         return self._safe(
@@ -394,6 +411,7 @@ class ReaderTools:
                 participant_ids=tuple(participant_ids or ()), kinds=tuple(kinds or ()),
                 count_hint=count_hint, after=after, before=before, cursor=cursor,
                 reading_token=reading_token, limit=limit,
+                view=view,
             ), scope_kind="retrieval",
             scope_values=tuple(value for value in
                                (account_id, *(conversation_ids or ()), *(participant_ids or ()))

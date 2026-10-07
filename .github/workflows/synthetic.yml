@@ -30,13 +30,18 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          # Linux voice uses the functional upstream cp312 SILK wheel in uv.lock.
+          python-version: '3.12'
       - run: python -m pip install uv
-      - run: uv sync --frozen --extra dev --extra macos-wechat
+      - run: uv sync --frozen --extra dev --extra macos-wechat --extra voice
       - name: Portable policy, migrations, recovery, links, retrieval and IPC
         run: >-
           uv run python -m unittest
           tests.unit.test_contracts tests.unit.test_runtime_config tests.unit.test_peer_credentials
+          tests.unit.test_capture_boundary tests.unit.test_capture_core tests.unit.test_capture_recovery
+          tests.unit.test_activation tests.unit.test_edge_runtime tests.unit.test_frozen_transfer
+          tests.unit.test_linux_platform tests.integration.test_capture_edge_relay
+          tests.integration.test_frozen_installation tests.integration.test_replica_reads
           tests.unit.test_schema_v2_migration tests.unit.test_schema_v3_migration
           tests.unit.test_schema_v4_migration tests.unit.test_schema_v5_migration
           tests.unit.test_schema_v6_migration tests.unit.test_schema_v8_migration

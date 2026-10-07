@@ -17,7 +17,7 @@ from sightglass.model.db import WindowDB
 from sightglass.operations import check_operation_budget
 from sightglass.runtime.config import ConfigStore, SightglassConfig
 from sightglass.runtime.daemon import SightglassDaemon
-from sightglass.runtime.ipc import IPC_VERSION, IPCClient, send_frame
+from sightglass.runtime.ipc import IPC_VERSION, IPCClient, IPCUnavailableError, send_frame
 from sightglass.runtime.secrets import (
     OPERATOR_SECRET_ACCOUNT,
     READER_SECRET_ACCOUNT,
@@ -96,11 +96,9 @@ class VoiceDaemonTests(unittest.TestCase):
         self.transcriber: SyntheticTranscriber | None = SyntheticTranscriber()
         self.daemon: SightglassDaemon | None = None
         self.thread: threading.Thread | None = None
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.stop_daemon)
         self.start_daemon()
-
-    def tearDown(self) -> None:
-        self.stop_daemon()
-        self.temp.cleanup()
 
     # -- daemon lifecycle --------------------------------------------------
 
@@ -117,17 +115,26 @@ class VoiceDaemonTests(unittest.TestCase):
         )
         self.thread.start()
         deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
-        while time.monotonic() < deadline and not self.config.socket_path.exists():
+        while time.monotonic() < deadline:
+            try:
+                status = self.operator.call("daemon.status")
+                self.assertTrue(status["ready"])
+                return
+            except IPCUnavailableError:
+                pass
             time.sleep(0.01)
-        self.assertTrue(self.config.socket_path.exists())
         # Socket creation precedes worker/history startup. An IPC round-trip is the
         # synchronization point that proves serve_forever reached its accept loop.
-        self.assertTrue(self.operator.call("daemon.status")["ready"])
+        self.fail("daemon did not reach its IPC accept loop before the deadline")
 
     def stop_daemon(self) -> None:
         if self.thread is None or not self.thread.is_alive():
             return
-        self.operator.call("daemon.shutdown")
+        try:
+            self.operator.call("daemon.shutdown")
+        except IPCUnavailableError:
+            assert self.daemon is not None
+            self.daemon.shutdown()
         self.thread.join(timeout=POLL_TIMEOUT_SECONDS)
         self.assertFalse(self.thread.is_alive())
 

@@ -238,6 +238,9 @@ class SightglassDaemon:
         self.voice_setup: VoiceSetup | None = None
         self.voice_readiness: dict[str, Any] = {}
         self.config = self.config_store.load()
+        from .activation import require_core_activation
+
+        require_core_activation(self.config)
         reader_token = self.secret_store.get(READER_SECRET_ACCOUNT)
         operator_token = self.secret_store.get(OPERATOR_SECRET_ACCOUNT)
         if reader_token == operator_token:
@@ -248,7 +251,17 @@ class SightglassDaemon:
             raise RuntimeError("operator credential does not match the private config")
         self.lanes = RuntimeLanes()
         self.tools = build_daemon_tools(self.config, secret_store=self.secret_store)
-        self.source_worker = SourceWorker(self.tools.service, notify_work=self._wake_derived_work)
+        from .capture_core import CoreCapture
+
+        self.capture_core = (
+            CoreCapture(self.tools.service, self.config)
+            if self.config.source_kind == "remote-capture" else None
+        )
+        self.source_worker = SourceWorker(
+            self.tools.service, notify_work=self._wake_derived_work,
+            sync=self.capture_core.sync_once if self.capture_core is not None else None,
+            backfill=self.capture_core.backfill_once if self.capture_core is not None else None,
+        )
         self.derived_worker = DerivedIndexWorker(
             self.tools.service.retrieval.links, self.tools.service.reader
         )
@@ -536,7 +549,16 @@ class SightglassDaemon:
     def _install_runtime(self, config: SightglassConfig, tools: Any) -> None:
         self.config = config
         self.tools = tools
-        self.source_worker = SourceWorker(tools.service, notify_work=self._wake_derived_work)
+        from .capture_core import CoreCapture
+
+        self.capture_core = (
+            CoreCapture(tools.service, config) if config.source_kind == "remote-capture" else None
+        )
+        self.source_worker = SourceWorker(
+            tools.service, notify_work=self._wake_derived_work,
+            sync=self.capture_core.sync_once if self.capture_core else None,
+            backfill=self.capture_core.backfill_once if self.capture_core else None,
+        )
         self.derived_worker = DerivedIndexWorker(
             tools.service.retrieval.links, tools.service.reader
         )
@@ -554,6 +576,8 @@ class SightglassDaemon:
         self.semantic_worker.wake()
 
     def _start_runtime_workers(self) -> None:
+        if self.capture_core is not None:
+            self.capture_core.start()
         self.search_preparation.start()
         self._claim_resource_leases()
         self.source_worker.start()
@@ -577,6 +601,8 @@ class SightglassDaemon:
         self.source_worker.stop()
         if self.source_worker.status().get("running"):
             raise RuntimeError("source worker did not stop; refusing runtime reload")
+        if self.capture_core is not None:
+            self.capture_core.close()
 
     def _reload(self, config: SightglassConfig) -> None:
         # The operator holds the state-gate writer: current reader calls have drained.
@@ -647,6 +673,7 @@ class SightglassDaemon:
             "window_writer": self.database.writer_status(),
             "source_worker": self.source_worker.status(),
             "source_connections": self._source_connection_status(),
+            "capture": self.capture_core.status() if self.capture_core is not None else None,
             "storage_history": dict(self.storage_history_state),
             "voice_worker": self.voice_worker.status().as_dict(),
             "transcript_waiters": self._transcript_waiters.status(),
@@ -1013,7 +1040,12 @@ class SightglassDaemon:
                     if source_foreground:
                         self.source_worker.foreground_enter()
                         stack.callback(self.source_worker.foreground_exit)
-                    operation.result = _json_value(getattr(self.tools, str(name))(**arguments))
+                    def invoke() -> Any:
+                        return getattr(self.tools, str(name))(**arguments)
+                    operation.result = _json_value(
+                        self.capture_core.call(str(name), arguments, invoke)
+                        if self.capture_core is not None else invoke()
+                    )
                     if (
                         source_foreground
                         and isinstance(operation.result, dict)
@@ -1125,12 +1157,15 @@ class SightglassDaemon:
         if method == "operator.backfill.status":
             return self.tools.service.backfill_status()
         if method == "operator.backfill.queue":
-            result = self.tools.service.queue_backfill(
-                conversation_id=params.get("conversation_id"),
-                after=params.get("after"),
-                before=params.get("before"),
-                max_messages=int(params.get("max_messages", 10_000)),
-            )
+            def queue() -> dict[str, Any]:
+                return self.tools.service.queue_backfill(
+                    conversation_id=params.get("conversation_id"),
+                    after=params.get("after"),
+                    before=params.get("before"),
+                    max_messages=int(params.get("max_messages", 10_000)),
+                )
+
+            result = self.capture_core.catalog_call(queue) if self.capture_core else queue()
             self.source_worker.wake()
             return result
         if method in {"operator.backfill.pause", "operator.backfill.resume"}:
@@ -1486,6 +1521,8 @@ class SightglassDaemon:
     def serve_forever(self, *, install_signal_handlers: bool = True) -> None:
         self._acquire_process_lock()
         self._server = self._open_socket()
+        if self.capture_core is not None:
+            self.capture_core.start()
         self.search_preparation.start()
         self._claim_resource_leases()
         self._claim_voice_leases()
@@ -1525,6 +1562,8 @@ class SightglassDaemon:
                     continue
                 break
         finally:
+            if self.capture_core is not None:
+                self.capture_core.close()
             preparation_stopped = self.search_preparation.stop()
             semantic_stopped = self.semantic_worker.stop()
             self.derived_worker.stop()

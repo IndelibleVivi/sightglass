@@ -222,6 +222,9 @@ def cleanup_deliveries(database: WindowDB, *, apply: bool, limit: int = 500) -> 
     # every reference and inode while holding it; an in-flight delivery cannot be GC'd.
     context = database.transaction(maintenance=True) if apply else database.read_snapshot()
     with context as connection:
+        from sightglass.reader.replica import request_spool_ids
+
+        retained_requests = request_spool_ids(connection)
         for path in paths[:limit]:
             if path.suffix != ".json":
                 continue
@@ -234,7 +237,7 @@ def cleanup_deliveries(database: WindowDB, *, apply: bool, limit: int = 500) -> 
             rows = connection.execute(
                 "SELECT status FROM reader_deliveries WHERE payload_ref=?", (str(path),)
             ).fetchall()
-            if any(row[0] == "pending" for row in rows):
+            if path.stem in retained_requests or any(row[0] == "pending" for row in rows):
                 result["pending_preserved"] += 1
                 continue
             terminal = bool(rows) and all(row[0] in {"acknowledged", "expired"} for row in rows)

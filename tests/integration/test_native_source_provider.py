@@ -1949,8 +1949,8 @@ class NativeSourceProviderTests(unittest.TestCase):
             writer.commit()
 
             # Populate the generation-bound schema cache before opening the narrow
-            # session. The later target read therefore stats, but never opens, this
-            # unrelated shard.
+            # session. The body read therefore never opens this unrelated shard;
+            # exit validation opens one fresh routing view only if its WAL changed.
             with self.provider.snapshot() as snapshot:
                 self.provider.read_recent(
                     self.account_key,
@@ -1980,11 +1980,12 @@ class NativeSourceProviderTests(unittest.TestCase):
                         2,
                         snapshot,
                     )
+                    self.assertNotIn(unrelated, opened)
                     writer.execute("INSERT INTO shard_probe VALUES (3)")
                     writer.commit()
 
             self.assertEqual(len(page.messages), 2)
-            self.assertNotIn(unrelated, opened)
+            self.assertEqual(opened.count(unrelated), 1)
             self.assertIn("message/message_0.db", opened)
         finally:
             writer.close()

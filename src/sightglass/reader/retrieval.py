@@ -376,6 +376,8 @@ class RetrievalService:
                 or snapshot.get("generation") != generation
                 or kind == "retrieval"
                 and snapshot.get("lexical_generation") != lexical_generation
+                or kind == "search-replica"
+                and snapshot.get("lexical_generation") != lexical_generation
                 or kind == "retrieval"
                 and snapshot.get("semantic_token") != self._semantic_token()
                 or snapshot.get("recipe") != RETRIEVAL_RECIPE
@@ -405,6 +407,7 @@ class RetrievalService:
             "observation_watermark": self.repository.observation_watermark(),
             "link_start": None,
             "lexical_start": None,
+            "view": arguments.get("view", "auto"),
         }
         if discovery_facts is not None:
             # Freeze the source-preparation status in the signed snapshot so a later
@@ -465,6 +468,7 @@ class RetrievalService:
             "complete": catalog_coverage == "complete" and history_complete,
             "returned_count": returned,
             "served_from": "window_db",
+            "view": snapshot.get("view", "auto"),
             "coverage": {
                 "catalog": catalog_coverage,
                 "conversation": "complete" if history_complete else "indexed",
@@ -476,6 +480,10 @@ class RetrievalService:
                 "observation_watermark": snapshot["observation_watermark"],
             },
         }
+        if snapshot.get("view") == "replica":
+            source_receipt["complete"] = False
+            source_receipt["coverage"]["conversation"] = "resident_subset"
+            source_receipt["warnings"].append("replica_resident_subset")
         effective_discovery = (
             discovery_facts if discovery_facts is not None else snapshot.get("discovery")
         )
@@ -594,7 +602,19 @@ class RetrievalService:
             "context_anchor": anchor,
         }
 
-    def find_links(
+    def find_links(self, *, view: str | None = None, **arguments: Any) -> dict[str, Any]:
+        revision = self.service._materialized_cursor_revision()
+        result = self.service.replica.captured_discovery_page(
+            "wechat_find_links", {"view": view, **arguments})
+        if result is None:
+            result = self._find_links(view=view, **arguments)
+        if self.service.resolve_view(view) == "fresh":
+            scope = self._scope(arguments.get("account_id"), arguments.get("conversation_ids", ()),
+                                (), arguments.get("after"), arguments.get("before"))
+            self.service.replica.validate_fresh(scope, result, policy_revision=revision)
+        return result
+
+    def _find_links(
         self,
         *,
         query: str = "",
@@ -607,6 +627,7 @@ class RetrievalService:
         cursor: str | None = None,
         reading_token: str | None = None,
         limit: int | None = None,
+        view: str | None = None,
     ) -> dict[str, Any]:
         limit = self.service.continuation_limit(limit, reading_token or cursor, default=20)
         bounded = self.reader.bound_limit(limit)
@@ -617,9 +638,13 @@ class RetrievalService:
             raise SightglassError(ErrorCode.QUERY_INVALID)
         selected_domains = tuple(sorted(set(str(value) for value in normalized_domains)))
         self.reader.require_search()
-        self.service.residency.release_expired_leases()
+        resolved_view = self.service.resolve_view(view)
+        if resolved_view == "auto":
+            self.service.residency.release_expired_leases()
         if cursor and reading_token:
             raise SightglassError(ErrorCode.QUERY_INVALID)
+        if resolved_view != "auto" and reading_token:
+            raise SightglassError(ErrorCode.CURSOR_INVALID)
         warm_page, discovery_facts, consumed_cursor = self._discovery_request(
             kind="links",
             query=query,
@@ -633,7 +658,7 @@ class RetrievalService:
             cursor=cursor,
             reading_token=reading_token,
             limit=bounded,
-        )
+        ) if resolved_view == "auto" else (None, None, False)
         if warm_page is not None:
             return warm_page
         if consumed_cursor:
@@ -642,6 +667,7 @@ class RetrievalService:
             scope = self._scope(account_id, conversation_ids, (), after, before)
             arguments = {
                 "scope": scope.__dict__,
+                **({"view": resolved_view} if resolved_view != "auto" else {}),
                 "query": query,
                 "hints": hints,
                 "domains": selected_domains,
@@ -825,7 +851,20 @@ class RetrievalService:
         target = reply.get("target_message_id") if isinstance(reply, dict) else None
         return target if isinstance(target, str) else None
 
-    def retrieve(
+    def retrieve(self, *, view: str | None = None, **arguments: Any) -> dict[str, Any]:
+        revision = self.service._materialized_cursor_revision()
+        result = self.service.replica.captured_discovery_page(
+            "wechat_retrieve", {"view": view, **arguments})
+        if result is None:
+            result = self._retrieve(view=view, **arguments)
+        if self.service.resolve_view(view) == "fresh":
+            scope = self._scope(arguments.get("account_id"), arguments.get("conversation_ids", ()),
+                                arguments.get("participant_ids", ()), arguments.get("after"),
+                                arguments.get("before"))
+            self.service.replica.validate_fresh(scope, result, policy_revision=revision)
+        return result
+
+    def _retrieve(
         self,
         *,
         concept: str,
@@ -840,6 +879,7 @@ class RetrievalService:
         cursor: str | None = None,
         reading_token: str | None = None,
         limit: int | None = None,
+        view: str | None = None,
     ) -> dict[str, Any]:
         limit = self.service.continuation_limit(limit, reading_token or cursor, default=3)
         bounded = self.reader.bound_limit(limit)
@@ -855,9 +895,13 @@ class RetrievalService:
         ):
             raise SightglassError(ErrorCode.QUERY_INVALID)
         self.reader.require_search()
-        self.service.residency.release_expired_leases()
+        resolved_view = self.service.resolve_view(view)
+        if resolved_view == "auto":
+            self.service.residency.release_expired_leases()
         if cursor and reading_token:
             raise SightglassError(ErrorCode.QUERY_INVALID)
+        if resolved_view != "auto" and reading_token:
+            raise SightglassError(ErrorCode.CURSOR_INVALID)
         warm_page, discovery_facts, consumed_cursor = self._discovery_request(
             kind="retrieval",
             query=concept,
@@ -872,7 +916,7 @@ class RetrievalService:
             cursor=cursor,
             reading_token=reading_token,
             limit=bounded,
-        )
+        ) if resolved_view == "auto" else (None, None, False)
         if warm_page is not None:
             return warm_page
         if consumed_cursor:
@@ -881,6 +925,7 @@ class RetrievalService:
             scope = self._scope(account_id, conversation_ids, participant_ids, after, before)
             arguments = {
                 "scope": scope.__dict__,
+                **({"view": resolved_view} if resolved_view != "auto" else {}),
                 "concept": concept,
                 "hints": hints,
                 "kinds": sorted(set(kinds)),

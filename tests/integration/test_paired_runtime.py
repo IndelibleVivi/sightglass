@@ -55,12 +55,17 @@ class PairedRuntimeTests(CompactFixture, unittest.TestCase):
             b"#!/bin/sh\n# Synthetic nonexecuted paired helper fixture.\nexit 0\n"
         ))
         helper.chmod(mode)
+        if helper.name == "sightglass-whisper":
+            from tests.fixtures.linux_voice_helper import write_model_binding
+
+            write_model_binding(helper)
         return helper
 
     def _voice_readiness(self, config):
         with (
             patch("sightglass.runtime.voice_setup.SilkDecoder.available", return_value=True),
             patch("sightglass.runtime.voice_setup.SilkDecoder.version", return_value="synthetic"),
+            patch("sightglass.runtime.voice_setup.production_runner_available", return_value=True),
         ):
             return build_voice_setup(config, self.service).readiness
 
@@ -101,6 +106,10 @@ class PairedRuntimeTests(CompactFixture, unittest.TestCase):
         external = self.window.parent.parent / "external-helper"
         external.write_bytes(helper.read_bytes())
         external.chmod(0o700)
+        if helper.name == "sightglass-whisper":
+            from tests.fixtures.linux_voice_helper import write_model_binding
+
+            write_model_binding(external)
         self.config = replace(self.config, voice_helper_path=str(external))
         ConfigStore(self.config_path).save(self.config)
         for candidate in (False, True):
@@ -113,6 +122,37 @@ class PairedRuntimeTests(CompactFixture, unittest.TestCase):
                 self.assertFalse(any(item.get("kind") == "default_voice_helper"
                                      for item in new["state_files"]))
                 self.assertTrue(self._voice_readiness(config)["ready"])
+
+    def test_linux_default_model_bundle_is_independent_and_fenced(self):
+        from sightglass.voice.linux import resolve_model_binding
+
+        with patch("sightglass.runtime.voice_setup._is_linux", return_value=True):
+            helper = self._default_helper()
+            model = resolve_model_binding(helper).path
+            assert model is not None
+            original = model.read_bytes()
+            old = self.prepare()
+            activate_pair(self.pairs, old["pair_id"], expected_current=None)
+            for candidate in (False, True):
+                with self.subTest(candidate=candidate):
+                    new = self.prepare(candidate=candidate, copy_current=not candidate)
+                    config = ConfigStore(Path(new["config_path"])).load()
+                    staged = resolve_model_binding(resolve_helper_path(config)).path
+                    assert staged is not None
+                    self.assertEqual(staged.read_bytes(), original)
+                    self.assertNotEqual(staged.stat().st_ino, model.stat().st_ino)
+                    self.assertEqual(staged.stat().st_nlink, 1)
+                    self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o600)
+                    staged.write_bytes(b"synthetic model tamper")
+                    with self.assertRaisesRegex(RuntimeError, "voice helper model"):
+                        activate_pair(self.pairs, new["pair_id"], expected_current=old["pair_id"])
+                    self._assert_selected(old["pair_id"])
+                    self.assertEqual(model.read_bytes(), original)
+            new = self.prepare(copy_current=True)
+            model.write_bytes(b"synthetic source model tamper")
+            with self.assertRaisesRegex(RuntimeError, "voice helper model"):
+                activate_pair(self.pairs, new["pair_id"], expected_current=old["pair_id"])
+            self._assert_selected(old["pair_id"])
 
     def test_missing_default_helper_preserves_the_existing_blocked_state(self):
         self.config = replace(self.config, voice_enabled=True)

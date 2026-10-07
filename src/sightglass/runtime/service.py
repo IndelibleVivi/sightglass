@@ -14,6 +14,7 @@ from sightglass.storage import StorageBudget
 from sightglass.voice.repository import VoiceRepository
 from sightglass.voice.service import VoiceLimits, VoiceService
 
+from .activation import require_core_activation
 from .config import SightglassConfig
 from .receipts import AsyncReceiptWriter
 from .secrets import SecretStore, default_secret_store, semantic_secret_account
@@ -24,7 +25,10 @@ def build_daemon_tools(
 ) -> ReaderTools:
     provider = create_provider(config)
     storage = StorageBudget(config.data_dir, config.window_db_path, config.storage)
-    database = WindowDB(config.window_db_path, storage=storage)
+    database = WindowDB(
+        config.window_db_path, storage=storage,
+        write_guard=lambda: require_core_activation(config),
+    )
     repository = WindowRepository(database)
     reader = ReaderContext(
         reader_id=config.reader_id,
@@ -56,6 +60,7 @@ def build_daemon_tools(
         auth_token_hash=config.reader_token_hash,
         voice_service=voice_service,
         voice_settings=voice_settings,
+        default_view=config.reader_default_view,
     )
     if config.semantic.enabled:
         try:

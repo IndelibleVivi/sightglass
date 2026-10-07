@@ -77,11 +77,15 @@ class SourceWorker:
         poll_interval_seconds: float = 2.0,
         metadata_interval_seconds: float = SOURCE_WORKER_METADATA_INTERVAL_SECONDS,
         notify_work: Callable[[], None] | None = None,
+        sync: Callable[[], dict[str, Any]] | None = None,
+        backfill: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.service = service
         self.poll_interval_seconds = max(0.1, float(poll_interval_seconds))
         self.metadata_interval_seconds = max(0.1, float(metadata_interval_seconds))
         self.notify_work = notify_work
+        self.capture_sync = sync
+        self.capture_backfill = backfill
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._cancel_work = threading.Event()
@@ -101,7 +105,7 @@ class SourceWorker:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._state: dict[str, Any] = {
-            "enabled": service.provider.descriptor.supports_incremental,
+            "enabled": sync is not None or service.provider.descriptor.supports_incremental,
             "running": False,
             "poll_count": 0,
             "last_success_epoch": None,
@@ -265,6 +269,8 @@ class SourceWorker:
             }
 
     def _sync_source_once(self) -> dict[str, Any]:
+        if self.capture_sync is not None:
+            return self.capture_sync()
         live = self.service.provider.descriptor.source_mode == "live"
         attempts = LIVE_SYNC_ATTEMPTS if live else 1
         for attempt in range(attempts):
@@ -314,6 +320,8 @@ class SourceWorker:
         raise RuntimeError("source sync retry loop did not return")
 
     def _process_backfill_once(self) -> dict[str, Any]:
+        if self.capture_backfill is not None:
+            return self.capture_backfill()
         live = self.service.provider.descriptor.source_mode == "live"
         if not live:
             return self.service.process_backfill_once()

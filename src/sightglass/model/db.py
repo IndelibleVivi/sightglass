@@ -31,6 +31,7 @@ class WindowDB:
         path: str | os.PathLike[str],
         *,
         storage: StorageBudget | None = None,
+        write_guard: Callable[[], None] | None = None,
     ) -> None:
         self.path = Path(path).expanduser().resolve()
         parent = self.path.parent
@@ -56,6 +57,9 @@ class WindowDB:
         self._writer_wait_max_ms = 0
         self._writer_wait_samples: deque[int] = deque(maxlen=256)
         self.storage = storage
+        self.write_guard = write_guard
+        if write_guard is not None:
+            write_guard()
         self._storage_lease: ContextVar[StorageLease | None] = ContextVar(
             f"sightglass_storage_lease_{id(self)}", default=None
         )
@@ -148,9 +152,13 @@ class WindowDB:
                 connection = stack.enter_context(self.connection())
                 token = self._active_connection.set(connection)
                 try:
+                    if self.write_guard is not None:
+                        self.write_guard()
                     connection.execute("BEGIN IMMEDIATE")
                     try:
                         yield connection
+                        if self.write_guard is not None:
+                            self.write_guard()
                         if lease is not None:
                             lease.verify()
                     except Exception as exc:

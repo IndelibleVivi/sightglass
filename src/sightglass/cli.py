@@ -22,7 +22,7 @@ from sightglass.runtime.ipc import IPCClient
 from sightglass.runtime.secrets import (
     OPERATOR_SECRET_ACCOUNT,
     READER_SECRET_ACCOUNT,
-    KeychainSecretStore,
+    default_secret_store,
     new_token,
     semantic_secret_account,
     token_hash,
@@ -111,6 +111,53 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("doctor")
     commands.add_parser("pause")
     commands.add_parser("resume")
+    commands.add_parser("edge-session", help="fixed SSH stdio relay to the private capture socket")
+    for name in ("edge-enroll", "edge-run"):
+        edge = commands.add_parser(name, help="explicit thin source edge; never opens WindowDB")
+        edge.add_argument("--settings", type=Path, required=True)
+
+    edge_inspect = commands.add_parser(
+        "edge-recovery-inspect", help="private cached loss identity; stopped edge only"
+    )
+    edge_inspect.add_argument("--settings", type=Path, required=True)
+    edge_inspect.add_argument("--output", type=Path, required=True)
+    edge_recover = commands.add_parser(
+        "edge-recover", help="apply an exact stopped core recovery receipt"
+    )
+    edge_recover.add_argument("--settings", type=Path, required=True)
+    edge_recover.add_argument("--receipt-file", type=Path, required=True)
+    edge_recover.add_argument("--whole-spool-lost", action="store_true")
+
+    capture = commands.add_parser("capture", help="stopped-only operator capture recovery")
+    capture_commands = _subcommands(capture, dest="capture_command", required=True)
+    recovery_plan = capture_commands.add_parser("recovery-plan")
+    recovery_input = recovery_plan.add_mutually_exclusive_group(required=True)
+    recovery_input.add_argument("--edge-state", type=Path)
+    recovery_input.add_argument("--whole-spool-lost", action="store_true")
+    recovery_plan.add_argument("--new-epoch", required=True)
+    recovery_plan.add_argument("--next-sequence", type=int, required=True)
+    recovery_plan.add_argument("--output", type=Path, required=True)
+    recover = capture_commands.add_parser("recover")
+    recover.add_argument("--plan-file", type=Path, required=True)
+    recover.add_argument("--output", type=Path, required=True)
+
+    migration = commands.add_parser(
+        "migration", help="stopped frozen state transfer; no activation"
+    )
+    migration_commands = _subcommands(migration, dest="migration_command", required=True)
+    transfer = migration_commands.add_parser("send")
+    transfer.add_argument("--host", required=True)
+    transfer.add_argument("--identity-file", type=Path, required=True)
+    transfer.add_argument("--remote-python", required=True)
+    transfer.add_argument("--destination", required=True)
+    transfer.add_argument("--edge-state", type=Path)
+    transfer.add_argument("--output", type=Path, required=True)
+    parity = migration_commands.add_parser("verify-relocation")
+    parity.add_argument("--frozen-db", type=Path, required=True)
+    parity.add_argument("--candidate-db", type=Path, required=True)
+    parity.add_argument("--old-namespace", type=Path, required=True)
+    parity.add_argument("--new-namespace", type=Path, required=True)
+    parity.add_argument("--output", type=Path, required=True)
 
     retrieval = commands.add_parser("retrieval")
     retrieval_commands = _subcommands(retrieval, dest="retrieval_command", required=True)
@@ -367,7 +414,7 @@ def _initialize(args: argparse.Namespace, store: ConfigStore) -> dict[str, Any]:
     )
     reader_token = new_token()
     operator_token = new_token()
-    secret_store = KeychainSecretStore()
+    secret_store = default_secret_store()
     secret_store.set(READER_SECRET_ACCOUNT, reader_token)
     secret_store.set(OPERATOR_SECRET_ACCOUNT, operator_token)
     config = replace(
@@ -1082,6 +1129,114 @@ def main(argv: list[str] | None = None) -> None:
             return
         if args.command == "init":
             _print(_initialize(args, store))
+            return
+        if args.command in {"edge-enroll", "edge-run"}:
+            from sightglass.runtime.edge_runtime import EdgeSettings, enroll_edge, run_edge
+
+            settings = EdgeSettings.load(args.settings)
+            if args.command == "edge-enroll":
+                _print(enroll_edge(settings))
+            else:
+                run_edge(settings)
+            return
+        if args.command in {"edge-recovery-inspect", "edge-recover"}:
+            from sightglass.runtime.capture_recovery import (
+                inspect_edge_recovery,
+                read_private_json,
+                recover_edge,
+                write_private_json,
+            )
+            from sightglass.runtime.edge_runtime import EdgeSettings
+
+            if args.command == "edge-recovery-inspect":
+                value = inspect_edge_recovery(EdgeSettings.load(args.settings))
+                write_private_json(args.output, value)
+                _print(
+                    {
+                        "schema": value["schema"],
+                        "exported": True,
+                        "epoch_lost": value["epoch_lost"],
+                        "pending": value["pending"] is not None,
+                    }
+                )
+            else:
+                recover_edge(
+                    args.settings,
+                    read_private_json(args.receipt_file),
+                    whole_spool_lost=args.whole_spool_lost,
+                )
+                _print({"schema": "sightglass.edge-recovery.v1", "applied": True})
+            return
+        if args.command == "capture":
+            from sightglass.runtime.capture_recovery import (
+                CaptureRecoveryPlan,
+                plan_core_recovery,
+                read_private_json,
+                recover_core,
+                write_private_json,
+            )
+
+            config = store.load()
+            if args.capture_command == "recovery-plan":
+                edge_state = read_private_json(args.edge_state) if args.edge_state else None
+                plan = plan_core_recovery(
+                    config,
+                    new_epoch=args.new_epoch,
+                    next_sequence=args.next_sequence,
+                    edge_state=edge_state,
+                )
+                value = plan.as_dict()
+            else:
+                plan = CaptureRecoveryPlan.parse(read_private_json(args.plan_file))
+                value = recover_core(config, plan=plan)
+            write_private_json(args.output, value)
+            _print(
+                {
+                    "schema": value["schema"],
+                    "exported": True,
+                    "applied": args.capture_command == "recover",
+                }
+            )
+            return
+        if args.command == "migration":
+            from sightglass.runtime.capture_recovery import read_private_json, write_private_json
+            from sightglass.runtime.migration_state import send_installation, verify_relocated
+
+            if args.migration_command == "send":
+                value = send_installation(
+                    store.load(),
+                    host=args.host,
+                    identity_file=args.identity_file,
+                    remote_python=args.remote_python,
+                    destination=args.destination,
+                    edge_state=read_private_json(args.edge_state) if args.edge_state else None,
+                )
+            else:
+                value = verify_relocated(
+                    args.frozen_db,
+                    args.candidate_db,
+                    old_namespace=args.old_namespace,
+                    new_namespace=args.new_namespace,
+                )
+            write_private_json(args.output, value)
+            _print(
+                {
+                    "schema": "sightglass.migration-operator.v1",
+                    "verified": True,
+                    "activated": False,
+                    "exported": True,
+                }
+            )
+            return
+        if args.command == "edge-session":
+            from sightglass.runtime.edge_relay import run_core_stdio
+            from sightglass.source.remote import RemoteCaptureSettings
+
+            config = store.load()
+            if config.source_kind != "remote-capture" or config.source_settings_path is None:
+                raise RuntimeError("edge session requires an enrolled remote core")
+            settings = RemoteCaptureSettings.load(config.source_settings_path)
+            run_core_stdio(settings.socket_path)
             return
         if args.command == "source":
             _print(_source_command(args, store))

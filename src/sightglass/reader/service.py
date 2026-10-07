@@ -8,6 +8,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -182,6 +183,7 @@ class _MaterializedTarget:
     conversation_state: Any | None
     catalog_state: Any | None
     target_row: Any | None = None
+    view: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -204,8 +206,34 @@ class ReaderService:
         auth_token_hash: str | None = None,
         voice_service: VoiceService | None = None,
         voice_settings: VoiceReadSettings | None = None,
+        default_view: str = "auto",
     ) -> None:
-        self.provider = provider
+        if default_view not in {"auto", "replica"}:
+            raise ValueError("default_view must be auto or replica")
+        self.default_view = default_view
+        self._provider = provider
+        self._operation_provider: ContextVar[WeChatSourceProvider | None] = ContextVar(
+            "sightglass_reader_operation_provider", default=None
+        )
+        self._capture_hooks: ContextVar[tuple[Callable[[Any], None] | None,
+                                              Callable[[], None] | None]] = ContextVar(
+            "sightglass_reader_capture_hooks", default=(None, None)
+        )
+        self._captured_search_candidates: ContextVar[tuple[str, ...] | None] = ContextVar(
+            "sightglass_reader_captured_search_candidates", default=None
+        )
+        self._captured_updates_after: ContextVar[SourceSortKey | None] = ContextVar(
+            "sightglass_reader_captured_updates_after", default=None
+        )
+        self._captured_updates_ids: ContextVar[tuple[str, ...] | None] = ContextVar(
+            "sightglass_reader_captured_updates_ids", default=None
+        )
+        self._captured_updates_reconcile_revision: ContextVar[int | None] = ContextVar(
+            "sightglass_reader_captured_updates_reconcile_revision", default=None
+        )
+        self._captured_discovery: ContextVar[Any | None] = ContextVar(
+            "sightglass_reader_captured_discovery", default=None
+        )
         self.repository = repository
         self.reader = reader
         self.token_codec = token_codec
@@ -234,6 +262,9 @@ class ReaderService:
         self.semantic: SemanticService | None = None
         self.semantic_unavailable_reason: str | None = None
         self.retrieval = RetrievalService(self)
+        from sightglass.reader.replica import ReplicaReader
+
+        self.replica = ReplicaReader(self)
         self._status_lock = threading.Lock()
         self._cold_status = self._status_payload(
             SourceHealth(
@@ -250,6 +281,60 @@ class ReaderService:
             [],
         )
         self._cached_status: dict[str, Any] | None = copy.deepcopy(self._cold_status)
+
+    @property
+    def provider(self) -> WeChatSourceProvider:
+        """An immutable captured provider is scoped to this operation's context."""
+        return self._operation_provider.get() or self._provider
+
+    @provider.setter
+    def provider(self, provider: WeChatSourceProvider) -> None:
+        # Existing fixture/setup callers select the base provider before use.
+        # Per-operation capture must use captured_provider instead.
+        self._provider = provider
+
+    @contextmanager
+    def captured_provider(
+        self, provider: WeChatSourceProvider, *,
+        before_commit: Callable[[Any], None] | None = None,
+        after_commit: Callable[[], None] | None = None,
+        search_candidate_ids: tuple[str, ...] | None = None,
+        updates_after: SourceSortKey | None = None,
+        updates_message_ids: tuple[str, ...] | None = None,
+        updates_reconcile_revision: int | None = None,
+        discovery: Any | None = None,
+    ) -> Iterator[None]:
+        if (search_candidate_ids is not None and len(search_candidate_ids) > 200
+                or updates_message_ids is not None and len(updates_message_ids) > 200):
+            raise SightglassError(ErrorCode.QUERY_INVALID)
+        token = self._operation_provider.set(provider)
+        hook_token = self._capture_hooks.set((before_commit, after_commit))
+        search_token = self._captured_search_candidates.set(search_candidate_ids)
+        updates_token = self._captured_updates_after.set(updates_after)
+        updates_ids_token = self._captured_updates_ids.set(updates_message_ids)
+        reconcile_token = self._captured_updates_reconcile_revision.set(updates_reconcile_revision)
+        discovery_token = self._captured_discovery.set(discovery)
+        try:
+            yield
+        finally:
+            self._captured_discovery.reset(discovery_token)
+            self._captured_updates_reconcile_revision.reset(reconcile_token)
+            self._captured_updates_ids.reset(updates_ids_token)
+            self._captured_updates_after.reset(updates_token)
+            self._captured_search_candidates.reset(search_token)
+            self._capture_hooks.reset(hook_token)
+            self._operation_provider.reset(token)
+
+    def resolve_view(self, view: str | None = None, *, refresh: bool = False) -> str:
+        if view is not None and view not in {"replica", "fresh"}:
+            raise SightglassError(ErrorCode.QUERY_INVALID)
+        if refresh and view == "replica":
+            raise SightglassError(ErrorCode.QUERY_INVALID)
+        return "fresh" if refresh else (view or self.default_view)
+
+    @staticmethod
+    def _view_scope(scope_key: str, view: str) -> str:
+        return scope_key if view == "auto" else opaque_id("wxviewscope", scope_key, view)
 
     def _status_payload(
         self, health: SourceHealth, accounts: list[dict[str, Any]]
@@ -342,10 +427,25 @@ class ReaderService:
         existing foreground exclusion. The check never guesses from the tool name alone.
         """
 
-        if name == "wechat_search_messages" and self.search_preparation is not None:
-            return self.search_preparation.local_request(arguments)
         if name == "wechat_read_messages":
             return self.local_message_read_ready(arguments)
+        if name in {"wechat_search_messages", "wechat_find_links", "wechat_retrieve"}:
+            try:
+                view = self.resolve_view(arguments.get("view"),
+                                         refresh=arguments.get("refresh", False))
+            except SightglassError:
+                return True
+            if view == "replica":
+                return True
+            if view == "fresh":
+                return False
+        if self.default_view == "replica" and name in {
+            "wechat_status", "wechat_find_conversations", "wechat_find_participants",
+            "wechat_read_inbox",
+        }:
+            return True
+        if name == "wechat_search_messages" and self.search_preparation is not None:
+            return self.search_preparation.local_request(arguments)
         if name == "wechat_read_inbox":
             return self.local_inbox_read_ready(arguments)
         if name in {"wechat_find_resources", "wechat_find_links", "wechat_retrieve"}:
@@ -599,13 +699,20 @@ class ReaderService:
         validates itself successfully.
         """
 
-        with self.repository.database.transaction():
+        with self.repository.database.transaction() as connection:
             yield
             snapshot_stack.close()
+            before_commit, after_commit = self._capture_hooks.get()
+            if before_commit is not None:
+                before_commit(connection)
+            if after_commit is not None:
+                self.repository.database.wake_after_commit(after_commit)
 
     def status(self, detail: str = "summary") -> dict[str, Any]:
         if detail not in {"summary", "sources", "capabilities"}:
             raise SightglassError(ErrorCode.QUERY_INVALID)
+        if self.default_view == "replica":
+            return self.replica.status()
         health = self.provider.health()
         if health.complete and (self.storage is None or self.storage.status()["admission_allowed"]):
             with self._source_read() as (stack, snapshot):
@@ -630,6 +737,8 @@ class ReaderService:
 
         if detail not in {"summary", "sources", "capabilities"}:
             raise SightglassError(ErrorCode.QUERY_INVALID)
+        if self.default_view == "replica":
+            return self.replica.status()
         with self._status_lock:
             cached = copy.deepcopy(self._cached_status)
         if cached is None:
@@ -1470,6 +1579,11 @@ class ReaderService:
     ) -> dict[str, Any]:
         self.reader.require_active()
         bounded = self.reader.bound_limit(limit)
+        if self.default_view == "replica":
+            return self.replica.find_conversations(
+                query, account_id=account_id, kinds=kinds, recent_only=recent_only,
+                limit=bounded, cursor=cursor,
+            )
         with self._source_read() as (stack, snapshot):
             catalog_read = self._read_catalog(snapshot)
             mappings = catalog_read.mappings
@@ -1623,6 +1737,12 @@ class ReaderService:
         after_utc = to_utc_iso(after) if after else None
         before_utc = to_utc_iso(before) if before else None
         bounded = self.reader.bound_limit(limit)
+        if self.default_view == "replica":
+            return self.replica.read_inbox(
+                account_id=account_id, after_utc=after_utc, before_utc=before_utc,
+                kinds=kinds, unread_only=unread_only, include_latest=include_latest,
+                cursor=cursor, bounded=bounded,
+            )
 
         indexed_account = self._native_indexed_inbox_account(account_id)
         if indexed_account is not None:
@@ -1845,6 +1965,7 @@ class ReaderService:
         degraded_conversation_ids: set[str] | None = None,
         live_refresh_available: bool = True,
         live_warning_codes: tuple[str, ...] = (),
+        projection_epoch: str | None = None,
     ) -> dict[str, Any]:
         scope_key = self._scope_digest(
             {
@@ -1853,6 +1974,8 @@ class ReaderService:
                 "kinds": sorted(set(kinds)),
                 "unread_only": bool(unread_only),
                 "include_latest": include_latest,
+                **({"view": "replica", "projection_epoch": projection_epoch}
+                   if projection_epoch is not None else {}),
             }
         )
         policy_revision = self._materialized_cursor_revision()
@@ -1888,7 +2011,9 @@ class ReaderService:
             }
         )
         eligible: list[tuple[list[Any], Any]] = []
-        for row in self.repository.inbox_rows(external_account_id, observation_seq=observation_seq):
+        for row in self.repository.inbox_rows(
+            external_account_id, observation_seq=observation_seq, projection_epoch=projection_epoch,
+        ):
             conversation_id = str(row["conversation_id"])
             if not self.reader.policy.permits(conversation_id):
                 continue
@@ -2096,6 +2221,14 @@ class ReaderService:
         if active_after is not None:
             active_after = to_utc_iso(active_after)
         bounded = self.reader.bound_limit(limit)
+        if self.default_view == "replica":
+            with self.repository.database.read_snapshot():
+                context = self._conversation_context(conversation_id)
+                return self._participant_page(
+                    context=context, indexed=[], facts=_CatalogFacts(False, False),
+                    conversation_id=conversation_id, query=query, active_after=active_after,
+                    detail_level=detail_level, bounded=bounded, cursor=cursor, view="replica",
+                )
         with self._source_read() as (stack, snapshot):
             # A live provider can resolve an already-admitted conversation from its
             # persisted row instead of rebuilding the whole account catalog, exactly
@@ -2121,88 +2254,105 @@ class ReaderService:
                     self._persist_catalog(catalog_read, snapshot)
                 context = self._conversation_context(conversation_id)
                 indexed = self._index_participants(context, participants, snapshot)
-                candidates = self.repository.participant_candidates(conversation_id, query)
-                if active_after is not None:
-                    candidates = [
-                        item
-                        for item in candidates
-                        if item["last_spoke_at"] and item["last_spoke_at"] >= active_after
-                    ]
-                total_matches = len(candidates)
-                ambiguous = total_matches > 1
-                participant_epoch = self._scope_digest({"candidates": candidates})
-                scope_key = self._scope_digest(
-                    {
-                        "conversation_id": conversation_id,
-                        "query": query.casefold(),
-                        "active_after": active_after,
-                        "detail_level": detail_level,
-                    }
+                return self._participant_page(
+                    context=context, indexed=indexed, facts=facts,
+                    conversation_id=conversation_id, query=query, active_after=active_after,
+                    detail_level=detail_level, bounded=bounded, cursor=cursor,
                 )
-                policy_revision = self._policy_revision()
-                account_id = str(context["account_id"])
-                positioned = [
-                    ([str(item["label"]), str(item["participant_id"])], item)
-                    for item in candidates
-                ]
-                if cursor:
-                    cursor_payload = self.account_cursors.verify(
-                        cursor,
-                        kind="participants",
-                        reader_id=self.reader.reader_id,
-                        account_id=account_id,
-                        scope_key=scope_key,
-                        policy_revision=policy_revision,
-                    )
-                    if cursor_payload["snapshot"].get("participant_epoch") != participant_epoch:
-                        raise SightglassError(ErrorCode.CURSOR_STALE)
-                    position = cursor_payload["position"]
-                    positioned = [item for item in positioned if item[0] > position]
-                page_candidates = positioned[:bounded]
-                projected = [dict(item) for _position, item in page_candidates]
-                if detail_level == "compact":
-                    projected = [
-                        {key: value for key, value in item.items() if key != "labels"}
-                        for item in projected
-                    ]
-                elif detail_level == "debug":
-                    for item in projected:
-                        source_keys = self.repository.participant_key_details(
-                            item["participant_id"]
-                        )
-                        item["source_keys"] = source_keys
-                        item["source_key_kinds"] = [
-                            source_key["kind"] for source_key in source_keys
-                        ]
-                has_more = len(positioned) > len(page_candidates)
-                next_cursor = (
-                    self.account_cursors.issue(
-                        kind="participants",
-                        reader_id=self.reader.reader_id,
-                        account_id=account_id,
-                        scope_key=scope_key,
-                        policy_revision=policy_revision,
-                        position=page_candidates[-1][0],
-                        snapshot={"participant_epoch": participant_epoch},
-                    )
-                    if has_more and page_candidates
-                    else None
-                )
-                return {
-                    "schema": "sightglass.participant-candidates.v1",
-                    "conversation_id": conversation_id,
-                    "query": query,
-                    "ambiguous": ambiguous,
-                    "total_matches": total_matches,
-                    "truncated": has_more,
-                    "candidates": projected,
-                    "page": {
-                        "next_cursor": next_cursor,
-                        "truncated": has_more,
-                    },
-                    "coverage": self._participant_coverage(context, indexed, facts).as_dict(),
-                }
 
+    def _participant_page(
+        self, *, context: Any, indexed: list[tuple[SourceParticipant, str, str]],
+        facts: _CatalogFacts, conversation_id: str, query: str, active_after: str | None,
+        detail_level: str, bounded: int, cursor: str | None, view: str = "auto",
+    ) -> dict[str, Any]:
+        candidates = self.repository.participant_candidates(conversation_id, query)
+        if active_after is not None:
+            candidates = [
+                item
+                for item in candidates
+                if item["last_spoke_at"] and item["last_spoke_at"] >= active_after
+            ]
+        total_matches = len(candidates)
+        ambiguous = total_matches > 1
+        participant_epoch = self._scope_digest({"candidates": candidates})
+        scope_key = self._scope_digest(
+            {
+                "conversation_id": conversation_id,
+                "query": query.casefold(),
+                "active_after": active_after,
+                "detail_level": detail_level,
+                **({"view": view} if view != "auto" else {}),
+            }
+        )
+        policy_revision = (self._materialized_cursor_revision() if view == "replica"
+                           else self._policy_revision())
+        account_id = str(context["account_id"])
+        positioned = [
+            ([str(item["label"]), str(item["participant_id"])], item)
+            for item in candidates
+        ]
+        if cursor:
+            cursor_payload = self.account_cursors.verify(
+                cursor,
+                kind="participants",
+                reader_id=self.reader.reader_id,
+                account_id=account_id,
+                scope_key=scope_key,
+                policy_revision=policy_revision,
+            )
+            if cursor_payload["snapshot"].get("participant_epoch") != participant_epoch:
+                raise SightglassError(ErrorCode.CURSOR_STALE)
+            position = cursor_payload["position"]
+            positioned = [item for item in positioned if item[0] > position]
+        page_candidates = positioned[:bounded]
+        projected = [dict(item) for _position, item in page_candidates]
+        if detail_level == "compact":
+            projected = [
+                {key: value for key, value in item.items() if key != "labels"}
+                for item in projected
+            ]
+        elif detail_level == "debug":
+            for item in projected:
+                source_keys = self.repository.participant_key_details(
+                    item["participant_id"]
+                )
+                item["source_keys"] = source_keys
+                item["source_key_kinds"] = [
+                    source_key["kind"] for source_key in source_keys
+                ]
+        has_more = len(positioned) > len(page_candidates)
+        next_cursor = (
+            self.account_cursors.issue(
+                kind="participants",
+                reader_id=self.reader.reader_id,
+                account_id=account_id,
+                scope_key=scope_key,
+                policy_revision=policy_revision,
+                position=page_candidates[-1][0],
+                snapshot={"participant_epoch": participant_epoch},
+            )
+            if has_more and page_candidates
+            else None
+        )
+        return {
+            "schema": "sightglass.participant-candidates.v1",
+            "conversation_id": conversation_id,
+            "query": query,
+            "ambiguous": ambiguous,
+            "total_matches": total_matches,
+            "truncated": has_more,
+            "candidates": projected,
+            "page": {
+                "next_cursor": next_cursor,
+                "truncated": has_more,
+            },
+            "coverage": self._participant_coverage(context, indexed, facts).as_dict(),
+            **({"source_receipt": {"served_from": "window_db", "view": "replica",
+                                   "complete": False,
+                                   "freshness": {"state": "bounded_stale",
+                                                 "live_refresh_confirmed": False}}}
+               if view == "replica" else {}),
+        }
     @staticmethod
     def _source_participant_for_message(message: SourceMessage) -> SourceParticipant | None:
         if (
@@ -2802,6 +2952,7 @@ class ReaderService:
         scope_kind: str,
         scope_key: str,
         snapshot: SourceSnapshot,
+        view: str = "auto",
     ) -> Any:
         payload = self.timeline_cursors.verify(
             cursor,
@@ -2812,6 +2963,7 @@ class ReaderService:
             direction=direction,
             scope_kind=scope_kind,
             scope_key=scope_key,
+            view=view,
         )
         source_binding = payload["source"]
         if (
@@ -2874,6 +3026,7 @@ class ReaderService:
         scope_key: str,
         snapshot: SourceSnapshot,
         has_more: bool,
+        view: str = "auto",
     ) -> str | None:
         if not rows or not has_more:
             return None
@@ -2891,6 +3044,7 @@ class ReaderService:
             generation_set_digest=snapshot.generation_set_digest,
             dependency_generation_digest=self._dependency_generation_digest(snapshot),
             projection_epoch=self._projection_inventory_epoch(),
+            view=view,
         )
 
     def _read_updates(self, **arguments: Any) -> dict[str, Any]:
@@ -2905,19 +3059,32 @@ class ReaderService:
             self._conversation_context(conversation_id)
             participants = tuple(sorted(set(arguments.get("participant_ids", ()))))
             scope_kind, scope_key = cursor_scope(participants, arguments.get("query"))
+            ack_error = SightglassError(
+                ErrorCode.STORAGE_PRESSURE, retryable=True,
+                details={**error.details, "ack_committed": True, "ack_delivery_id": delivery_id},
+            )
             with self.repository.database.transaction(maintenance=True):
                 self._ensure_update_reader_profile()
                 if participants:
                     self.repository.participant_source_filters(conversation_id, participants)
-                self.repository.acknowledge_delivery(
+                self.replica.acknowledge_delivery(
                     delivery_id=delivery_id, reader_id=self.reader.reader_id,
                     conversation_id=conversation_id, scope_kind=scope_kind, scope_key=scope_key,
                     acknowledged_at=utc_now().isoformat(timespec="microseconds"),
                 )
-            raise SightglassError(
-                ErrorCode.STORAGE_PRESSURE, retryable=True,
-                details={**error.details, "ack_committed": True, "ack_delivery_id": delivery_id},
-            ) from error
+                binding = self.replica.update_request_binding(
+                    arguments.get("request_id"), conversation_id=conversation_id,
+                    scope_kind=scope_kind, scope_key=scope_key, view=arguments.get("view", "auto"),
+                    ack_delivery_id=delivery_id, projection=arguments["projection"],
+                    limit=arguments["limit"], include_resources=arguments["include_resources"],
+                    system_policy=arguments["system_policy"],
+                    voice_policy=arguments.get("voice_policy", "off"),
+                )
+                self.replica.record_update_error(
+                    arguments.get("request_id"), binding, ack_error,
+                    conversation_id=conversation_id,
+                )
+            raise ack_error from error
 
     def _ensure_update_reader_profile(self) -> None:
         profile = self.repository.database.reader_profile(self.reader.reader_id)
@@ -2944,6 +3111,8 @@ class ReaderService:
         include_resources: str,
         system_policy: str,
         voice_policy: str = "off",
+        view: str = "auto",
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         participant_ids = tuple(sorted(set(participant_ids)))
         scope_kind, scope_key = cursor_scope(participant_ids, query)
@@ -2952,12 +3121,39 @@ class ReaderService:
         self._ensure_update_reader_profile()
         if participant_ids:
             self.repository.participant_source_filters(conversation_id, participant_ids)
+        request_binding = self.replica.update_request_binding(
+            request_id, conversation_id=conversation_id, scope_kind=scope_kind,
+            scope_key=scope_key, view=view, ack_delivery_id=ack_delivery_id,
+            projection=projection, limit=limit, include_resources=include_resources,
+            system_policy=system_policy, voice_policy=voice_policy,
+        )
+        replay = self.replica.replay_update_request(request_id, request_binding)
+        if replay is not None:
+            return replay
         pending = self.repository.pending_delivery(
             self.reader.reader_id, conversation_id, scope_kind, scope_key
         )
         if ack_delivery_id is None and pending is not None:
-            return self.delivery_store.read(
+            page = self.delivery_store.read(
                 str(pending["payload_ref"]), str(pending["payload_digest"])
+            )
+            if request_id is None:
+                return page
+            with self.repository.database.transaction(maintenance=True):
+                return self.replica.record_update_outcome(
+                    request_id, request_binding, page, conversation_id=conversation_id,
+                    payload_id=str(pending["delivery_id"]),
+                    payload_digest=str(pending["payload_digest"]),
+                )
+
+        if view == "replica":
+            return self.replica.read_updates(
+                projection=projection, conversation_id=conversation_id,
+                participant_ids=participant_ids, query=query,
+                ack_delivery_id=ack_delivery_id, scope_kind=scope_kind, scope_key=scope_key,
+                limit=limit, include_resources=include_resources, system_policy=system_policy,
+                voice_policy=voice_policy, view=view, request_id=request_id,
+                request_binding=request_binding,
             )
 
         with self._source_read() as (stack, snapshot):
@@ -2965,9 +3161,42 @@ class ReaderService:
             facts = self._catalog_facts(snapshot)
             target = self._source_target(catalog_read, conversation_id)
             participants = self._read_message_participants(target, snapshot)
-            hydrated_messages = self._read_hydrate_page(target, snapshot)
+            captured_page = None
+            captured_ids = None
+            if self._operation_provider.get() is not None:
+                captured_ids = self._captured_updates_ids.get()
+                if captured_ids is not None:
+                    captured_rows = self.repository.frozen_message_rows(captured_ids)
+                    if len(captured_rows) != len(captured_ids):
+                        raise SightglassError(ErrorCode.CURSOR_STALE)
+                    verified = []
+                    for row in captured_rows:
+                        if row["conversation_id"] != conversation_id:
+                            raise SightglassError(ErrorCode.CURSOR_INVALID)
+                        source = self.provider.get_message(
+                            target.source_account_key, str(row["source_message_id"]), snapshot)
+                        if source is None:
+                            raise SightglassError(ErrorCode.SOURCE_INCOMPLETE, retryable=True)
+                        verified.append(source)
+                    hydrated_messages = tuple(verified)
+                else:
+                    if self._captured_updates_reconcile_revision.get() is None:
+                        raise SightglassError(ErrorCode.QUERY_INVALID,
+                                             details={"reason": "missing_reconciliation_revision"})
+                    captured_page = self.provider.read_range(
+                        target.source_account_key, target.source_conversation_id,
+                        after=self._captured_updates_after.get(), before=None,
+                        direction="forward", limit=200, snapshot=snapshot,
+                        participant_source_ids=(),
+                    )
+                    hydrated_messages = captured_page.messages
+            else:
+                hydrated_messages = self._read_hydrate_page(target, snapshot)
             prepared_hydrated_messages = self._prepare_messages(hydrated_messages)
             with self._admission(stack):
+                replay = self.replica.replay_update_request(request_id, request_binding)
+                if replay is not None:
+                    return replay
                 if ack_delivery_id is None:
                     pending = self.repository.pending_delivery(
                         self.reader.reader_id,
@@ -2976,8 +3205,13 @@ class ReaderService:
                         scope_key,
                     )
                     if pending is not None:
-                        return self.delivery_store.read(
+                        page = self.delivery_store.read(
                             str(pending["payload_ref"]), str(pending["payload_digest"])
+                        )
+                        return self.replica.record_update_outcome(
+                            request_id, request_binding, page, conversation_id=conversation_id,
+                            payload_id=str(pending["delivery_id"]),
+                            payload_digest=str(pending["payload_digest"]),
                         )
                 self._persist_catalog(catalog_read, snapshot)
                 context = self._conversation_context(conversation_id)
@@ -2985,7 +3219,7 @@ class ReaderService:
                 if participant_ids:
                     self.repository.participant_source_filters(conversation_id, participant_ids)
                 if ack_delivery_id is not None:
-                    self.repository.acknowledge_delivery(
+                    self.replica.acknowledge_delivery(
                         delivery_id=ack_delivery_id,
                         reader_id=self.reader.reader_id,
                         conversation_id=conversation_id,
@@ -2997,266 +3231,363 @@ class ReaderService:
                         self.reader.reader_id, conversation_id, scope_kind, scope_key
                     )
                     if pending is not None:
-                        return self.delivery_store.read(
+                        page = self.delivery_store.read(
                             str(pending["payload_ref"]), str(pending["payload_digest"])
                         )
+                        return self.replica.record_update_outcome(
+                            request_id, request_binding, page, conversation_id=conversation_id,
+                            payload_id=str(pending["delivery_id"]),
+                            payload_digest=str(pending["payload_digest"]),
+                        )
+                if (captured_page is not None
+                        and self.replica.fresh_updates_reconcile_position(conversation_id)[:2]
+                        != (self._captured_updates_after.get(),
+                            self._captured_updates_reconcile_revision.get())):
+                    raise SightglassError(ErrorCode.CURSOR_STALE)
                 self._ingest_prepared_messages(context, prepared_hydrated_messages)
-                committed = self.repository.update_position(
-                    self.reader.reader_id, conversation_id, scope_kind, scope_key
+                capture_receipt = None
+                if captured_page is not None:
+                    capture_receipt = self.replica.record_captured_updates(
+                        context, snapshot, captured_page, self._captured_updates_after.get(),
+                        self._captured_updates_reconcile_revision.get())
+                if self._operation_provider.get() is not None and capture_receipt is None:
+                    capture_receipt = self.replica.captured_updates_receipt(context, snapshot)
+                captured_message_ids = (tuple(opaque_id(
+                    "wxmsg", str(context["account_id"]), source.source_message_id)
+                    for source in hydrated_messages)
+                    if self._operation_provider.get() is not None else None)
+                return self._publish_updates(
+                    context=context, snapshot=snapshot, facts=facts,
+                    projection=projection, conversation_id=conversation_id,
+                    participant_ids=participant_ids, query=query,
+                    scope_kind=scope_kind, scope_key=scope_key, limit=limit,
+                    include_resources=include_resources, system_policy=system_policy,
+                    voice_policy=voice_policy, view=view, request_id=request_id,
+                    request_binding=request_binding,
+                    source_receipt_override=capture_receipt,
+                    capture_has_more=bool(captured_page and captured_page.has_more_after),
+                    captured_message_ids=captured_message_ids,
+                    captured_empty_frontier=(hydrated_messages[-1].sort_key
+                                             if captured_page and hydrated_messages else None),
                 )
-                observations = self.repository.observation_rows_after(
-                    conversation_id, committed, participant_ids
+
+    def _publish_updates(
+        self, *, context: Any, snapshot: SourceSnapshot, facts: _CatalogFacts,
+        projection: str, conversation_id: str, participant_ids: tuple[str, ...],
+        query: str | None, scope_kind: str, scope_key: str, limit: int,
+        include_resources: str, system_policy: str, voice_policy: str,
+        view: str, request_id: str | None, request_binding: str | None,
+        source_receipt_override: dict[str, Any] | None = None,
+        capture_has_more: bool = False,
+        captured_message_ids: tuple[str, ...] | None = None,
+        captured_empty_frontier: SourceSortKey | None = None,
+    ) -> dict[str, Any]:
+        committed = self.repository.update_position(
+            self.reader.reader_id, conversation_id, scope_kind, scope_key
+        )
+        local_current = view == "replica" or captured_message_ids is not None
+        observations = self.repository.observation_rows_after(
+            conversation_id, committed, participant_ids,
+            projection_epoch=self._projection_inventory_epoch() if local_current else None,
+            limit=(201 if captured_message_ids is not None
+                   else 10_001 if view == "replica" else None),
+        )
+        captured_unverified_more = False
+        if captured_message_ids is not None:
+            admitted = set(captured_message_ids)
+            prefix = []
+            for row in observations:
+                if str(row["message_id"]) not in admitted:
+                    captured_unverified_more = True
+                    break
+                prefix.append(row)
+            observations = prefix
+        scan_partial = view == "replica" and len(observations) > 10_000
+        if view == "replica":
+            observations = observations[:10_000]
+        scanned_only_to = None
+        filtered = [row for row in observations if self._text_matches(row["text"], query)]
+        if local_current and observations and not filtered:
+            # A zero-hit bounded filter page represents the examined range. Its
+            # exact empty delivery lets ACK advance only this filter's position.
+            scanned_only_to = int(observations[-1]["observation_seq"])
+        elif (captured_message_ids is not None and not observations
+              and captured_empty_frontier is not None and not captured_unverified_more):
+            # A verified zero-hit page needs an exact delivery to ACK this scope's
+            # observed timeline boundary. Reconciliation has its own scan cursor.
+            scanned_only_to = committed
+        scanned_observations = observations
+        observations = filtered
+        source_has_more = (capture_has_more or captured_unverified_more or scan_partial
+                           or len(observations) > limit)
+        delivery_candidates = observations[:limit]
+        timeline = self.repository.timeline_position(
+            self.reader.reader_id, conversation_id, scope_kind, scope_key
+        )
+        late_ids: set[str] = set()
+        if timeline is not None:
+            tie = json.loads(str(timeline["committed_sort_tie"]))
+            timeline_key = (
+                str(timeline["committed_sort_primary"]),
+                int(tie[0]),
+                int(tie[1]),
+                str(tie[2]),
+            )
+            late_ids = {
+                str(row["message_id"])
+                for row in delivery_candidates
+                if source_sort_key(row).as_tuple() <= timeline_key
+            }
+        visible_observations, _hidden_system_count = self._apply_system_policy(
+            delivery_candidates, system_policy
+        )
+        voice_candidates = self._voice_candidates(
+            voice_policy,
+            tuple(str(row["message_id"]) for row in visible_observations),
+        )
+        voice_reserve = self._voice_reserve(voice_policy, voice_candidates)
+        page: dict[str, Any]
+        if projection == "detail":
+            visible_observations, projected_detail, text_truncated = (
+                self._prepare_detail_rows(
+                    visible_observations,
+                    context=context,
+                    direction="forward",
+                    include_resources=include_resources,
+                    participant_ids=participant_ids,
+                    context_only_ids=frozenset(),
+                    late_arrival_ids=frozenset(late_ids),
+                    voice_reserve_chars=voice_reserve,
                 )
-                observations = [
-                    row for row in observations if self._text_matches(row["text"], query)
-                ]
-                source_has_more = len(observations) > limit
-                delivery_candidates = observations[:limit]
-                timeline = self.repository.timeline_position(
-                    self.reader.reader_id, conversation_id, scope_kind, scope_key
+            )
+            if visible_observations:
+                to_sequence = max(
+                    int(row["observation_seq"]) for row in visible_observations
                 )
-                late_ids: set[str] = set()
-                if timeline is not None:
-                    tie = json.loads(str(timeline["committed_sort_tie"]))
-                    timeline_key = (
-                        str(timeline["committed_sort_primary"]),
-                        int(tie[0]),
-                        int(tie[1]),
-                        str(tie[2]),
-                    )
-                    late_ids = {
-                        str(row["message_id"])
+            elif delivery_candidates:
+                to_sequence = max(
+                    int(row["observation_seq"]) for row in delivery_candidates
+                )
+            else:
+                to_sequence = scanned_only_to
+            delivery_observations = [
+                row
+                for row in delivery_candidates
+                if to_sequence is not None and int(row["observation_seq"]) <= to_sequence
+            ]
+            hidden_system_count = (
+                sum(row["kind"] in {"system", "recalled"} for row in delivery_observations)
+                if system_policy == "omit"
+                else 0
+            )
+            delivery_id = (
+                opaque_id(
+                    "wxdelivery",
+                    self.reader.reader_id,
+                    conversation_id,
+                    scope_kind,
+                    scope_key,
+                    committed,
+                    to_sequence,
+                    utc_now().isoformat(timespec="microseconds"),
+                )
+                if to_sequence is not None
+                else None
+            )
+            if to_sequence is None:
+                has_more = source_has_more
+            else:
+                has_more = (
+                    source_has_more
+                    or text_truncated
+                    or any(
+                        int(row["observation_seq"]) > to_sequence
                         for row in delivery_candidates
-                        if source_sort_key(row).as_tuple() <= timeline_key
-                    }
-                visible_observations, _hidden_system_count = self._apply_system_policy(
-                    delivery_candidates, system_policy
+                    )
                 )
-                voice_candidates = self._voice_candidates(
-                    voice_policy,
-                    tuple(str(row["message_id"]) for row in visible_observations),
-                )
-                voice_reserve = self._voice_reserve(voice_policy, voice_candidates)
-                page: dict[str, Any]
-                if projection == "detail":
-                    visible_observations, projected_detail, text_truncated = (
-                        self._prepare_detail_rows(
-                            visible_observations,
-                            context=context,
-                            direction="forward",
-                            include_resources=include_resources,
-                            participant_ids=participant_ids,
-                            context_only_ids=frozenset(),
-                            late_arrival_ids=frozenset(late_ids),
-                            voice_reserve_chars=voice_reserve,
-                        )
+            page = self._page_response(
+                projection="detail",
+                mode="updates",
+                context=context,
+                rows=visible_observations,
+                snapshot=snapshot,
+                facts=facts,
+                source_receipt_override=source_receipt_override,
+                has_more_before=False,
+                has_more_after=has_more,
+                participant_ids=participant_ids,
+                speaker_view="only" if participant_ids else None,
+                include_resources=include_resources,
+                system_policy=system_policy,
+                focus_message_ids=frozenset(
+                    str(row["message_id"]) for row in visible_observations
+                ),
+                late_arrival_ids=frozenset(late_ids),
+                delivery_id=delivery_id,
+                truncated=has_more,
+                hidden_system_count=hidden_system_count,
+                projected_detail=projected_detail,
+                voice_reserve_chars=voice_reserve,
+            )
+        else:
+            prepared = self.compact_projector.prepare(
+                visible_observations,
+                timezone_name=self._reader_timezone(context),
+                include_resource_indicators=include_resources == "indicator",
+                focus_message_ids=frozenset(
+                    str(row["message_id"]) for row in visible_observations
+                ),
+                context_only_ids=frozenset(),
+                late_arrival_ids=frozenset(late_ids),
+            )
+
+            def build_compact_update(
+                selected: slice, message_rows_complete: bool
+            ) -> dict[str, Any]:
+                candidate_rows = visible_observations[selected]
+                candidate_prepared = prepared[selected]
+                if candidate_rows:
+                    candidate_to_sequence = max(
+                        int(row["observation_seq"]) for row in candidate_rows
                     )
-                    if visible_observations:
-                        to_sequence = max(
-                            int(row["observation_seq"]) for row in visible_observations
-                        )
-                    elif delivery_candidates:
-                        to_sequence = max(
-                            int(row["observation_seq"]) for row in delivery_candidates
-                        )
-                    else:
-                        to_sequence = None
-                    delivery_observations = [
-                        row
-                        for row in delivery_candidates
-                        if to_sequence is not None and int(row["observation_seq"]) <= to_sequence
-                    ]
-                    hidden_system_count = (
-                        sum(row["kind"] in {"system", "recalled"} for row in delivery_observations)
-                        if system_policy == "omit"
-                        else 0
-                    )
-                    delivery_id = (
-                        opaque_id(
-                            "wxdelivery",
-                            self.reader.reader_id,
-                            conversation_id,
-                            scope_kind,
-                            scope_key,
-                            committed,
-                            to_sequence,
-                            utc_now().isoformat(timespec="microseconds"),
-                        )
-                        if to_sequence is not None
-                        else None
-                    )
-                    if to_sequence is None:
-                        has_more = source_has_more
-                    else:
-                        has_more = (
-                            source_has_more
-                            or text_truncated
-                            or any(
-                                int(row["observation_seq"]) > to_sequence
-                                for row in delivery_candidates
-                            )
-                        )
-                    page = self._page_response(
-                        projection="detail",
-                        mode="updates",
-                        context=context,
-                        rows=visible_observations,
-                        snapshot=snapshot,
-                        facts=facts,
-                        has_more_before=False,
-                        has_more_after=has_more,
-                        participant_ids=participant_ids,
-                        speaker_view="only" if participant_ids else None,
-                        include_resources=include_resources,
-                        system_policy=system_policy,
-                        focus_message_ids=frozenset(
-                            str(row["message_id"]) for row in visible_observations
-                        ),
-                        late_arrival_ids=frozenset(late_ids),
-                        delivery_id=delivery_id,
-                        truncated=has_more,
-                        hidden_system_count=hidden_system_count,
-                        projected_detail=projected_detail,
-                        voice_reserve_chars=voice_reserve,
+                elif delivery_candidates:
+                    candidate_to_sequence = max(
+                        int(row["observation_seq"]) for row in delivery_candidates
                     )
                 else:
-                    prepared = self.compact_projector.prepare(
-                        visible_observations,
-                        timezone_name=self._reader_timezone(context),
-                        include_resource_indicators=include_resources == "indicator",
-                        focus_message_ids=frozenset(
-                            str(row["message_id"]) for row in visible_observations
-                        ),
-                        context_only_ids=frozenset(),
-                        late_arrival_ids=frozenset(late_ids),
+                    candidate_to_sequence = scanned_only_to
+                candidate_delivery_rows = [
+                    row
+                    for row in delivery_candidates
+                    if candidate_to_sequence is not None
+                    and int(row["observation_seq"]) <= candidate_to_sequence
+                ]
+                candidate_hidden_count = (
+                    sum(
+                        row["kind"] in {"system", "recalled"}
+                        for row in candidate_delivery_rows
                     )
-
-                    def build_compact_update(
-                        selected: slice, message_rows_complete: bool
-                    ) -> dict[str, Any]:
-                        candidate_rows = visible_observations[selected]
-                        candidate_prepared = prepared[selected]
-                        if candidate_rows:
-                            candidate_to_sequence = max(
-                                int(row["observation_seq"]) for row in candidate_rows
-                            )
-                        elif delivery_candidates:
-                            candidate_to_sequence = max(
-                                int(row["observation_seq"]) for row in delivery_candidates
-                            )
-                        else:
-                            candidate_to_sequence = None
-                        candidate_delivery_rows = [
-                            row
-                            for row in delivery_candidates
-                            if candidate_to_sequence is not None
-                            and int(row["observation_seq"]) <= candidate_to_sequence
-                        ]
-                        candidate_hidden_count = (
-                            sum(
-                                row["kind"] in {"system", "recalled"}
-                                for row in candidate_delivery_rows
-                            )
-                            if system_policy == "omit"
-                            else 0
-                        )
-                        candidate_delivery_id = (
-                            opaque_id(
-                                "wxdelivery",
-                                self.reader.reader_id,
-                                conversation_id,
-                                scope_kind,
-                                scope_key,
-                                committed,
-                                candidate_to_sequence,
-                                utc_now().isoformat(timespec="microseconds"),
-                            )
-                            if candidate_to_sequence is not None
-                            else None
-                        )
-                        candidate_has_more = source_has_more or (
-                            candidate_to_sequence is not None
-                            and any(
-                                int(row["observation_seq"]) > candidate_to_sequence
-                                for row in delivery_candidates
-                            )
-                        )
-                        return self._page_response(
-                            projection="compact",
-                            mode="updates",
-                            context=context,
-                            rows=candidate_rows,
-                            snapshot=snapshot,
-                            facts=facts,
-                            has_more_before=False,
-                            has_more_after=candidate_has_more,
-                            participant_ids=participant_ids,
-                            speaker_view="only" if participant_ids else None,
-                            include_resources=include_resources,
-                            system_policy=system_policy,
-                            focus_message_ids=frozenset(
-                                str(row["message_id"]) for row in candidate_rows
-                            ),
-                            late_arrival_ids=frozenset(late_ids),
-                            delivery_id=candidate_delivery_id,
-                            hidden_system_count=candidate_hidden_count,
-                            compact_prepared=candidate_prepared,
-                            message_rows_complete=message_rows_complete,
-                            voice_reserve_chars=voice_reserve,
-                        )
-
-                    selected, page = self._fit_compact_page(
-                        len(visible_observations),
-                        direction="forward",
-                        build=build_compact_update,
+                    if system_policy == "omit"
+                    else 0
+                )
+                candidate_delivery_id = (
+                    opaque_id(
+                        "wxdelivery",
+                        self.reader.reader_id,
+                        conversation_id,
+                        scope_kind,
+                        scope_key,
+                        committed,
+                        candidate_to_sequence,
+                        utc_now().isoformat(timespec="microseconds"),
                     )
-                    visible_observations = visible_observations[selected]
-                    if visible_observations:
-                        to_sequence = max(
-                            int(row["observation_seq"]) for row in visible_observations
-                        )
-                    elif delivery_candidates:
-                        to_sequence = max(
-                            int(row["observation_seq"]) for row in delivery_candidates
-                        )
-                    else:
-                        to_sequence = None
-                    delivery_observations = [
-                        row
+                    if candidate_to_sequence is not None
+                    else None
+                )
+                candidate_has_more = source_has_more or (
+                    candidate_to_sequence is not None
+                    and any(
+                        int(row["observation_seq"]) > candidate_to_sequence
                         for row in delivery_candidates
-                        if to_sequence is not None and int(row["observation_seq"]) <= to_sequence
-                    ]
-                    delivery_id = page["page"]["delivery_id"]
-                page = self._attach_voice(
-                    page,
-                    policy=voice_policy,
-                    candidates=voice_candidates,
-                    rows=visible_observations,
-                    conversation_id=conversation_id,
-                    projection=projection,
+                    )
+                )
+                return self._page_response(
+                    projection="compact",
+                    mode="updates",
+                    context=context,
+                    rows=candidate_rows,
+                    snapshot=snapshot,
+                    facts=facts,
+                    source_receipt_override=source_receipt_override,
+                    has_more_before=False,
+                    has_more_after=candidate_has_more,
+                    participant_ids=participant_ids,
+                    speaker_view="only" if participant_ids else None,
+                    include_resources=include_resources,
+                    system_policy=system_policy,
                     focus_message_ids=frozenset(
-                        str(row["message_id"]) for row in visible_observations
+                        str(row["message_id"]) for row in candidate_rows
                     ),
+                    late_arrival_ids=frozenset(late_ids),
+                    delivery_id=candidate_delivery_id,
+                    hidden_system_count=candidate_hidden_count,
+                    compact_prepared=candidate_prepared,
+                    message_rows_complete=message_rows_complete,
+                    voice_reserve_chars=voice_reserve,
                 )
-                if not delivery_observations:
-                    return page
-                assert to_sequence is not None and delivery_id is not None
-                payload_ref, payload_digest = self.delivery_store.write(delivery_id, page)
-                self.repository.create_pending_delivery(
-                    delivery_id=delivery_id,
-                    reader_id=self.reader.reader_id,
-                    conversation_id=conversation_id,
-                    scope_kind=scope_kind,
-                    scope_key=scope_key,
-                    from_observation_seq=committed + 1,
-                    to_observation_seq=to_sequence,
-                    payload_digest=payload_digest,
-                    payload_ref=payload_ref,
-                    projection_schema_version=str(page["schema"]),
-                    created_at=utc_now().isoformat(timespec="microseconds"),
-                )
-                return self.delivery_store.read(payload_ref, payload_digest)
 
+            selected, page = self._fit_compact_page(
+                len(visible_observations),
+                direction="forward",
+                build=build_compact_update,
+            )
+            visible_observations = visible_observations[selected]
+            if visible_observations:
+                to_sequence = max(
+                    int(row["observation_seq"]) for row in visible_observations
+                )
+            elif delivery_candidates:
+                to_sequence = max(
+                    int(row["observation_seq"]) for row in delivery_candidates
+                )
+            else:
+                to_sequence = scanned_only_to
+            delivery_observations = [
+                row
+                for row in delivery_candidates
+                if to_sequence is not None and int(row["observation_seq"]) <= to_sequence
+            ]
+            delivery_id = page["page"]["delivery_id"]
+        if view == "fresh":
+            page["source_receipt"]["view"] = "fresh"
+        if view == "replica":
+            page["page"]["observation_window"] = {
+                "after": committed, "through": to_sequence, "scan_partial": scan_partial,
+            }
+        page = self._attach_voice(
+            page,
+            policy=voice_policy,
+            candidates=voice_candidates,
+            rows=visible_observations,
+            conversation_id=conversation_id,
+            projection=projection,
+            focus_message_ids=frozenset(
+                str(row["message_id"]) for row in visible_observations
+            ),
+        )
+        if to_sequence is None:
+            return self.replica.record_update_outcome(request_id, request_binding, page,
+                                                     conversation_id=conversation_id)
+        assert to_sequence is not None and delivery_id is not None
+        payload_ref, payload_digest = self.delivery_store.write(delivery_id, page)
+        self.repository.create_pending_delivery(
+            delivery_id=delivery_id,
+            reader_id=self.reader.reader_id,
+            conversation_id=conversation_id,
+            scope_kind=scope_kind,
+            scope_key=scope_key,
+            from_observation_seq=committed + 1,
+            to_observation_seq=to_sequence,
+            payload_digest=payload_digest,
+            payload_ref=payload_ref,
+            projection_schema_version=str(page["schema"]),
+            created_at=utc_now().isoformat(timespec="microseconds"),
+        )
+        if captured_message_ids is not None:
+            traversed = [row for row in scanned_observations
+                         if int(row["observation_seq"]) <= to_sequence]
+            frontier = (max((source_sort_key(row) for row in traversed),
+                            key=lambda key: key.as_tuple())
+                        if traversed else captured_empty_frontier)
+            if frontier is not None:
+                self.replica.record_update_frontier(
+                    delivery_id, conversation_id=conversation_id, scope_kind=scope_kind,
+                    scope_key=scope_key, frontier=frontier,
+                )
+        return self.replica.record_update_outcome(
+            request_id, request_binding, page, conversation_id=conversation_id,
+            payload_id=delivery_id, payload_digest=payload_digest,
+        )
     def _voice_policy(self, requested: str | None) -> str:
         """Resolve one read's voice policy; message-only or disabled readers stay unchanged."""
 
@@ -3364,6 +3695,7 @@ class ReaderService:
         conversation_id: str | None,
         message_id: str | None,
         anchor: str | None,
+        view: str = "auto",
     ) -> _MaterializedTarget | None:
         if mode not in {"recent", "context", "range", "message", "speaker"}:
             return None
@@ -3404,7 +3736,7 @@ class ReaderService:
                 "SELECT 1 FROM message_body_residency WHERE conversation_id=? "
                 "AND expires_at<=? LIMIT 1", (conversation_id, datetime.now(UTC).isoformat())
             ).fetchone()
-        if expired:
+        if expired and view != "replica":
             return None
         state = self.repository.source_conversation_state(conversation_id)
         if state is not None and (
@@ -3418,7 +3750,7 @@ class ReaderService:
             or target_row["current_observation_seq"] is None
         ):
             return None
-        if target_row is None:
+        if target_row is None and view != "replica":
             # An exact admitted target proves its local version, not the current
             # tail. Unanchored timeline reads still need independent tail evidence.
             if state is None or str(state["source_inventory_epoch"] or "") != epoch:
@@ -3447,26 +3779,43 @@ class ReaderService:
             ):
                 return None
         catalog_state = self.repository.source_catalog_state(str(context["account_id"]))
-        return _MaterializedTarget(context, state, catalog_state, target_row)
+        return _MaterializedTarget(context, state, catalog_state, target_row, view)
 
     def local_message_read_ready(self, arguments: dict[str, Any]) -> bool:
         """Whether this exact message call can be served without the provider."""
 
         mode = arguments.get("mode", "recent")
         refresh = arguments.get("refresh", False)
-        if type(refresh) is not bool or (
-            refresh and (mode == "updates" or arguments.get("cursor") is not None)
-        ):
+        try:
+            selected = {key: value for key, value in arguments.items()
+                        if key != "response_profile"}
+            selected.setdefault("mode", "recent")
+            selected["participant_ids"] = tuple(selected.get("participant_ids") or ())
+            settings = self._validate_message_arguments(**selected)
+        except SightglassError:
             return True
-        if not isinstance(mode, str) or mode == "updates":
-            return False
+        except (TypeError, ValueError):
+            # Public MCP validation reports malformed argument shapes locally.
+            return True
+        view = settings["resolved_view"]
+        if view == "replica":
+            return True
+        if mode == "updates":
+            try:
+                self.reader.require_active()
+                self.reader.authorize(str(arguments["conversation_id"]))
+            except SightglassError:
+                return True
+            return self.replica.update_replay_ready(arguments)
         cursor = arguments.get("cursor")
+        cursor_kind = None
         if cursor is not None:
             if not isinstance(cursor, str):
                 return False
             try:
-                if self.token_codec.decode(cursor).get("kind") != "timeline-materialized":
-                    return False
+                cursor_kind = self.token_codec.decode(cursor).get("kind")
+                if view == "fresh" and cursor_kind != "timeline":
+                    return True
             except SightglassError:
                 return True
         try:
@@ -3488,6 +3837,10 @@ class ReaderService:
                     else None
                 ),
             )
+            # Fresh acquisition needs a source lease only after the canonical
+            # arguments, target signature, message identity and policy are valid.
+            if view == "fresh" or cursor_kind not in {None, "timeline-materialized"}:
+                return False
             # A materialized continuation with no valid local target is already
             # stale; execution reports that error without contacting the provider.
             return not refresh and (target is not None or cursor is not None)
@@ -3538,7 +3891,8 @@ class ReaderService:
                         "AND projection_epoch=? ORDER BY window_id DESC LIMIT 1",
                         (target.context["conversation_id"], epoch),
                     ).fetchone()
-                fresh_as_of = str(cached[0])
+                fresh_as_of = (str(cached[0]) if cached is not None
+                               else str(target.context["last_seen_at"]))
         conversation_coverage = "complete" if backfill_state == "complete" else "indexed"
         with self.repository.database.connection() as connection:
             window_count = int(
@@ -3552,6 +3906,8 @@ class ReaderService:
             )
         if window_count > 1:
             conversation_coverage = "indexed"
+        if target.view == "replica":
+            conversation_coverage = "resident_subset"
         observed_after, observed_before = self.repository.materialized_observation_bounds(
             str(target.context["conversation_id"]),
             projection_epoch=epoch,
@@ -3585,6 +3941,7 @@ class ReaderService:
             ).as_dict(),
             "warnings": warnings,
             "served_from": "window_db",
+            "view": target.view if target.view != "auto" else "materialized",
             "continuity": {
                 "state": "unverified"
                 if not window_count
@@ -3623,6 +3980,7 @@ class ReaderService:
             scope_key=scope_key,
             projection_epoch=epoch,
             policy_revision=self._materialized_cursor_revision(),
+            view=target.view,
         )
         watermark = int(payload["projection"]["observation_watermark"])
         if self.repository.materialized_snapshot_changed(
@@ -3677,6 +4035,7 @@ class ReaderService:
             projection_epoch=self._projection_inventory_epoch(),
             observation_watermark=observation_watermark,
             policy_revision=self._materialized_cursor_revision(),
+            view=target.view,
         )
 
     @staticmethod
@@ -3909,16 +4268,20 @@ class ReaderService:
         scope_kind: str,
         scope_key: str,
         voice_policy: str,
+        view: str = "auto",
     ) -> _FrozenMaterializedPage | None:
         if cursor is not None:
             cursor_kind = self.token_codec.decode(cursor).get("kind")
             if cursor_kind != "timeline-materialized":
+                if view == "replica":
+                    raise SightglassError(ErrorCode.CURSOR_INVALID)
                 return None
         target = self._materialized_target(
             mode=mode,
             conversation_id=conversation_id,
             message_id=message_id,
             anchor=anchor,
+            view=view,
         )
         if target is None:
             if cursor is not None:
@@ -3928,6 +4291,12 @@ class ReaderService:
                     ErrorCode.SOURCE_INCOMPLETE,
                     retryable=True,
                     details={"warning_codes": ["materialized_projection_changed"]},
+                )
+            if view == "replica":
+                raise SightglassError(
+                    ErrorCode.SOURCE_INCOMPLETE,
+                    details={"view": "replica", "coverage": {"state": "unavailable"},
+                             "warning_codes": ["replica_scope_unavailable"]},
                 )
             return None
         if cursor is not None:
@@ -3963,7 +4332,12 @@ class ReaderService:
                 message_id=str(target.target_row["message_id"]),
             )
             if not rows:
-                raise SightglassError(ErrorCode.MESSAGE_NOT_FOUND)
+                raise SightglassError(
+                    ErrorCode.SOURCE_INCOMPLETE if view == "replica"
+                    else ErrorCode.MESSAGE_NOT_FOUND,
+                    details={"view": "replica", "coverage": {"state": "body_unavailable"}}
+                    if view == "replica" else None,
+                )
             focus_rows = rows
         elif mode == "context":
             assert target.target_row is not None
@@ -3977,7 +4351,10 @@ class ReaderService:
             )
             if not target_rows:
                 raise SightglassError(
-                    ErrorCode.CURSOR_STALE if anchor else ErrorCode.MESSAGE_NOT_FOUND
+                    ErrorCode.CURSOR_STALE if anchor else ErrorCode.SOURCE_INCOMPLETE
+                    if view == "replica" else ErrorCode.MESSAGE_NOT_FOUND,
+                    details={"view": "replica", "coverage": {"state": "body_unavailable"}}
+                    if view == "replica" else None,
                 )
             target_row = target_rows[0]
             before_rows = (
@@ -4161,7 +4538,7 @@ class ReaderService:
             scope = SourceScope.conversation(account_key, source_conversation_id)
         return scope, str(context["account_id"])
 
-    def read_messages(
+    def _validate_message_arguments(
         self,
         *,
         mode: str,
@@ -4185,12 +4562,22 @@ class ReaderService:
         strict: bool = True,
         voice: str | None = None,
         refresh: bool = False,
+        view: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         if type(refresh) is not bool or (refresh and (mode == "updates" or cursor is not None)):
             raise SightglassError(ErrorCode.QUERY_INVALID)
-        if mode != "updates":
-            self.residency.release_expired_leases()
+        resolved_view = self.resolve_view(view, refresh=refresh)
+        if request_id is not None and mode != "updates":
+            raise SightglassError(ErrorCode.QUERY_INVALID)
+        if request_id is not None and (
+            not isinstance(request_id, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id) is None
+        ):
+            raise SightglassError(ErrorCode.QUERY_INVALID)
         voice_policy = self._voice_policy(voice)
+        if resolved_view == "replica" and voice_policy == "auto":
+            voice_policy = "cached"
         if not strict:
             raise SightglassError(
                 ErrorCode.QUERY_INVALID,
@@ -4249,21 +4636,9 @@ class ReaderService:
             else:
                 effective_limit = 30 if mode == "recent" else 100
         bounded = self.reader.bound_message_limit(effective_limit, projection=projection, mode=mode)
-        if mode == "updates":
-            if not conversation_id or anchor or message_id or cursor:
-                raise SightglassError(ErrorCode.QUERY_INVALID)
-            return self._read_updates(
-                projection=projection,
-                conversation_id=conversation_id,
-                participant_ids=participant_ids,
-                query=query,
-                ack_delivery_id=ack_delivery_id,
-                limit=bounded,
-                include_resources=include_resources,
-                system_policy=system_policy,
-                voice_policy=voice_policy,
-            )
-        if ack_delivery_id is not None:
+        if mode == "updates" and (not conversation_id or anchor or message_id or cursor):
+            raise SightglassError(ErrorCode.QUERY_INVALID)
+        if ack_delivery_id is not None and mode != "updates":
             raise SightglassError(ErrorCode.QUERY_INVALID)
         if mode == "context" and before + after + 1 > bounded:
             raise SightglassError(
@@ -4288,8 +4663,85 @@ class ReaderService:
             time_before if mode in {"range", "speaker"} else None,
             system_policy,
         )
+        if resolved_view == "auto" and view is None and cursor:
+            payload = self.token_codec.decode(cursor)
+            # Legacy local callers continue a refreshed source page by passing
+            # only its signed cursor. Preserve that default-auto call shape while
+            # explicit views and the replica default retain strict view binding.
+            if payload.get("kind") == "timeline" and payload.get("view") == "fresh":
+                resolved_view = "fresh"
+        return {
+            "projection": projection, "include_resources": include_resources,
+            "query": query, "time_after": time_after, "time_before": time_before,
+            "bounded": bounded, "voice_policy": voice_policy,
+            "resolved_view": resolved_view, "participant_ids": participant_ids,
+            "scope_kind": scope_kind, "scope_key": scope_key,
+        }
+
+    def read_messages(
+        self,
+        *,
+        mode: str,
+        conversation_id: str | None = None,
+        message_id: str | None = None,
+        anchor: str | None = None,
+        before: int = 30,
+        after: int = 20,
+        limit: int | None = None,
+        direction: str = "backward",
+        cursor: str | None = None,
+        ack_delivery_id: str | None = None,
+        participant_ids: tuple[str, ...] = (),
+        speaker_view: str = "only",
+        time_after: str | None = None,
+        time_before: str | None = None,
+        query: str | None = None,
+        projection: str | None = None,
+        include_resources: str | None = None,
+        system_policy: str = "include",
+        strict: bool = True,
+        voice: str | None = None,
+        refresh: bool = False,
+        view: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        settings = self._validate_message_arguments(
+            mode=mode, conversation_id=conversation_id, message_id=message_id, anchor=anchor,
+            before=before, after=after, limit=limit, direction=direction, cursor=cursor,
+            ack_delivery_id=ack_delivery_id, participant_ids=participant_ids,
+            speaker_view=speaker_view, time_after=time_after, time_before=time_before,
+            query=query, projection=projection, include_resources=include_resources,
+            system_policy=system_policy, strict=strict, voice=voice, refresh=refresh,
+            view=view, request_id=request_id,
+        )
+        projection = str(settings["projection"])
+        include_resources = str(settings["include_resources"])
+        query = settings["query"]
+        time_after, time_before = settings["time_after"], settings["time_before"]
+        bounded, voice_policy = settings["bounded"], settings["voice_policy"]
+        resolved_view, participant_ids = settings["resolved_view"], settings["participant_ids"]
+        scope_kind, scope_key = settings["scope_kind"], settings["scope_key"]
+        if mode == "updates":
+            assert conversation_id is not None
+            return self._read_updates(
+                projection=projection, conversation_id=conversation_id,
+                participant_ids=participant_ids, query=query,
+                ack_delivery_id=ack_delivery_id, limit=bounded,
+                include_resources=include_resources, system_policy=system_policy,
+                voice_policy=voice_policy, view=resolved_view, request_id=request_id,
+            )
+        if self._operation_provider.get() is not None:
+            before, after, bounded, _fetch = self.replica.capture_message_bounds(
+                mode=mode, before=before, after=after, bounded=bounded,
+                speaker_view=speaker_view, query=query,
+                cursor=bool(cursor),
+            )
+        if resolved_view != "replica":
+            self.residency.release_expired_leases()
         materialized = None
-        if refresh:
+        if resolved_view == "fresh":
+            if cursor and self.token_codec.decode(cursor).get("kind") != "timeline":
+                raise SightglassError(ErrorCode.CURSOR_INVALID)
             # Keep the same local target/signature/policy validation. Explicit
             # refresh changes evidence acquisition, never target authorization.
             self._materialized_target(
@@ -4320,6 +4772,7 @@ class ReaderService:
                 scope_kind=scope_kind,
                 scope_key=scope_key,
                 voice_policy=voice_policy,
+                view=resolved_view,
             )
         if materialized is not None:
             return materialized
@@ -4391,6 +4844,7 @@ class ReaderService:
                     scope_kind=scope_kind,
                     scope_key=scope_key,
                     snapshot=snapshot,
+                    view=resolved_view,
                 )
             after_key = (
                 source_sort_key(cursor_row) if cursor_row and direction == "forward" else None
@@ -4520,6 +4974,12 @@ class ReaderService:
                     conversation_id, participant_ids
                 )
                 fetch_limit = 10_001 if query else bounded
+                if self._operation_provider.get() is not None:
+                    _, _, _, fetch_limit = self.replica.capture_message_bounds(
+                        mode=mode, before=before, after=after, bounded=bounded,
+                        speaker_view=speaker_view, query=query,
+                        cursor=bool(cursor),
+                    )
                 source_page = self.provider.read_range(
                     str(context["source_account_key"]),
                     str(context["source_conversation_id"]),
@@ -4737,6 +5197,7 @@ class ReaderService:
                         scope_key=scope_key,
                         snapshot=snapshot,
                         has_more=has_more,
+                        view=resolved_view,
                     )
                     if mode in {"recent", "range", "speaker"}
                     else None
@@ -4777,6 +5238,8 @@ class ReaderService:
                         seed_update_cursor=True,
                         admitted_message_ids=tuple(str(row["message_id"]) for row in focus_rows),
                     )
+                if resolved_view == "fresh":
+                    page_result["source_receipt"]["view"] = "fresh"
                 return self._attach_voice(
                     page_result,
                     policy=voice_policy,
@@ -4825,6 +5288,7 @@ class ReaderService:
                         scope_key=scope_key,
                         snapshot=snapshot,
                         has_more=candidate_has_more,
+                        view=resolved_view,
                     )
                     if mode in {"recent", "range", "speaker"}
                     else None
@@ -4873,6 +5337,8 @@ class ReaderService:
                     seed_update_cursor=True,
                     admitted_message_ids=tuple(str(row["message_id"]) for row in focus_rows),
                 )
+            if resolved_view == "fresh":
+                page_result["source_receipt"]["view"] = "fresh"
             return self._attach_voice(
                 page_result,
                 policy=voice_policy,
@@ -5674,6 +6140,14 @@ class ReaderService:
         complete when the output limit is reached exactly at the end of the index.
         """
 
+        captured_ids = self._captured_search_candidates.get()
+        if captured_ids is not None:
+            return self._captured_search_scan(
+                captured_ids=captured_ids, selected_ids=selected_ids, targets=targets,
+                query_parts=query_parts, after_utc=after_utc, before_utc=before_utc,
+                bounded=bounded, resume_key=resume_key, snapshot=snapshot,
+            )
+
         matched: list[tuple[Any, _PreparedMessage, tuple[str, ...]]] = []
         scanned = 0
         frontier: Any | None = None
@@ -5767,6 +6241,51 @@ class ReaderService:
             )
         )
         return matched, candidate_has_more, candidate_has_more, frontier, scanned
+
+    def _captured_search_scan(
+        self, *, captured_ids: tuple[str, ...], selected_ids: tuple[str, ...],
+        targets: dict[str, _SourceTarget], query_parts: tuple[str, ...],
+        after_utc: str | None, before_utc: str | None, bounded: int,
+        resume_key: tuple[str, int, int, str] | None, snapshot: SourceSnapshot,
+    ) -> tuple[list[tuple[Any, _PreparedMessage, tuple[str, ...]]], bool, bool, Any | None, int]:
+        # The receiver must supply one contiguous ordered candidate prefix. Reject
+        # omissions rather than advance a signed frontier over uncaptured rows.
+        rows = self.repository.search_candidate_window(
+            selected_ids, after_key=resume_key, after_utc=after_utc, before_utc=before_utc,
+            lexical_queries=(" ".join(query_parts),), limit=200,
+        )
+        if captured_ids != tuple(str(row["message_id"]) for row in rows[:len(captured_ids)]):
+            raise SightglassError(ErrorCode.CURSOR_STALE)
+        if not captured_ids and rows:
+            raise SightglassError(ErrorCode.SOURCE_INCOMPLETE, retryable=True,
+                                 details={"warning_codes": ["capture_candidates_unavailable"]})
+        matched = []
+        frontier = None
+        scanned = 0
+        for row in rows[:len(captured_ids)]:
+            check_operation_budget()
+            target = targets[str(row["conversation_id"])]
+            source = self.provider.get_message(
+                target.source_account_key, str(row["source_message_id"]), snapshot,
+            )
+            scanned += 1
+            frontier = row
+            if source is None:
+                continue
+            parsed = parse_message(source)
+            fields = self._matching_search_fields(parsed, query_parts)
+            if (source.sort_key.as_tuple() != source_sort_key(row).as_tuple()
+                    or query_parts and not fields):
+                continue
+            matched.append((row, _PreparedMessage(
+                source, self._source_participant_for_message(source), parsed), fields))
+            if len(matched) >= bounded:
+                break
+        more = frontier is not None and self._search_candidate_exists(
+            selected_ids, self._search_keyset(frontier), after_utc=after_utc,
+            before_utc=before_utc, query_parts=query_parts,
+        )
+        return matched, more, bool(more and scanned == len(captured_ids)), frontier, scanned
 
     def _search_candidate_exists(
         self,
@@ -5870,10 +6389,12 @@ class ReaderService:
         reading_token: str | None = None,
         limit: int | None = None,
         strict: bool = True,
+        view: str | None = None,
     ) -> dict[str, Any]:
         self.reader.require_search()
         if not strict:
             raise SightglassError(ErrorCode.QUERY_INVALID)
+        resolved_view = self.resolve_view(view)
         limit = self.continuation_limit(limit, reading_token or cursor, default=20)
         bounded = self.reader.bound_limit(limit)
         participant_ids = tuple(sorted(set(participant_ids)))
@@ -5890,13 +6411,26 @@ class ReaderService:
             raise SightglassError(ErrorCode.QUERY_INVALID) from exc
         if after_utc is not None and before_utc is not None and after_utc >= before_utc:
             raise SightglassError(ErrorCode.QUERY_INVALID)
+        if resolved_view == "replica":
+            return self.replica.search_messages(
+                query=query, account_id=account_id, conversation_ids=conversation_ids,
+                participant_ids=participant_ids, sender_query=sender_query,
+                after=after_utc, before=before_utc, cursor=cursor, reading_token=reading_token,
+                limit=bounded,
+            )
+        if resolved_view == "fresh" and reading_token is not None:
+            raise SightglassError(ErrorCode.CURSOR_INVALID)
+        if cursor and self.token_codec.decode(cursor).get("kind") == "search-replica":
+            raise SightglassError(ErrorCode.CURSOR_INVALID)
         async_preparation = None
+        captured_search = self._captured_search_candidates.get() is not None
         if reading_token and cursor:
             raise SightglassError(ErrorCode.QUERY_INVALID)
         preparation_token = reading_token
         if cursor and self.token_codec.decode(cursor).get("kind") == "search-preparation":
             preparation_token, cursor = cursor, None
-        if self.search_preparation is not None and cursor is None:
+        if (not captured_search and resolved_view == "auto"
+                and self.search_preparation is not None and cursor is None):
             async_preparation = self.search_preparation.request(
                 query=query, account_id=account_id, conversation_ids=conversation_ids,
                 participant_ids=participant_ids, sender_query=sender_query,
@@ -5931,12 +6465,12 @@ class ReaderService:
                     raise SightglassError(ErrorCode.CURSOR_INVALID)
                 self._verify_search_cursor(
                     cursor, account_id=scoped_account, snapshot=snapshot,
-                    scope_key=search_scope_digest(
+                    scope_key=self._view_scope(search_scope_digest(
                         conversation_ids=selected, participant_ids=(next(iter(candidates)),),
                         query=query, after=after_utc, before=before_utc,
-                    ),
+                    ), resolved_view),
                 )
-        if resolve_sender:
+        if resolve_sender and not captured_search:
             # A sender query is a canonical participant scope, so the rosters that
             # resolve it are indexed before the scope is bound into the cursor.
             roster_binding = self._index_search_roster(account_id, conversation_ids)
@@ -5947,7 +6481,7 @@ class ReaderService:
             prepared_full_bindings = {
                 key: tuple(value) for key, value in async_preparation["bindings"].items()
             }
-        elif cursor is None:
+        elif cursor is None and not captured_search:
             preparation, prepared_full_bindings = self._prepare_search_candidates(
                 query=query, account_id=account_id, conversation_ids=conversation_ids,
                 participant_ids=participant_ids, sender_query=sender_query,
@@ -6014,6 +6548,7 @@ class ReaderService:
                 after=after_utc,
                 before=before_utc,
             )
+            scope_key = self._view_scope(scope_key, resolved_view)
             resume_key: tuple[str, int, int, str] | None = None
             if cursor:
                 resume_key = self._verify_search_cursor(
@@ -6134,6 +6669,8 @@ class ReaderService:
                         ),
                     )
                     source_receipt["search"]["preparation"] = preparation
+                    if resolved_view == "fresh":
+                        source_receipt["view"] = "fresh"
                     if preparation.get("pending_conversation_count") or preparation.get(
                         "unprepared_conversation_count"
                     ):
@@ -6271,7 +6808,11 @@ class ReaderService:
             max_bytes=bounded_bytes,
         )
 
-    def find_resources(
+    def find_resources(self, **arguments: Any) -> dict[str, Any]:
+        with self.repository.database.read_snapshot():
+            return self._find_materialized_resources(**arguments)
+
+    def _find_materialized_resources(
         self,
         *,
         query: str,
@@ -6333,10 +6874,15 @@ class ReaderService:
             "before": before_utc,
             "availability": tuple(dict.fromkeys(availability)),
         }
+        replica_epoch = (self._projection_inventory_epoch()
+                         if self.default_view == "replica" else None)
+        if replica_epoch is not None:
+            scope.update(view="replica", projection_epoch=replica_epoch)
         scope_key = hashlib.sha256(
             json.dumps(scope, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        policy_revision = self._policy_revision()
+        policy_revision = (self._materialized_cursor_revision() if replica_epoch is not None
+                           else self._policy_revision())
         position: tuple[str, int, int, int, str] | None = None
         if cursor is not None:
             payload = self.account_cursors.verify(
@@ -6374,6 +6920,16 @@ class ReaderService:
                 raise SightglassError(ErrorCode.CURSOR_INVALID)
         else:
             observation_watermark = self.repository.observation_watermark()
+        if replica_epoch is not None and cursor is not None:
+            permitted_scope = selected_conversations or tuple(
+                str(row["conversation_id"]) for row in self.repository.account_conversations(
+                    selected_account) if self.reader.policy.permits(str(row["conversation_id"]))
+            )
+            if any(self.repository.materialized_snapshot_changed(
+                value, projection_epoch=replica_epoch,
+                observation_watermark=observation_watermark,
+            ) for value in permitted_scope):
+                raise SightglassError(ErrorCode.CURSOR_STALE)
         permitted = (
             tuple(sorted(self.reader.policy.allowed_conversation_ids))
             if self.reader.policy.mode == "allowlist"
@@ -6393,6 +6949,7 @@ class ReaderService:
             observation_watermark=observation_watermark,
             position=position,
             limit=bounded + 1,
+            projection_epoch=replica_epoch,
         )
         has_more = len(rows) > bounded
         selected = rows[:bounded]
@@ -6436,11 +6993,17 @@ class ReaderService:
                     "observation_watermark": observation_watermark,
                 },
             )
+        receipt = self.resource_service._source_receipt(None, local=True)
+        if replica_epoch is not None:
+            receipt.update(view="replica", complete=False,
+                           coverage={"conversation": "resident_subset"})
+            receipt["freshness"].update(observation_watermark=observation_watermark,
+                                        projection_epoch=replica_epoch)
         return {
             "schema": "sightglass.resource-search.v1",
             "items": items,
             "page": {"next_cursor": next_cursor, "has_more": has_more},
-            "source_receipt": self.resource_service._source_receipt(None, local=True),
+            "source_receipt": receipt,
         }
 
     def read_resource(
@@ -6567,9 +7130,9 @@ class ReaderService:
                     conversation_id = first_resource["conversation_id"]
         scope_digest = None
         if scope_values:
-            scope_digest = hashlib.sha256(
-                json.dumps(sorted(scope_values), separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            scope_digest = self.token_codec.private_digest("access-scope.v1", {
+                "reader": self.reader.reader_id, "scope": sorted(scope_values),
+            })
         receipt_id = opaque_id(
             "wxreceipt", self.reader.reader_id, tool_name, started_at, completed_at
         )

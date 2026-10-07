@@ -3,12 +3,12 @@
 flowchart LR
     CLIENT["MCP client<br/>stdio only"]
     OPERATOR["sightglassctl<br/>operator mutations"]
-    KC["Keychain<br/>tokens + native DB/image keys"]
+    KC["Host secret store<br/>Mac Keychain / Linux private files<br/>core tokens; native keys stay on Mac"]
     BRIDGE["MCP bridge<br/>reader credential<br/>validate - project - call"]
 
     SRC["Source authority<br/>read-only WeChat store or synthetic fixture"]
 
-    subgraph D["sightglassd (owner region)"]
+    subgraph D["sightglassd core (local Mac or candidate Linux owner)"]
         AUTH["Auth boundary<br/>Unix socket 0600<br/>same UID + token hash"]
         READER["Reader service + search preparation<br/>hydrate - residency - admit - cursors<br/>tokens + private sidecar jobs; delivers results"]
         RETRIEVAL["Retrieval service<br/>links + lexical + optional semantic candidates<br/>policy + version scope; no ACK"]
@@ -16,11 +16,18 @@ flowchart LR
         SEMANTIC["Semantic service + worker (opt-in)<br/>BGE-M3 message recipe; canonical re-admission"]
         SEMANTIC_DB[("Private semantic sidecar<br/>encoded - queued - verified<br/>rebuildable, never canonical truth")]
         RESOURCE["Resource service<br/>catalog - acquire - derive<br/>message-bound resource_id"]
-        VOICE["Voice lane (optional)<br/>capture - SILK-PCM - SpeechAnalyzer"]
-        PROVIDER["Source provider<br/>synthetic or macos-wechat<br/>evidence + snapshot gate"]
+        VOICE["Voice lane (optional)<br/>Apple SpeechAnalyzer / isolated Linux whisper.cpp"]
+        PROVIDER["Source provider<br/>synthetic / macos-wechat / finite remote-capture<br/>evidence + validation gate"]
+        CAPTURE_BROKER["Core capture broker (remote candidate)<br/>bounded plan; generation-pinned handshake<br/>admit + reader ACK + outcome in one writer"]
         SPOOL[("Delivery spool<br/>immutable payload<br/>replay until ACK")]
         WINDOW[("window.db<br/>canonical projection + reader state<br/>residency leases; links + FTS5; durable jobs")]
         CACHE[("Object store (CAS)<br/>content-addressed bytes")]
+    end
+
+    subgraph E["Mac native edge (remote candidate; no WindowDB)"]
+        EDGE_KC["Mac Keychain<br/>native DB / image keys"]
+        EDGE["Finite capture executor<br/>200 messages / 4 MiB metadata / 32 MiB resource<br/>native implementation v6; no arbitrary RPC"]
+        EDGE_SPOOL[("One ordered pending envelope<br/>64 MiB spool; crash replay<br/>release only after durable core ACK")]
     end
 
     CF["Cloudflare (explicit egress)<br/>Workers AI BGE-M3 + Vectorize<br/>untrusted candidate IDs"]
@@ -30,11 +37,11 @@ flowchart LR
     OPERATOR -->|"operator token"| AUTH
     KC -->|"reader token"| BRIDGE
     KC -->|"operator token"| OPERATOR
-    KC -->|"native DB / image keys"| PROVIDER
+    KC -->|"native DB / image keys: local Mac mode only"| PROVIDER
     AUTH -->|"authenticated role"| READER
 
-    SRC -->|"read-only handle"| PROVIDER
-    PROVIDER -->|"snapshot + validate"| SRC
+    SRC -->|"read-only handle: local mode"| PROVIDER
+    PROVIDER -->|"snapshot + validate: local mode"| SRC
     PROVIDER -->|"evidence"| READER
     PROVIDER -->|"bounded resource read"| RESOURCE
 
@@ -62,3 +69,11 @@ flowchart LR
     SEMANTIC -->|"policy/version admitted focus"| RETRIEVAL
     SEMANTIC -->|"authorized text / vectors / query"| CF
     CF -->|"async readback / ANN candidates"| SEMANTIC
+
+    SRC -->|"read-only typed session: remote mode"| EDGE
+    EDGE_KC -->|"in-process source keys"| EDGE
+    EDGE -->|"sealed complete evidence"| EDGE_SPOOL
+    EDGE_SPOOL -->|"outgoing pinned SSH relay"| CAPTURE_BROKER
+    READER -->|"authorized finite fresh plan"| CAPTURE_BROKER
+    CAPTURE_BROKER -->|"sealed provider for this operation"| PROVIDER
+    CAPTURE_BROKER -->|"post-commit transport ACK"| EDGE_SPOOL

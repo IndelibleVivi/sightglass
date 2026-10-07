@@ -1810,6 +1810,21 @@ class WindowRepository:
             ).fetchone()
         return row is not None
 
+    def latest_observed_message_position(
+        self, conversation_id: str, projection_epoch: str, *,
+        observation_watermark: int | None = None,
+    ) -> sqlite3.Row | None:
+        """Durable admitted traversal position, independent of body residency."""
+        with self.database.connection() as connection:
+            return connection.execute(
+                "SELECT * FROM messages WHERE conversation_id=? AND projection_epoch=? "
+                "AND current_observation_seq IS NOT NULL AND current_state='present' "
+                "AND (? IS NULL OR current_observation_seq<=?) "
+                "ORDER BY sort_primary DESC,sort_seq DESC,sort_tie DESC,"
+                "source_message_id DESC LIMIT 1",
+                (conversation_id, projection_epoch, observation_watermark, observation_watermark),
+            ).fetchone()
+
     def materialized_observation_bounds(
         self,
         conversation_id: str,
@@ -2089,6 +2104,7 @@ class WindowRepository:
         observation_watermark: int,
         position: tuple[str, int, int, int, str] | None,
         limit: int,
+        projection_epoch: str | None = None,
     ) -> list[sqlite3.Row]:
         clauses = [
             "m.account_id = ?",
@@ -2104,6 +2120,9 @@ class WindowRepository:
             int(observation_watermark),
             int(observation_watermark),
         ]
+        if projection_epoch is not None:
+            clauses.append("m.projection_epoch=?")
+            values.append(projection_epoch)
         if query:
             clauses.append("LOWER(COALESCE(r.original_name, '')) LIKE ? ESCAPE '\\'")
             escaped = query.casefold().replace("\\", "\\\\").replace("%", "\\%")
@@ -3057,7 +3076,22 @@ class WindowRepository:
                 )
             }
 
-    def inbox_rows(self, account_id: str, *, observation_seq: int) -> list[sqlite3.Row]:
+    def observed_conversation_aliases(self, conversation_id: str) -> tuple[str, ...]:
+        with self.database.connection() as connection:
+            return tuple(str(row[0]) for row in connection.execute(
+                "SELECT alias FROM conversation_aliases "
+                "WHERE conversation_id=? AND active=1 ORDER BY alias",
+                (conversation_id,),
+            ))
+
+    def inbox_rows(
+        self, account_id: str, *, observation_seq: int, projection_epoch: str | None = None,
+    ) -> list[sqlite3.Row]:
+        epoch_filter = ("AND candidate.projection_epoch=? "
+                        "AND candidate.current_observation_seq<=?" if projection_epoch else "")
+        parameters: tuple[Any, ...] = (int(observation_seq),)
+        if projection_epoch:
+            parameters += (projection_epoch, int(observation_seq))
         with self.database.connection() as connection:
             return connection.execute(
                 f"""
@@ -3085,6 +3119,7 @@ class WindowRepository:
                           WHERE observed.message_id = candidate.message_id
                             AND observed.observation_seq <= ?
                       )
+                      {epoch_filter}
                     ORDER BY candidate.sort_primary DESC,
                              candidate.sort_seq DESC,
                              candidate.sort_tie DESC,
@@ -3095,7 +3130,7 @@ class WindowRepository:
                 WHERE c.account_id = ? AND c.visibility_state = 'active'
                 ORDER BY r.sent_at_utc DESC, c.kind ASC, c.conversation_id ASC
                 """,
-                (int(observation_seq), account_id),
+                (*parameters, account_id),
             ).fetchall()
 
     def current_message_ids(self, conversation_ids: tuple[str, ...]) -> set[str]:
@@ -3314,13 +3349,24 @@ class WindowRepository:
         conversation_id: str,
         observation_seq: int,
         participant_ids: tuple[str, ...] = (),
+        *,
+        projection_epoch: str | None = None,
+        limit: int | None = None,
     ) -> list[sqlite3.Row]:
         clauses = ["m.conversation_id = ?", "mo.observation_seq > ?"]
         values: list[Any] = [conversation_id, int(observation_seq)]
+        if projection_epoch is not None:
+            clauses.extend(("m.projection_epoch = ?", "m.current_state = 'present'",
+                            "mo.observation_seq=m.current_observation_seq",
+                            resident_body_predicate()))
+            values.append(projection_epoch)
         if participant_ids:
             clauses.append(f"m.sender_id IN ({','.join('?' for _ in participant_ids)})")
             values.extend(participant_ids)
         with self.database.connection() as connection:
+            suffix = " LIMIT ?" if limit is not None else ""
+            if limit is not None:
+                values.append(max(1, int(limit)))
             return connection.execute(
                 f"""
                 SELECT mo.observation_seq, mo.observation_id,
@@ -3330,10 +3376,92 @@ class WindowRepository:
                 JOIN messages AS m USING(message_id)
                 LEFT JOIN participants AS p ON p.participant_id = m.sender_id
                 WHERE {" AND ".join(clauses)}
-                ORDER BY mo.observation_seq ASC
+                ORDER BY mo.observation_seq ASC {suffix}
                 """,
                 values,
             ).fetchall()
+
+    def update_request_outcome(self, receipt_id: str) -> sqlite3.Row | None:
+        with self.database.connection() as connection:
+            return connection.execute(
+                "SELECT * FROM access_receipts WHERE receipt_id=? "
+                "AND tool_name='_sightglass_updates_request.v1'",
+                (receipt_id,),
+            ).fetchone()
+
+    def update_delivery_frontier(self, receipt_id: str) -> sqlite3.Row | None:
+        with self.database.connection() as connection:
+            return connection.execute(
+                "SELECT * FROM access_receipts WHERE receipt_id=? "
+                "AND tool_name='_sightglass_updates_frontier.v1'", (receipt_id,),
+            ).fetchone()
+
+    def update_reconciliation_cursor(self, receipt_id: str) -> sqlite3.Row | None:
+        with self.database.connection() as connection:
+            return connection.execute(
+                "SELECT * FROM access_receipts WHERE receipt_id=? "
+                "AND tool_name='_sightglass_updates_reconcile.v1'", (receipt_id,),
+            ).fetchone()
+
+    def record_update_reconciliation_cursor(
+        self, *, receipt_id: str, reader_id: str, conversation_id: str,
+        scope_digest: str, metadata: dict[str, Any], completed_at: str,
+    ) -> None:
+        """Advance one bounded reconciliation page in its final admission writer."""
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO access_receipts(receipt_id,reader_id,tool_name,conversation_id,"
+                "scope_kind,scope_digest,message_count,resource_count,bytes_returned,started_at,"
+                "completed_at,outcome,warning_codes_json) "
+                "VALUES(?,?,'_sightglass_updates_reconcile.v1',"
+                "?,'reconciliation',?,0,0,0,?,?,'current-page',?) "
+                "ON CONFLICT(receipt_id) DO UPDATE SET "
+                "scope_digest=excluded.scope_digest,completed_at=excluded.completed_at,"
+                "warning_codes_json=excluded.warning_codes_json",
+                (receipt_id, reader_id, conversation_id, scope_digest, completed_at, completed_at,
+                 json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+            )
+
+    def record_update_delivery_frontier(
+        self, *, receipt_id: str, reader_id: str, conversation_id: str,
+        scope_digest: str, metadata: dict[str, Any], completed_at: str,
+    ) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO access_receipts(receipt_id,reader_id,tool_name,conversation_id,"
+                "scope_kind,scope_digest,message_count,resource_count,bytes_returned,started_at,"
+                "completed_at,outcome,warning_codes_json) "
+                "VALUES(?,?,'_sightglass_updates_frontier.v1',"
+                "?,'delivery-frontier',?,0,0,0,?,?,'pending',?)",
+                (receipt_id, reader_id, conversation_id, scope_digest, completed_at, completed_at,
+                 json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+            )
+
+    def consume_update_delivery_frontier(self, receipt_id: str) -> None:
+        with self.database.transaction(maintenance=True) as connection:
+            connection.execute("DELETE FROM access_receipts WHERE receipt_id=? "
+                               "AND tool_name='_sightglass_updates_frontier.v1'", (receipt_id,))
+
+    def record_update_request_outcome(
+        self, *, receipt_id: str, reader_id: str, conversation_id: str,
+        scope_digest: str, metadata: dict[str, Any], completed_at: str,
+    ) -> None:
+        """Private request correlation, committed with ACK and delivery admission.
+
+        This reserved namespace contains spool identifiers/digests only. Ordinary
+        access auditing continues to use record_access_receipt and contains no
+        request outcome or query text.
+        """
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO access_receipts(receipt_id,reader_id,tool_name,conversation_id,"
+                "scope_kind,scope_digest,message_count,resource_count,bytes_returned,started_at,"
+                "completed_at,outcome,warning_codes_json) "
+                "VALUES(?,?,'_sightglass_updates_request.v1',"
+                "?,'request',?,0,0,0,?,?,'completed',?)",
+                (receipt_id, reader_id, conversation_id, scope_digest, completed_at,
+                 completed_at, json.dumps(metadata, sort_keys=True, separators=(",", ":"))),
+            )
 
     def pending_delivery(
         self, reader_id: str, conversation_id: str, scope_kind: str, scope_key: str

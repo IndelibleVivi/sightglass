@@ -864,7 +864,7 @@ macos-wechat = [
     { name = "zstandard" },
 ]
 voice = [
-    { name = "silk-python", marker = "sys_platform == 'darwin'" },
+    { name = "silk-python", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.metadata]
@@ -877,7 +877,7 @@ requires-dist = [
     { name = "pyobjc-framework-security", marker = "sys_platform == 'darwin' and extra == 'macos-wechat'", specifier = ">=10,<13" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400,<2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
-    { name = "silk-python", marker = "sys_platform == 'darwin' and extra == 'voice'", specifier = ">=0.2.8,<0.3" },
+    { name = "silk-python", marker = "(sys_platform == 'darwin' or sys_platform == 'linux') and extra == 'voice'", specifier = ">=0.2.8,<0.3" },
     { name = "sqlcipher3", marker = "sys_platform == 'darwin' and extra == 'macos-wechat'", specifier = "==0.6.2" },
     { name = "zstandard", marker = "extra == 'macos-wechat'", specifier = ">=0.22,<1" },
 ]
@@ -898,6 +898,7 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2c/b4/7887e02a4f33e7e770a9ed91a8b861881abcbc63e3d2f51d91b3aec58537/silk_python-0.2.8-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:fcd7167eb60ea295da342e11d53d198f1e973596eea20a3a1e4d9c7a97c06779", size = 635903, upload-time = "2025-11-12T12:27:36.063Z" },
     { url = "https://files.pythonhosted.org/packages/c3/26/93e446e6044ec0e91b98cdc34051e71157c7005b38602c4425782d527c1b/silk_python-0.2.8-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:5c9b4cfb8da2143ff32f7fda9254df2d6975aba2f9abb46fcfe2a43029709f74", size = 369821, upload-time = "2025-11-12T12:27:37.174Z" },
     { url = "https://files.pythonhosted.org/packages/e5/05/1523915ba15c4662c772cdeec6c159b092b7c5474c54c137fc43ecfe8ee4/silk_python-0.2.8-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:56301c70c90384d929034719af1cec5eafe6b37424e3123fdcf4587ae3787bdd", size = 362637, upload-time = "2025-11-12T12:27:38.189Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/0b/898bccc48a88bd2e29e782a7a89ed5334464c3dea24a5c1a56e9d9891889/silk_python-0.2.8-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:62e2e87be6b5848ab80b3384920b920deaeea90141c1494729f877a0912a7cbf", size = 471617, upload-time = "2025-11-12T12:27:39.0Z" },
     { url = "https://files.pythonhosted.org/packages/dc/dc/b7203a565ce87908c35c40337ed2740ca5c4267eb4030560d341452e6ea2/silk_python-0.2.8-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:69f48f67c844a0cb784e57d19876bacc0b227294870f7d0a377fc480c5396e8b", size = 634531, upload-time = "2025-11-12T12:27:39.346Z" },
     { url = "https://files.pythonhosted.org/packages/ab/06/5fbea75e2df90c131f0b6396423660629e6de1b6c822eab83af27f94ac4f/silk_python-0.2.8-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:8b9658a3ca1d3ee9a9d3181afbdccf8a011539559ab5eb6b68c1de5b97df85dc", size = 369113, upload-time = "2025-11-12T12:27:40.855Z" },
     { url = "https://files.pythonhosted.org/packages/12/b3/ea6ed13b8b78733280433a7913c9c5ff3fef0922f93a59d3314a40d13ce8/silk_python-0.2.8-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:f37122eab66e5838c281ad58ece51f6e08aae9508e16b506ceb6b18ac39b0ed4", size = 361892, upload-time = "2025-11-12T12:27:41.971Z" },

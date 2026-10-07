@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1540" viewBox="0 0 1200 1540" role="img" aria-labelledby="title desc" lang="en">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2020" viewBox="0 0 1200 2020" role="img" aria-labelledby="title desc" lang="en">
 <title id="title">Inside Sightglass</title>
-<desc id="desc">A local MCP bridge uses reader credentials to call the daemon's authenticated Unix socket. The daemon checks conversation policy and validates source evidence before admission. A read-only source provider connects the source to reader and resource services. Residency controls source-body lifetime independently of access policy; projection and lease state share window.db. Pending payloads replay until ACK. Resource discovery, acquisition and durable derivation use a private content-addressed store, with optional local speech transcription and fenced commits. Keychain lookups are listed separately; the Mermaid model carries every internal edge. Link/context retrieval reads scoped canonical rows and rebuildable link/lexical indexes; an independent bounded worker publishes fenced batches. The optional semantic service keeps an encoded/queued/verified sidecar. Explicitly authorized text/query egress reaches Cloudflare BGE-M3 and Vectorize; returned candidates are re-admitted locally.</desc>
+<desc id="desc">The MCP bridge uses reader credentials to call the daemon's authenticated Unix socket. The daemon checks conversation policy and validates source evidence before admission. A read-only source provider connects the source to reader and resource services. Residency controls source-body lifetime independently of access policy; projection and lease state share window.db. Pending payloads replay until ACK. Resource discovery, acquisition and durable derivation use a private content-addressed store, with optional local speech transcription and fenced commits. Native keys stay in Mac Keychain. Local mode reads source directly; the optional Mac edge uses one bounded ordered spool and outgoing authenticated SSH to deliver finite evidence to the single Linux core, which owns WindowDB, reader ACK, processing and MCP. The candidate panel shows those ownership boundaries; the Mermaid model carries every internal edge. Link/context retrieval reads scoped canonical rows and rebuildable link/lexical indexes; an independent bounded worker publishes fenced batches. The optional semantic service keeps an encoded/queued/verified sidecar. Explicitly authorized text/query egress reaches Cloudflare BGE-M3 and Vectorize; returned candidates are re-admitted locally.</desc>
 <style>
 .title{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:46px;font-weight:300;fill:#172334;letter-spacing:-1px}
 .head{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:25px;font-weight:500;fill:#172334}
@@ -33,11 +33,11 @@
       <stop offset="1" stop-color="#B7C3CA"/>
     </linearGradient>
   </defs>
-<rect width="1200" height="1540" fill="#FFFDF8"/>
+<rect width="1200" height="2020" fill="#FFFDF8"/>
 <g id="header" data-readability-background="#FFFDF8">
 <text x="64" y="65" class="eyebrow" data-readability="supporting">SIGHTGLASS / ARCHITECTURE</text>
 <text x="62" y="124" class="title" data-readability="critical">A private window. A clear boundary.</text>
-<text x="64" y="169" class="body">Source authority stays local. Clients receive policy-checked context.</text>
+<text x="64" y="169" class="body">Native source stays on Mac. One core owns admitted state and reader ACK.</text>
 <g fill="none" transform="translate(1030 40) scale(.8)">
 
   <path d="M24.6 20.7 62.3 18.3C61.5 30.7 58.4 40.3 54.8 48.9 50.7 58.7 50.8 67.8 55.3 77.5 59.4 86.3 62.6 97 63 109.1L25.9 110.3C18.5 110.8 13.6 105.6 13.6 98.1V33C13.6 25.6 17.5 21.3 24.6 20.7Z" fill="url(#sg-pearl-left)" stroke="#172334" stroke-width="2.15" stroke-linejoin="round"/>
@@ -54,10 +54,10 @@
 <path d="M64 202H1136" stroke="#D9DEDE"/>
 </g>
 <g id="daemon-region"><rect x="396" y="385" width="756" height="594" rx="18" fill="#F6F2EA" stroke="#D9DEDE"/>
-<text x="428" y="416" class="eyebrow" data-readability="supporting">SIGHTGLASSD</text>
+<text x="428" y="416" class="eyebrow" data-readability="supporting">SIGHTGLASSD CORE / LOCAL MAC OR CANDIDATE LINUX</text>
 </g>
 <g id="private-state-region"><path d="M64 1068H1136" stroke="#D9DEDE"/>
-<text x="64" y="1100" class="eyebrow" data-readability="supporting">DAEMON-OWNED LOCAL STATE</text>
+<text x="64" y="1100" class="eyebrow" data-readability="supporting">ONE CORE-OWNED PRIVATE STATE NAMESPACE</text>
 </g>
 <path d="M446 552H752C740 580 738 614 752 665H446Q428 665 428 647V570Q428 552 446 552Z" fill="#FFFDF8" stroke="#D9DEDE"/>
 <path d="M826 552H1104Q1122 552 1122 570V647Q1122 665 1104 665H826C839 626 839 591 826 552Z" fill="#FFFDF8" stroke="#D9DEDE"/>
@@ -116,13 +116,13 @@
 </g>
 <path d="M64 324H324M444 324H752M880 324H1136" stroke="#D9DEDE"/>
 <g id="KC" data-readability-background="#FFFDF8">
-<text x="64" y="432" class="head" data-readability="critical">macOS Keychain</text>
+<text x="64" y="432" class="head" data-readability="critical">Host secret store</text>
 <text x="64" y="464" class="body">Bridge → reader token</text>
 <text x="64" y="491" class="body">CLI → operator token</text>
-<text x="64" y="518" class="body">Provider → DB / image keys</text>
+<text x="64" y="518" class="body">Mac → native DB / image keys</text>
 <text x="64" y="545" class="body">Semantic → CF token (opt-in)</text>
 </g>
-<text x="64" y="582" class="note" data-readability="supporting">Separate, local secret lookups.</text>
+<text x="64" y="582" class="note" data-readability="supporting">Keychain / Linux private files.</text>
 <text x="64" y="608" class="note" data-readability="supporting">Paths and keys stay private.</text>
 <g id="AUTH" data-readability-background="#E7EFF1"><rect x="428" y="440" width="694" height="76" rx="9" fill="#E7EFF1"/>
 <text x="448" y="469" class="head" data-readability="critical">Authenticated Unix socket</text>
@@ -153,7 +153,7 @@
 <g id="VOICE" data-readability-background="#FFFDF8">
 <text x="850" y="747" class="head" data-readability="critical">Optional local voice</text>
 <text x="850" y="779" class="body">Capture → SILK decode</text>
-<text x="850" y="806" class="body">→ SpeechAnalyzer</text>
+<text x="850" y="806" class="body">→ Apple / isolated whisper.cpp</text>
 <text x="850" y="833" class="body">→ fenced transcript commit</text>
 </g>
 <g id="RETRIEVAL" data-readability-background="#F6F2EA">
@@ -186,7 +186,7 @@
 <text x="604" y="360" class="note" data-readability="supporting">reader IPC</text>
 <text x="995" y="360" class="note" data-readability="supporting">operator IPC</text>
 <text x="759" y="596" class="note" data-readability="supporting">ID</text>
-<text x="335" y="751" class="note" data-readability="supporting">read</text>
+<text x="331" y="751" class="note" data-readability="supporting">local</text>
 <text x="600" y="712" class="note" data-readability="supporting">verified evidence</text>
 <text x="1014" y="695" class="note" data-readability="supporting">original</text>
 <text x="794" y="709" class="note" data-readability="supporting">bytes</text>
@@ -195,7 +195,7 @@
 <text x="825" y="1052" class="note" data-readability="supporting">transcript</text>
 <text x="970" y="1030" class="note" data-readability="supporting">verified bytes</text>
 </g>
-<text x="64" y="1254" class="note" data-readability="supporting">Returned content reaches the connected MCP client; source paths and keys remain local.</text>
+<text x="64" y="1254" class="note" data-readability="supporting">Replica reads report partial resident coverage. Fresh reads require complete bounded source proof.</text>
 <path d="M64 1280H1136" stroke="#D9DEDE"/>
 <text x="64" y="1313" class="eyebrow">OPTIONAL SEMANTIC / DISABLED BY DEFAULT</text>
 <rect x="64" y="1334" width="714" height="151" rx="12" fill="#F6F2EA" stroke="#D9DEDE"/>
@@ -221,4 +221,43 @@
 <path class="optional" d="M418 1418H448M440 1414L448 1418L440 1422M426 1414L418 1418L426 1422"/>
 <path class="optional" d="M752 1345H850M842 1341L850 1345L842 1349M760 1341L752 1345L760 1349"/>
 <text x="64" y="1514" class="note">Only configured account/conversations ∩ current policy may cross; no source writes or implicit URL fetch.</text>
+<path d="M64 1546H1136" stroke="#D9DEDE"/>
+<text x="64" y="1580" class="eyebrow">REMOTE CAPTURE / CANDIDATE — PRODUCTION CUTOVER NOT YET VERIFIED</text>
+<g id="edge-region">
+<rect x="64" y="1600" width="430" height="354" rx="12" fill="#F6F2EA" stroke="#D9DEDE"/>
+<text x="84" y="1632" class="eyebrow">MAC NATIVE EDGE / NO WINDOW.DB</text>
+</g>
+<g id="EDGE_KC">
+<text x="84" y="1663" class="note">Mac Keychain → native DB / image keys</text>
+</g>
+<g id="EDGE">
+<text x="84" y="1710" class="head">Finite capture executor</text>
+<text x="84" y="1745" class="body">200 messages · 4 MiB metadata</text>
+<text x="84" y="1774" class="body">32 MiB resource · native v6</text>
+<text x="84" y="1805" class="note">Read-only source above; no arbitrary RPC.</text>
+</g>
+<path class="route" d="M280 1820V1850M276 1843L280 1850L284 1843"/>
+<g id="EDGE_SPOOL">
+<text x="84" y="1880" class="head">One pending capture</text>
+<text x="84" y="1914" class="body">64 MiB spool · restart replay</text>
+<text x="84" y="1939" class="note">Release only after durable core ACK.</text>
+</g>
+<g id="CAPTURE_BROKER">
+<rect x="690" y="1600" width="446" height="354" rx="12" fill="#E7EFF1" stroke="#D9DEDE"/>
+<text x="710" y="1632" class="eyebrow">INSIDE THE LINUX CORE ABOVE</text>
+<text x="710" y="1710" class="head">Core capture broker</text>
+<text x="710" y="1745" class="body">Plan → sealed provider evidence</text>
+<text x="710" y="1774" class="body">Admission + reader ACK + outcome</text>
+<text x="710" y="1805" class="note">One WindowDB writer transaction.</text>
+<text x="710" y="1880" class="head">Mac offline</text>
+<text x="710" y="1914" class="body">Resident reads + exact updates ACK</text>
+<text x="710" y="1939" class="note">Fresh source work remains unavailable.</text>
+</g>
+<path class="route" d="M494 1756H690M683 1752L690 1756L683 1760"/>
+<text x="514" y="1709" class="note">Outgoing SSH</text>
+<text x="514" y="1734" class="note">Generation pinned</text>
+<path class="route" d="M690 1820H494M501 1816L494 1820L501 1824"/>
+<text x="514" y="1854" class="note">Transport ACK</text>
+<text x="514" y="1879" class="note">after core commit</text>
+<text x="64" y="1992" class="note">Host / namespace / credential activation fences apply. Actual old entry-point revocation is a cutover gate.</text>
 </svg>

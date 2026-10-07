@@ -84,6 +84,25 @@ Source completion never authorizes real account access or deployment. Native ini
 | SG-058 | §8.5–8.7, §9.2; RETRIEVAL-SPEC SG-058 | Independent access/residency; new on-demand defaults, prospective keep and configurable recent/TTL/byte caps; batch settings and release preview; all-admission integration, resident coverage, no refill, update rebaseline, exact replay and dependency pins | selective local residency | ReaderPolicy unchanged; legacy stock protected; real cleanup separately authorized | Source/synthetic implemented: bounded lifecycle and search literal/speaker scan/admission separation; native resident inbox readiness; cursor/lease, pending/resource/voice and scope regressions | Source and synthetic lifecycle integration implemented; legacy-stock release and real-account activation require exact operator authorization, with receipts outside Git |
 | SG-059 | §9.2; RETRIEVAL-SPEC SG-059 | Bounded content-free storage preview; stopped-only resumable SGOC/contentless-delete/compact candidate with rowid/sequence and runtime/DB pairing, same-filesystem staging and durable recovery | offline storage slimming | SQLite ≥3.43 capability; frozen input + exact recovery; real candidate/migration separately authorized | Source/synthetic implemented: full WindowDB durable byte/rowid/sequence/FK proof, freeze/copy/selection crash recovery, independent replay/CAS/token namespaces, 100k strict lexical parity/churn/footprint | Source and synthetic candidate/recovery implemented; exact durable byte/rowid/sequence/FK checks, interrupted selection and independent rollback namespaces are fixture-covered. Real candidate construction, activation and retirement remain separately authorized operator actions |
 
+## VPS offload tranche (candidate)
+
+The Mac-edge/Linux-core tranche preserves the entire M0–M7 ledger below. Its source
+adds finite native capture, one ordered edge spool, SSH stdio, same-writer ingestion /
+ACK / delivery / receive state, replica/fresh reads, stopped loss recovery, host-bound
+activation and exact frozen-state transfer/parity. Focused generated tests include
+old-position reconciliation, same-key cross-shard pagination, two-writer delivery
+races, policy ABA/revocation, real child SIGKILL checkpoints and terminal race orderings.
+They do not establish production single ownership or account coverage.
+
+Linux candidate processing has exercised actual SILK and multilingual whisper.cpp
+inside a bounded cgroup. Full source/artifact gates, controlled OOM, encrypted target /
+recovery, real frozen transfer, old entry-point revocation, original tunnel routing,
+Mac-offline and ordinary-model host acceptance, resource-footprint comparison and
+approved retirement remain distinct. The official Linux WeChat provider (P6) is not
+implemented and needs separate profile/login/key/history/media/coexistence evidence.
+Follow [current state](current-state.md) and [VPS operations](VPS-MIGRATION.md) for the
+current claim; candidate evidence does not mark an incomplete M7 outcome complete.
+
 ## Current source tranche
 
 The 2026-10-05 review follow-up is source-complete and verified by the final

@@ -199,6 +199,7 @@ def prepare_pair(
         if _hash_file(destination) != _hash_file(target):
             raise RuntimeError("staged candidate differs from verified input")
         from sightglass.runtime.paired_state import clone_state
+        from sightglass.runtime.voice_setup import resolve_helper_path
 
         def capacity(reserve: int) -> int:
             return _capacity(
@@ -216,6 +217,7 @@ def prepare_pair(
             directory,
             capacity=capacity,
             default_voice_helper=not config.voice_helper_path.strip(),
+            voice_helper_name=resolve_helper_path(config).name,
         )
         if candidate_path:
             assert frozen_path is not None

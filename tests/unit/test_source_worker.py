@@ -620,6 +620,37 @@ class SourceWorkerTests(unittest.TestCase):
         self.assertEqual(status["poll_count"], 0)
         self.assertEqual(service.calls, 0)
 
+    def test_capture_callbacks_bootstrap_nonincremental_origin_without_direct_reads(self) -> None:
+        service = _RecoveringService()
+        service.provider = _Provider(supports_incremental=False)
+        completed = threading.Event()
+        calls: list[str] = []
+
+        def sync():
+            calls.append("catalog")
+            return {"conversation_count": 1, "message_count": 0}
+
+        def backfill():
+            calls.append("backfill")
+            completed.set()
+            return {"state": "idle"}
+
+        worker = SourceWorker(
+            service,  # type: ignore[arg-type]
+            poll_interval_seconds=10,
+            sync=sync,
+            backfill=backfill,
+        )
+        worker.start()
+        try:
+            self.assertTrue(completed.wait(2))
+        finally:
+            worker.stop()
+        self.assertTrue(worker.status()["enabled"])
+        self.assertEqual(calls[:2], ["catalog", "backfill"])
+        self.assertEqual(service.calls, 0)
+        self.assertFalse(worker.status()["running"])
+
     def test_live_attempt_schedules_stay_within_one_poll(self) -> None:
         # Guard the production schedule: aligned attempts, budgets that cannot extend the
         # poll deadline, and no single attempt outliving the worker stop/join window.

@@ -67,6 +67,17 @@ def _terminate_group(process: subprocess.Popen[bytes]) -> None:
                 continue
 
 
+def _kill_group_if_alive(group: int | None) -> None:
+    """Best-effort SIGKILL of one process group; never raises and never blocks long."""
+
+    if group is None:
+        return
+    try:
+        os.killpg(group, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        return
+
+
 def run_bounded(
     argv: Sequence[str],
     *,
@@ -76,8 +87,15 @@ def run_bounded(
     stdin_data: bytes | None = None,
     pass_fds: Sequence[int] = (),
     env: Mapping[str, str] | None = None,
+    reap_orphans: bool = False,
 ) -> ProcessOutcome:
-    """Run one child in a new session with bounded output and a wall-clock deadline."""
+    """Run one child in a new session with bounded output and a wall-clock deadline.
+
+    ``reap_orphans`` additionally SIGKILLs the child's whole process group once it exits,
+    so a descendant the child forked and abandoned cannot survive a *clean* exit.  It is
+    off by default so the existing macOS/voice callers are unaffected; the Linux job child
+    turns it on so no helper grandchild outlives a completed job.
+    """
 
     if timeout_seconds <= 0:
         raise BoundedProcessError("timeout must be positive")
@@ -94,6 +112,12 @@ def run_bounded(
     except OSError as exc:
         raise BoundedProcessError(str(exc)) from exc
     assert process.stdout is not None and process.stderr is not None
+    process_group: int | None = None
+    if reap_orphans:
+        try:
+            process_group = os.getpgid(process.pid)
+        except OSError:
+            process_group = None
     if stdin_data is not None and process.stdin is not None:
         try:
             process.stdin.write(stdin_data)
@@ -144,6 +168,8 @@ def run_bounded(
     finally:
         process.stdout.close()
         process.stderr.close()
+        if reap_orphans and process_group is not None:
+            _kill_group_if_alive(process_group)
     exit_code = process.returncode
     signal_number = -exit_code if exit_code is not None and exit_code < 0 else None
     return ProcessOutcome(

@@ -476,7 +476,10 @@ class McpContractTests(unittest.TestCase):
                         self.assertEqual(
                             (invalid.structuredContent or {}).get("code"), "QUERY_INVALID"
                         )
-                        if processor_status()["sips"]:
+                        processors = processor_status()
+                        if processors["sips"] or (
+                            processors["vipsheader"] and processors["vipsthumbnail"]
+                        ):
                             self.assertFalse(resource.isError)
                             descriptor_mime = (resource.structuredContent or {})["media"][
                                 "mime_type"
@@ -494,7 +497,8 @@ class McpContractTests(unittest.TestCase):
                             )
                             self.assertEqual(
                                 (resource.structuredContent or {}).get("details", {}).get("reason"),
-                                "sips_unavailable",
+                                "sips_unavailable" if sys.platform == "darwin"
+                                else "image_backend_unavailable",
                             )
                             self.assertFalse(
                                 any(isinstance(item, ImageContent) for item in resource.content)
@@ -561,7 +565,11 @@ class McpContractTests(unittest.TestCase):
         self.assertEqual(schema, "sightglass.status.v1")
         self.assertEqual(search_schema, "sightglass.search-results.v2")
         self.assertEqual(resource_schema, "sightglass.resource-list.v1")
-        self.assertEqual(descriptor_mime, "image/png" if processor_status()["sips"] else None)
+        processors = processor_status()
+        has_image_backend = processors["sips"] or (
+            processors["vipsheader"] and processors["vipsthumbnail"]
+        )
+        self.assertEqual(descriptor_mime, "image/png" if has_image_backend else None)
         self.assertEqual(content_mime, descriptor_mime)
         self.assertEqual(transcript_error_code, "CURSOR_INVALID")
         self.assertTrue(transcript_is_error)

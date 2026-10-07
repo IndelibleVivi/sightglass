@@ -40,6 +40,17 @@ class SignedTokenCodec:
         signature = hmac.new(self._secret, body, hashlib.sha256).digest()
         return f"{self._encode_bytes(body)}.{self._encode_bytes(signature)}"
 
+    def private_digest(self, domain: str, payload: Any) -> str:
+        """Purpose-separated receipt binding, distinct from the token signing key."""
+        if not isinstance(domain, str) or not domain or len(domain) > 128:
+            raise ValueError("private digest domain is required")
+        subkey = hmac.new(
+            self._secret, b"sightglass.private-receipt-key.v1\0" + domain.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hmac.new(subkey, body, hashlib.sha256).hexdigest()
+
     def decode(self, token: str) -> dict[str, Any]:
         try:
             body_text, signature_text = token.split(".", 1)

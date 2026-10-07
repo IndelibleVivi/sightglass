@@ -27,9 +27,21 @@ def _macos_wechat(config: SightglassConfig) -> WeChatSourceProvider:
     return MacOSWeChatSourceProvider(config.source_settings_path)
 
 
+def _remote_capture(config: SightglassConfig) -> WeChatSourceProvider:
+    from sightglass.source.remote import RemoteCaptureProvider, RemoteCaptureSettings
+
+    if config.source_settings_path is None:
+        raise RuntimeError("remote capture settings are unavailable")
+    settings = RemoteCaptureSettings.load(config.source_settings_path)
+    if settings.source_instance_id != config.source_instance_id:
+        raise RuntimeError("remote capture source instance binding does not match")
+    return RemoteCaptureProvider(settings)
+
+
 BUILTIN_PROVIDERS: dict[str, ProviderFactory] = {
     "synthetic": _synthetic,
     "macos-wechat": _macos_wechat,
+    "remote-capture": _remote_capture,
 }
 
 
@@ -66,6 +78,12 @@ def provider_descriptors() -> tuple[dict[str, object], ...]:
             "source_mode": "live",
             "platform": ["darwin"],
             "dependency_state": _native_dependency_state(),
+        },
+        {
+            "kind": "remote-capture",
+            "source_mode": "live",
+            "platform": ["linux"],
+            "dependency_state": "available",
         },
     )
 

@@ -1,16 +1,72 @@
 # Current state
 
-Updated: 2026-10-07. This page owns current source, candidate and publication status.
+Updated: 2026-10-08. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
 ## Source and supported scope
 
-- Development preview `0.1.0.dev1`; Python 3.11+, SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
+- Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
 - Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and native provider `sightglass.macos-wechat.sqlcipher.v6`. Native access supports only WeChat **4.1.13 / build 269602 / arm64** on macOS; one exact account and verified keys require explicit operator authorization.
-- Optional local speech recognition requires macOS 26, the compiled helper and installed language assets. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
+- Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
+
+## Mac edge and Linux core candidate
+
+The remote-core source adds the registered `remote-capture` binding, Linux file-backed
+credentials, a bounded Mac capture edge, authenticated outgoing SSH stdio and a
+schema-v10 capture journal in the existing writer. It adds no public listener,
+arbitrary provider-method RPC, second Mac WindowDB or Linux WeChat source adapter.
+Native interpretation remains v6; transport and activation versions are separate.
+
+Remote reader defaults to replica: all thirteen tools retain local policy, opaque
+identity, bounded coverage and offline admitted-state access. Explicit fresh calls
+use sealed finite evidence; update ACK, body admission, new delivery, request outcome
+and terminal receive state commit together. Ordinary source failure rolls them back;
+replica ACK remains available offline. Independent bounded reconciliation revisits
+old source positions across passes without claiming a complete change stream.
+Current revocation/pause takes precedence over the 30-day exact request replay window.
+
+Stopped recovery now handles exact cached corrupt-pending identity and whole-spool
+loss with immutable receipts and a monotonic new stream floor. Frozen migration
+streams only the owned inventory, verifies an explicit committed logical cut before
+relocation, and proves all-table/rowid/sequence parity except declared owned paths.
+Activation v2 binds generation, host, actual namespace and a credential outside the
+exported data; relay peers pin that generation. Local fences do not revoke an older
+installed wheel that predates them. Actual old supervisor, reader and tunnel entry
+points must be disabled before granting a new owner.
+
+A noneditable Linux candidate wheel has run real generated-speech SILK encode/decode,
+WAV wrapping and whisper.cpp small multilingual q5_1 recognition with the same
+production runner. Three approximately 9–10 second Chinese, English and mixed samples
+used about 491 MB peak cgroup memory under a 2 GiB ceiling, zero swap, group OOM kill
+and two configured recognizer threads. Recognition took approximately 13, 13 and
+25 seconds. Chinese had traditional characters and a homophone error; mixed speech
+misrecognized the Sightglass proper name while preserving API, 2026 and Zoom.
+These results establish a real processing path, not real-account speech quality.
+Real PNG/JPEG/TIFF/BMP/WebP/GIF/HEIC previews, PDF page rendering and an MP4 frame
+passed. Whole-job 2 GiB OOM, forced whisper OOM and a 2.5-second timeout stopped
+their owned systemd scopes while a separate installed reader remained available.
+
+The final source suite passed 1,403 tests on macOS; the installed Linux wheel passed
+836 tests with four platform/optional-test skips. An actual SSH transfer of a
+generated installation preserved pending payload/token bytes and all-table/row
+parity after declared path relocation. An actual SSH capture session admitted fresh
+messages, then preserved exact request replay, replica reads and ACK after disconnect;
+fresh calls failed closed while offline. Its Mac edge namespace had no WindowDB.
+These probes used generated data and did not install production SSH credentials.
+The official Linux tunnel client candidate
+was verified against its release attestation, signed digests, exact archive and SPDX
+inventory, then installed separately without activating the original tunnel profile.
+These candidate checks do not establish production or ordinary-host acceptance.
+
+The current migration is **candidate, not live**. No real account has been sent to
+the VPS by this tranche; the prior local installation is still distinct. Encrypted
+recovery/target storage, old-owner revocation, exact frozen transfer, original tunnel
+identity, offline/ordinary-host acceptance, footprint comparison and approved
+retirement remain operator gates. See [VPS migration](VPS-MIGRATION.md),
+[Capture protocol](CAPTURE-PROTOCOL.md) and [Linux processing](LINUX-PROCESSING.md).
 
 ## Implemented paths
 
@@ -67,7 +123,7 @@ idle high-frequency polling. Queue notifications wait for the outer commit and
 writer release. Shared native catalog handles reserve users before waiting and
 retire old identities; only idle handles are subject to the 16-handle/60-second
 threshold. Operator diagnostics separate current/historical errors and expose safe
-code locations and aggregate handle counts. Final source validation passed **1,194
+code locations and aggregate handle counts. The pre-migration 2026-10-07 baseline validation passed **1,194
 tests in 223.061 seconds**, full Pyright, Ruff and compileall. A separate noneditable
 wheel environment passed **76 tests in 30.065 seconds**, including actual daemon/stdio
 MCP, generated native, lifecycle and paired activation/crash/rollback checks, plus
@@ -143,9 +199,12 @@ has not been reached.
 
 GitHub Actions owns CI. Portable checks run on code pushes and PRs; the full macOS
 suite runs on main pushes, PRs and manual dispatch. Documentation-only changes skip
-automatic jobs. The public `main` branch owns this workflow and runs both portable and macOS
-gates on code pushes. Hosted run results belong to GitHub Actions; local validation
-and installed-runtime acceptance remain separate evidence.
+automatic jobs. The published public `main` registers this workflow and runs both portable and
+macOS gates on code pushes. Feature-branch pushes run portable checks;
+full macOS coverage requires a PR or manual run on a registered default branch.
+[Public hosted results](https://github.com/IndelibleVivi/sightglass/actions/workflows/synthetic.yml)
+belong to their exact commit and repository; local validation and installed-runtime
+acceptance remain separate evidence.
 
 ## Remaining boundaries
 
@@ -156,12 +215,13 @@ and installed-runtime acceptance remain separate evidence.
 
 ## Publication
 
-This repository is the maintained public projection at
-[IndelibleVivi/sightglass](https://github.com/IndelibleVivi/sightglass).
-It begins with a clean current-tree root and has no inherited private Git or Actions
-history. The separately maintained private source remains the editing authority;
-publication exports its selected tracked tree, with only this publication-state projection adjusted for the public
-entry point. Implementation, tests, contracts, rights and provenance remain aligned.
+As of 2026-10-08, [IndelibleVivi/sightglass](https://github.com/IndelibleVivi/sightglass)
+is the canonical editing source and the only push/CI destination. The repository
+retains its existing independent public history. The final transfer compared all
+309 publication-reviewed tracked paths with one exact source snapshot before the
+authority clauses were updated; the former private ancestry and Actions history
+remain separate. Future changes are made directly in this public source rather
+than maintained as a second projection.
 
 The public tree includes source code, contracts, deterministic synthetic tests,
 user/operator guides, generated benchmark receipts and self-contained artwork.

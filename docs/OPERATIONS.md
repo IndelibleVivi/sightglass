@@ -374,7 +374,9 @@ operator 选择的 pair-root filesystem。源库可在另一卷；staging、完�
 都在目标卷，不跨卷 rename，也不提前移除源库。Native 目标卷仍必须验证加密，workspace budget 和
 free floor 仍适用；目标卷必须在运行时保持挂载。它同时 clone immutable pending spool、referenced CAS、token-secret
 和已存在的 semantic／search／storage-history sidecars。`helper_path` 为空时还独立复制默认
-`<data_dir>/voice/sightglass-transcribe`，保留 owner-only 执行 mode；helper 必须 owner-private、
+macOS `<data_dir>/voice/sightglass-transcribe`，或 Linux `<data_dir>/voice/sightglass-whisper`
+及其 declared model、binding manifest 和 optional build receipt；不复制未声明的 model。
+保留 owner-only 执行 mode；helper 必须 owner-private、
 非空、single-link、regular 且可执行。复制前后与首次 activation 核验 source/target 的
 identity、mode 和 digest；缺失 helper 保持缺失，staging 后新出现须重新 prepare。显式 external
 helper path 保留原引用。所有复制字节都计入 workspace budget 和 physical free floor。
@@ -695,6 +697,17 @@ Promotion 是显式 operator action。先记录原 config、paused 状态、poli
 若启动或验收失败，先停止新 daemon。same-schema 时切回 old wheel/config；paired conversion 时选择整个 old pair（含独立 spool/CAS/token namespace）。传统恢复必须同时选回 schema-compatible runtime，不能让旧 binary 打开 v10 DB。把已验证的 artifact/manifest 复制回原 `window.db` 同目录，用新 CLI 的 `storage backup plan` 得到 fresh restore ack，执行 `storage backup restore --artifact ... --ack ...`，再启动 old installed CLI 并按原 paused 状态恢复。恢复会回到备份时点；应在 promotion 的 paused 验收阶段作出 rollback 决定。Copy verification、restored DB/schema verification、old binary compatibility 和 live readiness 是各自独立的证据。
 
 成功后只清理有明确替代物的 build inputs、旧候选 exports 和可再生成 caches；保留当前 release，以及能实际运行的上一个 release 和 verified recovery point。不要用 `git clean -fdx`，不要删除 live history、pending spool、source/Keychain/config 或未鉴定的文件。Public docs 描述可重复流程；安装专属路径、账号和 receipts 保存在 Git 外。
+
+## Mac edge and Linux core migration
+
+`remote-capture` is an explicitly configured Linux core binding; it is not a native
+Linux WeChat adapter. The full stopped transfer, owner handoff, recovery and rollback
+procedure is [VPS migration](VPS-MIGRATION.md). Use that procedure before changing an
+installation or reusing its tunnel identity. The core defaults to replica; an offline
+edge leaves admitted local reads and replica ACK available with partial coverage.
+Fresh work requires a bounded sealed capture and the final same-writer commit.
+The [Capture protocol](CAPTURE-PROTOCOL.md) owns identity/sequence/terminal semantics;
+[Linux processing](LINUX-PROCESSING.md) owns installed helper/model and cgroup readiness.
 
 ## Recovery
 

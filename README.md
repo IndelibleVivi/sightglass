@@ -6,11 +6,34 @@
 
 **Read WeChat where it lives. Bring only the requested context to your reader.**
 
-Sightglass is an experimental, local-first, read-only WeChat reading service for macOS. It gives an authorized MCP client a structured view of conversations, participants, messages and local attachments, with explicit coverage and source receipts. The daemon does not generate summaries. Optional semantic recall uses Cloudflare Workers AI and Vectorize only after explicit operator configuration and external-data authorization; it is disabled by default.
+Sightglass is an experimental, read-only WeChat reading service with a native macOS source and a portable core. It gives an authorized MCP client a structured view of conversations, participants, messages and local attachments, with explicit coverage and source receipts. The daemon does not generate summaries. Optional semantic recall uses Cloudflare Workers AI and Vectorize only after explicit operator configuration and external-data authorization; it is disabled by default.
 
-Use it when a reader needs to inspect the original conversation, follow one participant, open a referenced file, or continue from an acknowledged reading position. The source remains on your Mac; the content returned by a tool call goes to the connected client and is subject to that client's data handling.
+Use it when a reader needs to inspect the original conversation, follow one participant, open a referenced file, or continue from an acknowledged reading position. The WeChat database and its keys remain on your Mac. In local mode, admitted state and processing remain there too. An explicitly configured Linux core receives the approved Sightglass state and bounded captured pages/resources; returned tool content reaches the connected client and is subject to that client's data handling.
 
 > **Development preview · `0.1.0.dev1`.** Native access currently supports only WeChat **4.1.13 / build 269602 / arm64** and requires operator-supplied, verified database keys. Sightglass does not extract those keys. Try the synthetic example before configuring an account. Publication and licensing status is recorded in [Current state](docs/current-state.md) and [Notices](NOTICE.md).
+
+## Optional Mac edge and Linux core
+
+The remote-core implementation is a candidate; installation and production cutover
+require the [VPS migration procedure](docs/VPS-MIGRATION.md). It uses the same thirteen
+tools and schema-v10 state. A thin Mac edge owns native read-only sessions and one
+64 MiB ordered spool; the Linux core alone owns `window.db`, reader ACK, immutable
+deliveries, CAS, processing and MCP. The edge initiates a fixed SSH stdio connection;
+there is no public Sightglass listener or arbitrary provider-method RPC.
+
+Remote configurations default to `view="replica"`: messages, search, links, retrieval,
+resource catalog and cached bytes use admitted state while the Mac is offline. Results
+report partial resident coverage and bounded freshness; a zero-hit replica result
+cannot prove source absence. Use `view="fresh"` for bounded source verification.
+Fresh updates reconcile independently of the ACK position, eventually restarting a
+completed scan to find old-position arrivals/corrections; pages never claim one global
+change snapshot. Missing source prefixes fail closed. A scoped `request_id` retains
+an exact completed update response for 30 days, subject to current policy and pause.
+
+Native source support still means the exact macOS profile above. `remote-capture` is
+an offline core binding, not a Linux WeChat adapter. Linux processing prerequisites
+and candidate evidence are in [Linux processing](docs/LINUX-PROCESSING.md); ownership,
+loss recovery and wire limits are in [Capture protocol](docs/CAPTURE-PROTOCOL.md).
 
 ## What you can read
 
@@ -18,11 +41,11 @@ Use it when a reader needs to inspect the original conversation, follow one part
 | --- | --- |
 | Conversations and inbox | Paginated, policy-filtered discovery; a materialized activity inbox that remains readable during live-source degradation and reports explicit freshness and coverage. |
 | Messages and people | Recent, range, context, single-message and participant-focused reads use the admitted `window.db` projection when its semantic epoch is current. Stable identity stays separate from mutable names. |
-| Search | Cursor-free searches prepare a bounded source page within the requested conversation/time scope before strict literal/AND validation of bounded trigram candidates. Continuation resumes the existing scan. Short terms retain the bounded timeline fallback; missing history and partial zero-hit pages remain explicit. |
+| Search | Local-source searches prepare a bounded source page; remote-core replica searches validate resident candidates locally, while explicit fresh searches revalidate bounded candidates through the Mac edge. Continuation resumes the existing scan. Short terms retain the bounded timeline fallback; missing history and partial zero-hit pages remain explicit. |
 | Links and candidate contexts | Find locally observed URLs by exact hostname or approximate hints; retrieve ranked same-conversation contexts with nearby links, explicit replies and replayable anchors. These materialized reads report bounded freshness and never advance updates or ACK. Optional BGE-M3/Vectorize semantic recall uses the same canonical and policy checks; failures leave deterministic recall available. |
-| Updates | Reader-scoped delivery and ACK. Unacknowledged payloads replay exactly after a restart. |
+| Updates | Reader-scoped delivery and ACK, including offline replica ACK. Unacknowledged payloads replay exactly after a restart; fresh ACK, admission and the new delivery commit together. |
 | Local resources | Policy-bound catalog search plus image previews/originals (including HEIC/TIFF/BMP), PDF pages/text, UTF-8/UTF-16/GB18030 text, audio/video metadata, local video first-frame previews, structured data, Office documents and ZIP inspection. Authorized warm CAS reads do not reopen the source; a cold native miss acquires its exact locator once through a resource-scoped lease before local processing. Missing bytes and previews remain distinguishable from originals. |
-| Optional voice | Exact local SILK extraction; on-device transcription through a bounded decoder and Apple's `SpeechAnalyzer`. Derived text is labeled as a transcript. |
+| Optional voice | Exact local SILK extraction; Apple `SpeechAnalyzer` on macOS or an operator-prepared whisper.cpp multilingual model on Linux. The Linux decoder, WAV conversion and recognizer share one bounded systemd cgroup. Derived text is labeled as a transcript. |
 
 The thirteen MCP tools are `wechat_status`, `wechat_find_conversations`, `wechat_read_inbox`, `wechat_find_participants`, `wechat_read_messages`, `wechat_read_transcripts`, `wechat_search_messages`, `wechat_find_links`, `wechat_retrieve`, `wechat_find_resources`, `wechat_list_resources`, `wechat_read_resource`, and `wechat_search_resource_text`. Arguments, schemas and error semantics live in the [MCP contract](docs/MCP-CONTRACT.md). `wechat_find_links`/`wechat_retrieve` are the only tools that return the full observed raw/normalized URL; the ordinary message link projection stays redacted, and no tool ever fetches a URL.
 
@@ -30,7 +53,7 @@ MCP responses default to `response_profile="brief"` (`sightglass.mcp.brief.v1`),
 
 A successfully admitted native recent page records its observed window for local rereading; it never advances the background continuous sync frontier over a gap. Known current-epoch messages and their indexed context remain readable without waiting for background tail completion; missing history stays explicit. Default `recent` pages can lag the source. Use `read_messages(refresh=true)` without a cursor for the latest source messages, to fill a partial context or explicitly reread current source content; the same policy and bounded source checks apply. Storage-blocked voice preparation reports `not_scheduled` while preserving the text page. Materialized reader progress can use bounded maintenance space, but required writes still respect the filesystem free floor.
 
-Ordinary daemon search first returns **preparing** with a signed `reading_token`.
+With a local source, ordinary daemon search first returns **preparing** with a signed `reading_token`.
 Repeat identical arguments with that token (or the existing `cursor` parameter)
 to obtain canonically validated results; preparing is never an empty result.
 The bounded private job survives restart, re-scanning an interrupted conversation
@@ -38,7 +61,7 @@ under fresh source evidence once an identical token poll supplies the query agai
 Query text stays in memory. Final result `next_cursor` keeps normal search pagination.
 See the [search lifecycle](docs/MCP-CONTRACT.md#asynchronous-search-preparation).
 
-Cold `find_links`/`retrieve` also return preparing, then usable bounded results,
+With a local source, cold `find_links`/`retrieve` also return preparing, then usable bounded results,
 including when cached bodies and indexes were released. Only matches and bounded
 context are cached. A partial result supplies a separate continuation `reading_token`
 to scan older rows; the original token only polls, and `page.next_cursor` only
@@ -81,7 +104,7 @@ without repeating conversion. Both operations require a stopped daemon.
 
 ## Try it with synthetic data
 
-With Python **3.11+**, SQLite **3.43+** built with **FTS5 trigram** and
+With Python **3.11+** (Python **3.12 on Linux with voice**), SQLite **3.43+** built with **FTS5 trigram** and
 `contentless_delete` support, and [uv](https://docs.astral.sh/uv/) installed:
 
 Clone the repository below for the interface and example documented here:
@@ -109,7 +132,7 @@ The example creates a disposable source and read model, discovers a synthetic gr
 
 The separately authorized [semantic benchmarks](docs/benchmarks/README.md) can send **generated synthetic text only** to Cloudflare Workers AI and store its vectors in a dedicated Vectorize experiment index. They use no configured account or daemon, download no model weights, and do not enable production semantic retrieval. The active benchmark now uses BGE-M3 only; the two-model artifact is retained historical evidence. Running that experiment consumes the operator's Cloudflare services; ordinary installation and CI never run it.
 
-Optional account-backed semantic retrieval has a separate [operator setup](docs/OPERATIONS.md#optional-bge-m3--vectorize-lane): one dedicated index, exact conversation scope, explicit external-data consent and a Keychain token. Background indexing and query failures report their coverage; disabling the lane retains local/remote derivatives and does not erase previously uploaded data. Semantic recipe v2 deduplicates identical canonical text/card fields and excludes empty inputs and unknown-message placeholders; those messages remain available through context neighbors. Upgrading a v1 sidecar requires the stopped-only derivative replacement procedure in the operator guide.
+Optional account-backed semantic retrieval has a separate [operator setup](docs/OPERATIONS.md#optional-bge-m3--vectorize-lane): one dedicated index, exact conversation scope, explicit external-data consent and a token in the platform secret store. Background indexing and query failures report their coverage; disabling the lane retains local/remote derivatives and does not erase previously uploaded data. Semantic recipe v2 deduplicates identical canonical text/card fields and excludes empty inputs and unknown-message placeholders; those messages remain available through context neighbors. Upgrading a v1 sidecar requires the stopped-only derivative replacement procedure in the operator guide.
 
 ## Connect a local account
 
@@ -143,9 +166,9 @@ The helper build only compiles a local executable. It does not start a service, 
 
 ## Architecture
 
-[![Sightglass architecture: a thin MCP bridge crosses authenticated local IPC into a policy-enforcing daemon; providers read source data while private projection, replay and resource state stay local.](docs/assets/architecture.svg)](docs/ARCHITECTURE.md)
+[![Sightglass architecture: a thin MCP bridge crosses authenticated local IPC into a policy-enforcing daemon; local mode reads source directly; an optional Mac capture edge feeds one Linux core that owns projection, replay and processing.](docs/assets/architecture.svg)](docs/ARCHITECTURE.md)
 
-The daemon owns source access and local state. Providers return evidence; the reader service decides admission and policy. Message bodies in `window.db` are source-derived projections and form the normal foreground read plane for admitted message pages and the native inbox. Materialized responses identify themselves as bounded-stale rather than claiming a new live-source observation. The same database also owns reader ACK/cursor state, correction history and resource/voice bindings; deleting it loses those local states. Local reads, source reads, resource derivation, the single database writer and transcript waits have independent bounded runtime lanes, so slow source or processor work cannot consume local-read capacity. Long PDF derivations use durable jobs introduced in schema v6, with lease/fencing recovery, and return a polling token instead of occupying a synchronous request indefinitely. Slow source reads run outside the database writer transaction. Catalog work uses a full validated snapshot; known conversation/message fallbacks and cold resources use typed dependency-scoped sessions that pin and revalidate only the SQLCipher databases/files they actually read. Cold resource processors run after that source lease closes, and a short transaction rechecks both the resolver revision and any worker fence before binding derived objects. Authorized CAS hits and transcript reads stay local while rechecking the owning conversation's current policy.
+The core owns admitted state; local mode owns source access, while remote mode delegates only finite capture to the Mac edge. Providers return evidence; the reader service decides admission and policy. Message bodies in `window.db` are source-derived projections and form the normal foreground read plane for admitted message pages and the native inbox. Materialized responses identify themselves as bounded-stale rather than claiming a new live-source observation. The same database also owns reader ACK/cursor state, correction history and resource/voice bindings; deleting it loses those local states. Local reads, source reads, resource derivation, the single database writer and transcript waits have independent bounded runtime lanes, so slow source or processor work cannot consume local-read capacity. Long PDF derivations use durable jobs introduced in schema v6, with lease/fencing recovery, and return a polling token instead of occupying a synchronous request indefinitely. Slow source reads run outside the database writer transaction. Catalog work uses a full validated snapshot; known conversation/message fallbacks and cold resources use typed dependency-scoped sessions that pin and revalidate only the SQLCipher databases/files they actually read. Cold resource processors run after that source lease closes, and a short transaction rechecks both the resolver revision and any worker fence before binding derived objects. Authorized CAS hits and transcript reads stay local while rechecking the owning conversation's current policy.
 
 See the [component/evidence map](docs/ARCHITECTURE.md) and [editable topology](docs/assets/architecture.mmd).
 
@@ -161,7 +184,7 @@ See the [component/evidence map](docs/ARCHITECTURE.md) and [editable topology](d
 - **Partial means partial.** Unreadable shards, source changes, incomplete indexes, missing keys and unavailable processors produce explicit coverage or errors. Already admitted current-epoch messages, the native inbox and authorized CAS hits can remain readable with bounded-stale receipts while live refresh is degraded. Bounded absence does not prove deletion or global nonexistence. Validated read windows are distinct from the continuous sync frontier; local contexts preserve gap evidence, legacy completeness is revalidated in bounded work, and an empty filtered page can still carry a signed scan continuation.
 - **Narrow native compatibility.** Other builds, key rotation and new shards require supported-profile/key enrollment work. Automatic key extraction/refresh, arbitrary video transcoding, a desktop UI and WGO runtime adapters are not implemented.
 
-Private directories use `0700`, data files `0600`, source databases use read-only SQLCipher handles, and credentials live in macOS Keychain. Messages and attachments are untrusted data, never instructions. Read the [Security boundary](docs/SECURITY.md) before enabling native access.
+Private directories use `0700`, data files `0600`, source databases use read-only SQLCipher handles, and macOS credentials live in Keychain. Linux core credentials use an owner-private, no-follow file store; filesystem permissions do not establish disk encryption. The source account and conversation egress ceiling require operator authorization, independently of reader policy and optional semantic consent. Messages and attachments are untrusted data, never instructions. Read the [Security boundary](docs/SECURITY.md) before enabling native access.
 
 ## Verify and explore
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -15,7 +16,12 @@ from sightglass.storage import StorageSettings
 
 CONFIG_SCHEMA_V1 = "sightglass.config.v1"
 CONFIG_SCHEMA = "sightglass.config.v2"
-DEFAULT_CONFIG_PATH = Path.home() / "Library" / "Application Support" / "Sightglass" / "config.json"
+DEFAULT_CONFIG_PATH = (
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    / "sightglass" / "config.json"
+    if sys.platform.startswith("linux")
+    else Path.home() / "Library" / "Application Support" / "Sightglass" / "config.json"
+)
 
 
 def _private_directory(path: Path) -> None:
@@ -116,6 +122,9 @@ class SightglassConfig:
     reader_timezone: str = "Asia/Singapore"
     storage: StorageSettings = StorageSettings()
     semantic: SemanticSettings = SemanticSettings()
+    reader_default_view: str = "auto"
+    activation_generation: str = ""
+    activation_path: Path | None = None
 
     def voice_settings(self) -> VoiceReadSettings:
         return VoiceReadSettings(
@@ -171,7 +180,7 @@ class SightglassConfig:
             if not isinstance(source, dict):
                 raise RuntimeError("Sightglass config source is missing")
             source_kind = str(source.get("kind") or "")
-            if source_kind not in {"synthetic", "macos-wechat"}:
+            if source_kind not in {"synthetic", "macos-wechat", "remote-capture"}:
                 raise RuntimeError("unsupported Sightglass source provider")
             source_instance_id = str(source.get("instance_id") or "")
             settings_value = str(source.get("settings_path") or "")
@@ -194,6 +203,24 @@ class SightglassConfig:
             )
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"invalid Sightglass voice config: {exc}") from exc
+        default_view = str(reader.get(
+            "default_view", "replica" if source_kind == "remote-capture" else "auto"
+        ))
+        if default_view not in {"auto", "replica", "fresh"}:
+            raise RuntimeError("invalid Sightglass reader default view")
+        if source_kind == "remote-capture" and default_view == "auto":
+            raise RuntimeError("remote capture requires an explicit replica or fresh default")
+        activation = value.get("activation", {})
+        if not isinstance(activation, dict):
+            raise RuntimeError("invalid Sightglass activation binding")
+        activation_generation = activation.get("generation", "")
+        activation_path = activation.get("path", "")
+        if (
+            not isinstance(activation_generation, str)
+            or not isinstance(activation_path, str)
+            or bool(activation_generation) != bool(activation_path)
+        ):
+            raise RuntimeError("Sightglass activation binding is incomplete")
         return cls(
             data_dir=Path(str(paths["data_dir"])).expanduser().resolve(),
             source_root=source_root,
@@ -220,6 +247,11 @@ class SightglassConfig:
             voice_helper_timeout_seconds=_bounded_voice_timeout(voice.get("helper_timeout_seconds")),
             storage=StorageSettings.from_dict(value.get("storage", {})),
             semantic=SemanticSettings.from_dict(value.get("semantic", {})),
+            reader_default_view=default_view,
+            activation_generation=activation_generation,
+            activation_path=(
+                Path(activation_path).expanduser().absolute() if activation_path else None
+            ),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -241,6 +273,7 @@ class SightglassConfig:
                 "reader_id": self.reader_id,
                 "display_name": self.reader_display_name,
                 "timezone": self.reader_timezone,
+                "default_view": self.reader_default_view,
             },
             "policy": {
                 "mode": self.policy_mode,
@@ -260,6 +293,10 @@ class SightglassConfig:
                 "open_duration_ms": self.voice_open_duration_ms,
                 "helper_path": self.voice_helper_path,
                 "helper_timeout_seconds": self.voice_helper_timeout_seconds,
+            },
+            "activation": {
+                "generation": self.activation_generation,
+                "path": str(self.activation_path or ""),
             },
         }
 

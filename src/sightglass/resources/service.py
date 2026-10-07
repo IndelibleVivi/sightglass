@@ -37,6 +37,7 @@ from .processors import (
     decode_text_with_encoding,
     extract_pdf_text,
     image_preview,
+    image_preview_processor_version,
     inspect_image,
     inspect_media,
     inspect_pdf,
@@ -134,11 +135,13 @@ _GENERATED_IMAGE_PREVIEW_VARIANT = "preview:v2"
 _ASYNC_PDF_BYTES = 1024 * 1024
 # Recipe identity for generated image/document previews. ``processor_version`` is part
 # of the provenance key, so a change to the rendering recipe invalidates every cached
-# preview that was produced by an older recipe. ``scale`` mirrors the bounded sips
+# preview that was produced by an older recipe. ``scale`` mirrors the bounded preview
 # dimension in ``image_preview`` and is recorded so a later change to that bound is a
-# different recipe rather than a silent reuse.
+# different recipe rather than a silent reuse. The image version is derived from the
+# active platform backend (``sips`` on macOS, ``libvips`` on Linux) so a cached preview
+# produced by the other backend is not trusted as this platform's provenance.
 _IMAGE_PREVIEW_PROCESSOR = "image-preview"
-_IMAGE_PREVIEW_PROCESSOR_VERSION = "sips-v1"
+_IMAGE_PREVIEW_PROCESSOR_VERSION = image_preview_processor_version()
 _PDF_PAGE_PROCESSOR = "pdf-page"
 _PDF_PAGE_PROCESSOR_VERSION = "pdftoppm-v1"
 _VIDEO_PREVIEW_PROCESSOR = "video-preview"
@@ -169,6 +172,7 @@ class ResourceService:
         self._wake_resource_worker: Callable[[], None] | None = None
         self._source_foreground_enter: Callable[[], None] | None = None
         self._source_foreground_exit: Callable[[], None] | None = None
+        self.remote_acquire: Callable[[Any, str], _ResolvedSource] | None = None
         self._runtime_lock = threading.Lock()
         self._runtime_counts = {
             "cache_hit": 0,
@@ -371,7 +375,7 @@ class ResourceService:
         binding = self.repository.resource_binding(str(row["resource_id"]), variant)
         if binding is None:
             return False
-        if self.provider.descriptor.kind != "macos-wechat" or row["kind"] != "image":
+        if self._origin_kind() != "macos-wechat" or row["kind"] != "image":
             return True
         return self._derivation_matches(
             resource_id=str(row["resource_id"]),
@@ -408,7 +412,12 @@ class ResourceService:
                 return True
         return False
 
-    def _resource_revision(self, row: Any) -> str:
+    def _origin_kind(self) -> str:
+        origin = getattr(self.provider, "origin_descriptor", self.provider.descriptor)
+        return str(origin.kind)
+
+    @staticmethod
+    def resource_revision_fields(row: Any) -> dict[str, Any]:
         resource_id = str(row["resource_id"])
         value = {
             "resource_id": resource_id,
@@ -425,7 +434,11 @@ class ResourceService:
             ),
             "declared_hash": str(row["declared_hash"]) if row["declared_hash"] else None,
         }
-        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return value
+
+    def _resource_revision(self, row: Any) -> str:
+        encoded = json.dumps(self.resource_revision_fields(row), sort_keys=True,
+                             separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
     def _verify_resolved_revision(
@@ -766,7 +779,7 @@ class ResourceService:
                 variant=item.variant,
                 created_at=now,
             )
-            if item.variant in _SOURCE_VARIANTS and self.provider.descriptor.kind == "macos-wechat":
+            if item.variant in _SOURCE_VARIANTS and self._origin_kind() == "macos-wechat":
                 row = self._resource_row(item.resource_id)
                 if row["kind"] == "image":
                     self._persist_derivations(
@@ -1362,6 +1375,10 @@ class ResourceService:
             )
             if source_resource_key is None:
                 raise SightglassError(ErrorCode.RESOURCE_UNAVAILABLE)
+            if self.remote_acquire is not None:
+                with self._lane(WorkClass.SOURCE_READ, wait=True):
+                    with self._foreground_source():
+                        return self.remote_acquire(row, captured_revision)
             with self._lane(WorkClass.SOURCE_READ, wait=True):
                 with self._foreground_source():
                     with self._resource_scope(source_resource_key) as snapshot:

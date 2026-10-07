@@ -103,11 +103,13 @@ class TimelineCursorCodec:
         generation_set_digest: str,
         dependency_generation_digest: str | None,
         projection_epoch: str,
+        view: str = "auto",
     ) -> str:
         return self.codec.encode(
             {
                 "schema": CURSOR_SCHEMA,
                 "kind": "timeline",
+                "view": view,
                 "reader": reader_binding(reader_id),
                 "account_id": account_id,
                 "conversation_id": conversation_id,
@@ -144,6 +146,7 @@ class TimelineCursorCodec:
         direction: str,
         scope_kind: str,
         scope_key: str,
+        view: str = "auto",
     ) -> dict[str, Any]:
         payload = self.codec.decode(token)
         expected = {
@@ -158,6 +161,8 @@ class TimelineCursorCodec:
             "scope_key": scope_key,
         }
         if any(payload.get(key) != value for key, value in expected.items()):
+            raise SightglassError(ErrorCode.CURSOR_INVALID)
+        if payload.get("view", "auto") != view:
             raise SightglassError(ErrorCode.CURSOR_INVALID)
         position = payload.get("position")
         source = payload.get("source")
@@ -195,11 +200,13 @@ class TimelineCursorCodec:
         projection_epoch: str,
         observation_watermark: int,
         policy_revision: str,
+        view: str = "auto",
     ) -> str:
         return self.codec.encode(
             {
                 "schema": CURSOR_SCHEMA,
                 "kind": "timeline-materialized",
+                "view": view,
                 "reader": reader_binding(reader_id),
                 "account_id": account_id,
                 "conversation_id": conversation_id,
@@ -237,6 +244,7 @@ class TimelineCursorCodec:
         scope_key: str,
         projection_epoch: str,
         policy_revision: str,
+        view: str = "auto",
     ) -> dict[str, Any]:
         payload = self.codec.decode(token)
         expected = {
@@ -251,6 +259,8 @@ class TimelineCursorCodec:
             "scope_key": scope_key,
         }
         if any(payload.get(key) != value for key, value in expected.items()):
+            raise SightglassError(ErrorCode.CURSOR_INVALID)
+        if payload.get("view", "auto") != view:
             raise SightglassError(ErrorCode.CURSOR_INVALID)
         position = payload.get("position")
         projection = payload.get("projection")
@@ -382,7 +392,8 @@ class AccountCursorCodec:
         position: list[Any],
         snapshot: dict[str, Any],
     ) -> str:
-        if kind not in {"catalog", "inbox", "participants", "resources", "links", "retrieval"}:
+        if kind not in {"catalog", "inbox", "participants", "resources", "links", "retrieval",
+                        "search-replica"}:
             raise SightglassError(ErrorCode.QUERY_INVALID)
         return self.codec.encode(
             {

@@ -80,6 +80,13 @@ def next_actions(
                         "clear_arguments": [] if name == "wechat_read_transcripts"
                         else ["reading_token"]})
     receipt = value.get("source_receipt", {})
+    selected_view = receipt.get("view") or arguments.get("view")
+    view_arguments = {"view": selected_view} if selected_view in {"replica", "fresh"} else {}
+    if view_arguments:
+        for action in actions:
+            action["arguments"] = dict(view_arguments)
+            if name == "wechat_read_messages" and arguments.get("refresh"):
+                action["clear_arguments"].append("refresh")
     continuation = receipt.get("source_continuation", {}).get("reading_token")
     if continuation:
         actions.append({"kind": "source_scan", "tool": name,
@@ -111,13 +118,13 @@ def next_actions(
             if int(index) < len(rows):
                 actions.append({"kind": "message_detail", "tool": "wechat_read_messages",
                                 "arguments": {"mode": "message", "message_id": rows[int(index)][0],
-                                              "response_profile": "diagnostic"}})
+                                              "response_profile": "diagnostic", **view_arguments}})
                 break
     for row in value.get("messages", []):
         if isinstance(row, dict) and row.get("body_truncated"):
             actions.append({"kind": "message_detail", "tool": "wechat_read_messages",
                             "arguments": {"mode": "message", "message_id": row["message_id"],
-                                          "response_profile": "diagnostic"}})
+                                          "response_profile": "diagnostic", **view_arguments}})
             break
     if name == "wechat_read_messages" and arguments.get("mode", "recent") == "context":
         rows = value.get("messages", [])
@@ -126,7 +133,8 @@ def next_actions(
                 row = rows[edge]
                 identity = row[0] if isinstance(row, list) else row["message_id"]
                 actions.append({"kind": "context_edge", "tool": name,
-                                "arguments": {"mode": "context", "message_id": identity},
+                                "arguments": {"mode": "context", "message_id": identity,
+                                              **view_arguments},
                                 "reuse_arguments": True, "clear_arguments": ["anchor", "cursor"]})
     return actions
 

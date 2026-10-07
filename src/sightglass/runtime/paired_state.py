@@ -13,7 +13,7 @@ from typing import Any
 from sightglass.model.backups import _fsync_directory, _hash_file, _private_regular_file
 
 
-def _helper_state(path: Path) -> dict[str, Any]:
+def _helper_state(path: Path, *, executable: bool = True) -> dict[str, Any]:
     """Bind the default executable and its private two-level namespace without running it."""
     root = path.parent.parent
     for directory in (root, path.parent):
@@ -31,7 +31,7 @@ def _helper_state(path: Path) -> dict[str, Any]:
     if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
             or metadata.st_uid != os.getuid() or metadata.st_size <= 0
             or stat.S_IMODE(metadata.st_mode) & 0o7077
-            or not metadata.st_mode & stat.S_IXUSR):
+            or executable and not metadata.st_mode & stat.S_IXUSR):
         raise RuntimeError("voice helper must be a private owned nonempty executable")
     digest, size = _hash_file(path)
     after = path.lstat()
@@ -49,6 +49,25 @@ def _helper_state(path: Path) -> dict[str, Any]:
     return {"present": True, "digest": digest, "bytes": size, "revision": revision(after)}
 
 
+def _linux_helper_bundle(path: Path) -> dict[str, dict[str, Any]]:
+    """Bind only the default helper's declared model/manifest and build receipt."""
+    from sightglass.voice.linux import resolve_model_binding
+
+    manifest = path.parent / "models" / "model.json"
+    manifest_state = _helper_state(manifest, executable=False)
+    model = resolve_model_binding(path).path
+    if not manifest_state["present"] or model is None:
+        raise RuntimeError("voice helper model binding is unavailable")
+    model_state = _helper_state(model, executable=False)
+    if not model_state["present"]:
+        raise RuntimeError("voice helper model is unavailable")
+    return {
+        "models/model.json": manifest_state,
+        f"models/{model.name}": model_state,
+        "helper-build.json": _helper_state(path.parent / "helper-build.json", executable=False),
+    }
+
+
 def relocated_path(value: str, old: Path, new: Path) -> str:
     path = Path(value)
     relative = path.relative_to(old)
@@ -60,6 +79,7 @@ def relocated_path(value: str, old: Path, new: Path) -> str:
 def clone_state(
     database: Path, old: Path, old_data: Path, new: Path, *, capacity: Callable[[int], Any],
     default_voice_helper: bool = False,
+    voice_helper_name: str = "sightglass-transcribe",
 ) -> list[dict[str, Any]]:
     """Clone referenced payloads/CAS, known sidecars and the optional default helper.
 
@@ -104,8 +124,10 @@ def clone_state(
         files.append({"path": str(destination), "digest": before[0], "bytes": before[1]})
 
     if default_voice_helper:
-        source = old_data / "voice" / "sightglass-transcribe"
-        target = new / "voice" / "sightglass-transcribe"
+        if voice_helper_name not in {"sightglass-transcribe", "sightglass-whisper"}:
+            raise RuntimeError("unknown default voice helper")
+        source = old_data / "voice" / voice_helper_name
+        target = new / "voice" / voice_helper_name
         initial = _helper_state(source)
         item: dict[str, Any] = {"path": str(target)}
         if initial["present"]:
@@ -117,6 +139,16 @@ def clone_state(
             files.append(item)
         item.update(kind="default_voice_helper", source_path=str(source),
                     source_state=initial, target_state=_helper_state(target))
+        if initial["present"] and voice_helper_name == "sightglass-whisper":
+            bundle = _linux_helper_bundle(source)
+            for relative, evidence in bundle.items():
+                if evidence["present"]:
+                    copy(source.parent / relative, target.parent / relative, evidence["digest"])
+            if _linux_helper_bundle(source) != bundle:
+                raise RuntimeError("voice helper model changed while staging")
+            item.update(
+                bundle_source_state=bundle, bundle_target_state=_linux_helper_bundle(target),
+            )
 
     secret = old / "token-secret"
     if secret.exists():
@@ -150,6 +182,24 @@ def clone_state(
                 "UPDATE resource_objects SET local_path_internal=? WHERE object_digest=?",
                 (str(target), digest),
             )
+        # Completed request outcomes may outlive reader ACK and also include empty
+        # pages. Their opaque spool IDs relocate through the same independent root.
+        from sightglass.reader.replica import UPDATE_REQUEST_TOOL, request_spool_ids
+
+        retained_requests = request_spool_ids(connection)
+        for row in connection.execute(
+            "SELECT warning_codes_json FROM access_receipts WHERE tool_name=?",
+            (UPDATE_REQUEST_TOOL,),
+        ):
+            import json
+
+            metadata = json.loads(row[0])
+            identity = metadata.get("payload_id")
+            if identity not in retained_requests:
+                continue
+            source = old / "deliveries" / f"{identity}.json"
+            target = new / "deliveries" / source.name
+            copy(source, target, metadata["payload_digest"])
         connection.commit()
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     # These JSON sidecars contain no query text and have independent validation.
@@ -195,6 +245,11 @@ def verify_initial_state(files: list[dict[str, Any]]) -> None:
             if (_helper_state(Path(item["source_path"])) != item["source_state"]
                     or _helper_state(path) != item["target_state"]):
                 raise RuntimeError("voice helper private state changed before activation")
+            if "bundle_source_state" in item and (
+                _linux_helper_bundle(Path(item["source_path"])) != item["bundle_source_state"]
+                or _linux_helper_bundle(path) != item["bundle_target_state"]
+            ):
+                raise RuntimeError("voice helper model state changed before activation")
             continue
         _private_regular_file(path)
         if _hash_file(path) != (item["digest"], item["bytes"]):

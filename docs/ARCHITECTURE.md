@@ -1,16 +1,18 @@
 # Architecture
 
-Sightglass is a local, read-only bridge between a private macOS WeChat source and an
-MCP client. A client asks the local bridge for data; the bridge holds the credential and
-calls the daemon over local IPC; the daemon alone owns the source handle, the source-derived
-projection and durable reader state, and source-access policy. The daemon returns only policy-checked, opaque-ID
+Sightglass is a read-only bridge between a private macOS WeChat source and an
+MCP client. A client asks the host's stdio bridge for data; the bridge holds the credential and
+calls the core daemon over local IPC. One core owns the source-derived projection,
+durable reader state and source-access policy. In local mode it also opens the source;
+the optional remote-capture candidate keeps native source handles and keys on a bounded
+Mac edge, with the core on Linux. The core returns only policy-checked, opaque-ID
 projections. No client, and no MCP process, ever opens the source, decodes media, or
 receives local paths, keys, or unadmitted account data.
 
 ## Diagram question
 
 > How do clients obtain policy-checked current-source or explicitly bounded materialized
-> data while source authority and private state stay local?
+> data while native source authority stays on Mac and one core owns private reader state?
 
 In one sentence: a client speaks MCP to a local stdio bridge that owns the reader
 credential; the bridge calls the daemon over an authenticated Unix socket; the daemon
@@ -32,13 +34,24 @@ Three layers, one direction of authority:
    parsing, identity merge, or policy rules.
 3. **Daemon** — the single owner of private state. It authenticates the socket peer,
    enforces policy, drives the provider and services, and owns the projection, spool,
-   object store, and source-access secrets. Operator-only mutations arrive separately through
+   object store, and core credentials. Operator-only mutations arrive separately through
    `sightglassctl`, never through MCP.
 
 `sightglassd` is a **region**, not a hub: the named services (reader, resource, voice)
-live inside it, and so does the source/snapshot handling. Only the daemon opens the
-configured source, `window.db`, the delivery spool, or the object store on the MCP path.
+live inside it. Only the core opens `window.db`, the delivery spool, or the object store
+on the MCP path. Native source/snapshot handling lives in that daemon in local mode,
+and in the Mac edge for remote-capture mode.
 The underlying WeChat store stays outside Sightglass ownership.
+
+The [VPS candidate](VPS-MIGRATION.md) adds finite capture, not provider-method RPC.
+The edge executes a typed plan, validates its complete read set and seals one envelope
+(200 messages, 4 MiB metadata, 32 MiB resource; one 64 MiB ordered spool). Its outgoing
+SSH relay pins the activated core generation. The core admits that evidence, reader ACK,
+new delivery, reconciliation checkpoint and exact request outcome in one WindowDB writer
+transaction; only a committed journal permits transport ACK. Replica reads remain local
+to the core while the Mac is offline and report partial resident coverage. Explicit
+fresh operations require edge evidence. This topology is a source/candidate capability;
+the diagram does not establish any installation or production cutover.
 
 Diagram:
 
@@ -101,7 +114,7 @@ Node IDs match `assets/architecture.svg` and `assets/architecture.mmd`.
 | `CLIENT` | MCP client | Speaks MCP over stdio. No credential, no socket, no source access. | `src/sightglass/mcp/server.py` |
 | `BRIDGE` | MCP bridge | Thin stdio bridge. Owns the reader credential; validate/project/call only. | `src/sightglass/mcp/bridge.py`, `mcp/tools.py` |
 | `OPERATOR` | sightglassctl | Operator CLI. Holds the operator credential; mutations excluded from MCP. | `src/sightglass/cli.py`, `runtime/control.py` |
-| `KC` | Keychain | Reader/operator token lookup (separate items), native DB/image-decoder keys and optional CF API token. | `src/sightglass/runtime/secrets.py`, `source/macos_wechat/keys.py` |
+| `KC` | Host secret store | Mac Keychain or Linux owner-private, no-follow credential files; core reader/operator and optional CF tokens. Native source keys remain on Mac. File permissions do not establish encryption. | `src/sightglass/runtime/secrets.py`, `source/macos_wechat/keys.py` |
 | `AUTH` | Auth boundary | Unix socket `0600`; same effective UID plus constant-time token-hash match yields `reader` or `operator` role. | `src/sightglass/runtime/ipc.py` (`authenticated_role`) |
 | `READER` | Reader service | Hydrate, identity projection, residency-aware admission, materialized/live cursor routing, search and updates. Async search preparation owns a bounded private sidecar/token; interrupted conversations restart under fresh proof, final results still use current-source validation. Assembles delivery results and replays them until ACK. | `src/sightglass/reader/service.py`, `reader/cursors.py`, `reader/deliveries.py`, `runtime/search_preparation.py` |
 | `RETRIEVAL` | Retrieval service | Policy-scoped materialized link discovery and literal/structured and optional semantic candidate contexts; signed version/watermark continuation, bounded link/reply expansion, no ACK or source access. | `src/sightglass/reader/retrieval.py` |
@@ -110,9 +123,13 @@ Node IDs match `assets/architecture.svg` and `assets/architecture.mmd`.
 | `SEMANTIC_DB` | Private semantic sidecar | Float32 vectors, version manifest, checkpoints and generations; separate rebuildable state, covered by shared local storage admission. | `src/sightglass/semantic/service.py`, `storage.py` |
 | `CF` | Cloudflare Workers AI + Vectorize | Explicitly authorized text/query egress and remote vectors; returns candidates, never canonical authority. | `src/sightglass/semantic/cloudflare.py`, `semantic/settings.py` |
 | `RESOURCE` | Resource service | Policy-bound materialized discovery plus message-bound acquisition/derivation; rechecks owning-conversation policy; no-follow open, MIME sniff, digest verify, stage coalescing and durable fenced work. | `src/sightglass/resources/service.py`, `resources/jobs.py`, `runtime/resource_worker.py` |
-| `VOICE` | Voice lane (optional) | Local-only transcription: verified capture, bounded SILK→PCM decode child, one Apple `SpeechAnalyzer` helper child, fenced commit. | `src/sightglass/voice/service.py`, `runtime/voice_worker.py` |
+| `VOICE` | Voice lane (optional) | Verified capture and fenced transcripts; bounded Apple `SpeechAnalyzer` on Mac or whole-job systemd-isolated SILK→PCM→WAV→whisper.cpp on Linux. | `src/sightglass/voice/service.py`, `voice/linux.py`, `runtime/voice_worker.py` |
 | `SRC` | Source authority | Live read-only WeChat store (or synthetic fixture copy). Authoritative current content; never written. | `src/sightglass/source/base.py` |
-| `PROVIDER` | Source provider | Registry `synthetic` or `macos-wechat`. Returns evidence only; native handles stay `mode=ro` + `query_only`; owns catalog snapshots and typed dependency-scoped sessions. | `src/sightglass/source/registry.py`, `source/macos_wechat/provider.py` |
+| `PROVIDER` | Source provider | Registry `synthetic`, `macos-wechat`, or `remote-capture` binding. Returns evidence only; native handles stay `mode=ro` + `query_only`. A remote operation uses one finite frozen provider, never a Linux native WeChat adapter. | `src/sightglass/source/registry.py`, `source/macos_wechat/provider.py`, `source/capture/frozen.py` |
+| `CAPTURE_BROKER` | Core capture broker | Plans authorized finite capture; pins activation; joins admission, reader ACK and exact request outcome in one transaction, then sends transport ACK. | `src/sightglass/runtime/capture_core.py`, `runtime/capture_journal.py` |
+| `EDGE` | Mac native capture executor | Validates one complete typed source read set before sealing evidence. No WindowDB or reader progress. | `src/sightglass/source/capture/executor.py`, `runtime/edge_runtime.py` |
+| `EDGE_KC` | Edge Keychain | Native DB/image keys stay on Mac and enter native provider calls in-process only. | `src/sightglass/runtime/secrets.py`, `source/macos_wechat/keys.py` |
+| `EDGE_SPOOL` | Ordered edge spool | One bounded pending envelope; durable replay after restart; released only on authenticated durable core ACK. | `src/sightglass/runtime/edge.py`, `runtime/edge_relay.py` |
 | `SPOOL` | Delivery spool | Private immutable payloads (`0700`/`0600`), digest-verified. **Replayed until ACK**; ACK advances the update cursor. | `src/sightglass/reader/deliveries.py`, `model/repositories.py` |
 | `WINDOW` | window.db | Versioned source-derived message plane and residency metadata plus durable reader/update/delivery/correction state, resource/voice bindings, resource-job leases/fences, account/time resource-discovery timeline and rebuildable link/lexical derivatives, plus trusted contiguous coverage, disjoint validated windows and observation repair progress. Source content remains external authority; local reader state cannot be recovered by deleting this database. | `src/sightglass/model/schema.py`, `model/repositories.py` |
 | `CACHE` | Object store (CAS) | Private content-addressed store (`0700`/`0600`, SHA-256, atomic, single-linked). Holds resource bytes; not the binding. | `src/sightglass/resources/cache.py` |
@@ -120,8 +137,12 @@ Node IDs match `assets/architecture.svg` and `assets/architecture.mmd`.
 ### Regions
 
 - **`sightglassd` region** (containing owner): `AUTH` handler, policy enforcement,
-  `READER`, `RETRIEVAL`, `INDEX_WORKER`, `SEMANTIC`, `RESOURCE`, `VOICE`, `PROVIDER`; its private disk state is `SPOOL`,
-  `WINDOW`, `SEMANTIC_DB`, `CACHE`. `SRC` remains external source authority, `CF` is an explicitly authorized external service, and `KC` is an OS service.
+  `READER`, `RETRIEVAL`, `INDEX_WORKER`, `SEMANTIC`, `RESOURCE`, `VOICE`, `PROVIDER` and optional
+  `CAPTURE_BROKER`; its private disk state is `SPOOL`, `WINDOW`, `SEMANTIC_DB`, `CACHE`.
+  `SRC` remains external source authority, `CF` is an explicitly authorized external service,
+  and `KC` is the host's private secret store.
+- **Mac edge region** (remote candidate): `EDGE`, `EDGE_KC`, `EDGE_SPOOL`; it owns native
+  source access and capture replay, with no second WindowDB or reader ACK owner.
 - **Private-state region**: `KC`, `SPOOL`, `WINDOW`, `SEMANTIC_DB`, `CACHE` — never reachable by a
   client, and never crossing the MCP boundary as paths or keys.
 
@@ -134,10 +155,17 @@ Node IDs match `assets/architecture.svg` and `assets/architecture.mmd`.
 | `OPERATOR` → `AUTH` | operator token | Distinct credential; operator-only mutations. |
 | `KC` → `BRIDGE` | reader token | Bridge reads the configured reader token. |
 | `KC` → `OPERATOR` | operator token | `sightglassctl` reads the operator token. |
-| `KC` → `PROVIDER` | native DB / image keys | Provider secrets supplied in-process only; distinct from token lookup. |
+| `KC` → `PROVIDER` | native DB / image keys (local Mac only) | Provider secrets supplied in-process only; distinct from token lookup. |
 | `AUTH` → `READER` | authenticated role | Same-UID + token-hash match decides reader vs operator capabilities. |
-| `SRC` → `PROVIDER` | read-only handle | Source content is untrusted data; never written. |
-| `PROVIDER` → `SRC` | snapshot + validate | Full catalog snapshot or recorded narrow read set; both are fail-closed validation gates. |
+| `SRC` → `PROVIDER` | read-only handle (local mode) | Source content is untrusted data; never written. |
+| `PROVIDER` → `SRC` | snapshot + validate (local mode) | Full catalog snapshot or recorded narrow read set; both are fail-closed validation gates. |
+| `SRC` → `EDGE` | typed read-only session (remote mode) | Mac edge captures and validates native evidence within a finite plan. |
+| `EDGE_KC` → `EDGE` | native source keys | In-process lookup on Mac; no source keys cross the relay. |
+| `EDGE` → `EDGE_SPOOL` | sealed complete evidence | One ordered envelope and exact crash-replay bytes. |
+| `EDGE_SPOOL` → `CAPTURE_BROKER` | outgoing pinned SSH relay | Authenticated activation generation; no public listener or arbitrary path/SQL/shell. |
+| `READER` → `CAPTURE_BROKER` | finite fresh plan | Policy and admission decide the operation before source capture. |
+| `CAPTURE_BROKER` → `PROVIDER` | frozen operation provider | Sealed evidence is readable only for its declared scope; no additional RPC. |
+| `CAPTURE_BROKER` → `EDGE_SPOOL` | post-commit ACK | Core journal and reader-state transaction commit before edge release. |
 | `PROVIDER` → `READER` | evidence | Messages/identity evidence; provider never chooses policy. |
 | `PROVIDER` → `RESOURCE` | bounded resource read | Provider-resolved, no-follow, digest-verified bytes. |
 | `READER` → `WINDOW` | residency admission txn | Commit only after the governing catalog snapshot or selected dependency session validates. |
@@ -175,9 +203,9 @@ identity is injected server-side and never accepted from MCP arguments.
 | 2 | `wechat_find_conversations` | Bounded conversation discovery under policy. |
 | 3 | `wechat_read_inbox` | Recency-ordered current-epoch materialized conversation summaries. |
 | 4 | `wechat_find_participants` | Bounded participant discovery within an admitted conversation. |
-| 5 | `wechat_read_messages` | Policy-checked materialized pages with source fallback for cold/stale targets (recent/range/context/message/speaker); updates keep their durable delivery path. |
+| 5 | `wechat_read_messages` | `view=replica` reads partial resident coverage; `view=fresh` requires finite source proof; `auto` retains local-mode routing. Updates keep their exact durable delivery/ACK path. |
 | 6 | `wechat_read_transcripts` | Optional local transcript reads for admitted resources. |
-| 7 | `wechat_search_messages` | Async bounded source preparation token, then indexed candidate recall validated against current-source IDs. |
+| 7 | `wechat_search_messages` | Replica search validates resident canonical bodies without opening source; fresh/auto source search uses bounded preparation and current-source validation. |
 | 8 | `wechat_find_links` | Local-only observed-URL discovery; full observed URL projection; policy/version cursor, signed continuation. |
 | 9 | `wechat_retrieve` | Deterministic candidate-context retrieval from literal/structured evidence with replayable anchors. |
 | 10 | `wechat_find_resources` | Policy-bound search over the materialized local resource catalog. |
@@ -189,7 +217,7 @@ Evidence: `src/sightglass/mcp/server.py` registers these thirteen.
 
 ## Credentials and authentication
 
-- Raw reader/operator tokens live in Keychain as separate items. The **bridge** reads the
+- Raw reader/operator tokens live in Mac Keychain or the Linux private file store as separate items. The **bridge** reads the
   reader token per call; `sightglassctl` reads the operator token.
 - `window.db` and the config persist **credential hashes only** — not all of their
   contents. Admitted message projections and transcripts are private plaintext stored
@@ -201,7 +229,10 @@ Evidence: `src/sightglass/mcp/server.py` registers these thirteen.
   lookup** from token lookup and are supplied to the provider in-process only; they never
   enter argv, logs, receipts, or Git.
 - The MCP bridge always uses reader auth. Operator auth belongs only to `sightglassctl`.
-- Peer identity is supplied by the OS: macOS `getpeereid`, Linux `SO_PEERCRED` for the synthetic CI path. Same-owner UID plus the token remains required; native WeChat support stays macOS-only.
+- Peer identity is supplied by the OS: macOS `getpeereid`, Linux `SO_PEERCRED`.
+  Same-owner UID plus the token remains required on both core platforms; native WeChat
+  source support stays macOS-only. Cross-host deployment additionally requires a private
+  encrypted vault and explicit host/namespace/credential activation and old-owner revocation.
 
 ## Source authority and durable local state
 
@@ -245,8 +276,9 @@ Evidence: `src/sightglass/mcp/server.py` registers these thirteen.
   ACK within the maintenance reserve and explicitly reports `ack_committed=true`.
   A policy change expires pending deliveries
   before they can reappear.
-- Search uses bounded indexed candidate recall, then validates each returned hit against
-  canonical current-source IDs. Candidate recall is not evidence, and query text is never
+- Source-current search uses bounded indexed candidate recall, then validates each returned hit against
+  canonical current-source IDs; replica search validates current resident bodies and labels
+  coverage partial. Candidate recall is not evidence, and query text is never
   persisted in access receipts. Receipts record tool, scope digest, counts, bytes, and
   outcome without query text, bodies, labels, filenames, URLs, or local paths.
 
@@ -301,7 +333,7 @@ evidence.
 ## Semantic lane (optional)
 
 Default disabled. Explicit operator settings name one exact account and conversation
-list and consent to Cloudflare text/query egress. The CF token lives in Keychain;
+list and consent to Cloudflare text/query egress. The CF token lives in the host secret store;
 MCP cannot enable the lane or choose credentials/models. Canonical capture happens
 under a short local read, network work runs outside the `window.db` transaction,
 and returned IDs need the durable verified manifest plus current policy/version
@@ -318,10 +350,13 @@ See [operator setup and recovery](OPERATIONS.md#optional-bge-m3--vectorize-lane)
 
 ## Voice lane (optional)
 
-Local-only and optional. Transcription of an already-recovered voice original runs in
-four stages: verified capture into private staging, a bounded SILK→PCM decode child, one
-bounded Apple `SpeechAnalyzer` helper child per job, and a **fenced commit** with
-content-free recipe provenance. Extraction from the encrypted media DB remains key-gated.
+Private and optional. Transcription of an already-recovered voice original uses verified
+capture and a **fenced commit** with content-free recipe provenance. Mac processing uses
+a bounded SILK→PCM child and Apple `SpeechAnalyzer`. Linux processing places the entire
+SILK→PCM→WAV→whisper.cpp job in one systemd cgroup with a 2 GiB memory bound, no swap,
+two recognizer threads, a deadline and bounded output; missing isolation fails closed.
+Extraction from the native encrypted media DB remains key-gated on Mac. See
+[Linux processing and provenance](LINUX-PROCESSING.md).
 `runtime/voice_setup.py` assembles the recognizer for one daemon configuration;
 production code never fabricates a fake recognizer. Real speech and transcript text are
 never committed.

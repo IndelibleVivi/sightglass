@@ -5,6 +5,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,14 @@ MAX_EXTRACTED_TEXT_BYTES = 4 * 1024 * 1024
 PROCESS_TIMEOUT_SECONDS = 20.0
 WXGF_MIME = "image/x-wechat-wxgf"
 _MAX_WXGF_HEADER_BYTES = 4096
+
+# Linux image processing is backed by libvips (``vipsheader`` for metadata,
+# ``vipsthumbnail`` for previews).  Both are probed for their actual capabilities
+# before use: libvips loads HEIF/TIFF/BMP/JPEG/PNG/WebP/GIF through installed loaders,
+# so presence is necessary but not sufficient.  We never install one, fetch one, or add
+# a Python image runtime that is not an existing dependency.
+_VIPS_HEADER_TIMEOUT_SECONDS = 10.0
+_PREVIEW_SCALE_BOUND = 2048
 
 
 @dataclass(frozen=True)
@@ -176,6 +185,8 @@ def processor_status() -> dict[str, bool]:
         ffmpeg = False
     return {
         "sips": shutil.which("sips") is not None,
+        "vipsheader": shutil.which("vipsheader") is not None,
+        "vipsthumbnail": shutil.which("vipsthumbnail") is not None,
         "pdfinfo": shutil.which("pdfinfo") is not None,
         "pdftotext": shutil.which("pdftotext") is not None,
         "pdftoppm": shutil.which("pdftoppm") is not None,
@@ -203,6 +214,7 @@ def _run_bounded_file(
     *,
     max_output_bytes: int,
     stdout_to_output: bool,
+    timeout_seconds: float = PROCESS_TIMEOUT_SECONDS,
 ) -> bytes:
     started = time.monotonic()
     output_handle = output.open("wb") if stdout_to_output else subprocess.DEVNULL
@@ -219,7 +231,7 @@ def _run_bounded_file(
                 process.kill()
                 process.wait()
                 raise SightglassError(ErrorCode.RESOURCE_TOO_LARGE)
-            if time.monotonic() - started > PROCESS_TIMEOUT_SECONDS:
+            if time.monotonic() - started > timeout_seconds:
                 process.kill()
                 process.wait()
                 raise SightglassError(
@@ -453,6 +465,49 @@ def inspect_image(data: bytes) -> ImageInfo:
     header_dimensions = _header_image_dimensions(data)
     if header_dimensions is not None:
         _require_safe_dimensions(*header_dimensions)
+    backend = _image_backend()
+    return backend.inspect(data)
+
+def image_preview(data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
+    if data.startswith(WXGF_MAGIC):
+        decoded = decode_wechat_wxgf_preview(data, max_bytes=MAX_SOURCE_BYTES)
+        return image_preview(decoded, max_bytes=max_bytes)
+    backend = _image_backend()
+    return backend.preview(data, max_bytes=max_bytes)
+
+class _ImageBackend:
+    """One inspected/preview-capable image backend, probed before every use."""
+
+    def inspect(self, data: bytes) -> ImageInfo:
+        raise NotImplementedError
+
+    def preview(self, data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
+        raise NotImplementedError
+
+class _SipsImageBackend(_ImageBackend):
+    """macOS ``sips`` backend; the original local image path, unchanged."""
+
+    def inspect(self, data: bytes) -> ImageInfo:
+        return _sips_inspect_image(data)
+
+    def preview(self, data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
+        return _sips_image_preview(data, max_bytes=max_bytes)
+
+class _VipsImageBackend(_ImageBackend):
+    """Linux libvips backend with bounded ``vipsheader``/``vipsthumbnail`` calls.
+
+    libvips owns the loader set, so HEIF/TIFF/BMP support follows the operator's
+    installed ``libheif``/``libtiff`` loaders instead of a Sightglass guessing table.
+    """
+
+    def inspect(self, data: bytes) -> ImageInfo:
+        return _vips_inspect_image(data)
+
+    def preview(self, data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
+        return _vips_image_preview(data, max_bytes=max_bytes)
+
+def _sips_inspect_image(data: bytes) -> ImageInfo:
+    command = _command("sips")
     with _private_directory() as temporary_name:
         directory = Path(temporary_name)
         os.chmod(directory, 0o700)
@@ -460,7 +515,7 @@ def inspect_image(data: bytes) -> ImageInfo:
         output = directory / "info.txt"
         raw = _run_bounded_file(
             [
-                _command("sips"),
+                command,
                 "-g",
                 "pixelWidth",
                 "-g",
@@ -489,32 +544,22 @@ def inspect_image(data: bytes) -> ImageInfo:
     animated = data.startswith((b"GIF87a", b"GIF89a"))
     return ImageInfo(width, height, format_name, animated)
 
-
-def image_preview(data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
-    if data.startswith(WXGF_MAGIC):
-        decoded = decode_wechat_wxgf_preview(data, max_bytes=MAX_SOURCE_BYTES)
-        return image_preview(decoded, max_bytes=max_bytes)
+def _sips_image_preview(data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
+    command = _command("sips")
+    # Inspect through the public seam so callers (and tests) can bound/short-circuit
+    # metadata probing; the backend itself stays a thin wrapper over ``sips``.
     source_info = inspect_image(data)
     with _private_directory() as temporary_name:
         directory = Path(temporary_name)
         os.chmod(directory, 0o700)
         source = _private_file(directory, "input", data)
         output = directory / "preview.png"
-        command = [_command("sips")]
+        argv = [command]
         if max(source_info.width, source_info.height) > 2048:
-            command.extend(["-Z", "2048"])
-        command.extend(
-            [
-                "-s",
-                "format",
-                "png",
-                source.as_posix(),
-                "--out",
-                output.as_posix(),
-            ]
-        )
+            argv.extend(["-Z", "2048"])
+        argv.extend(["-s", "format", "png", source.as_posix(), "--out", output.as_posix()])
         preview = _run_bounded_file(
-            command,
+            argv,
             output,
             max_output_bytes=max_bytes,
             stdout_to_output=False,
@@ -523,6 +568,96 @@ def image_preview(data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
         raise SightglassError(ErrorCode.RESOURCE_DECODE_FAILED)
     return preview, inspect_image(preview)
 
+def _vips_inspect_image(data: bytes) -> ImageInfo:
+    header = _command("vipsheader")
+    with _private_directory() as temporary_name:
+        directory = Path(temporary_name)
+        os.chmod(directory, 0o700)
+        source = _private_file(directory, "input", data)
+        output = directory / "info.txt"
+        raw = _run_bounded_file(
+            [header, "--all", source.as_posix()],
+            output,
+            max_output_bytes=64 * 1024,
+            stdout_to_output=True,
+            timeout_seconds=_VIPS_HEADER_TIMEOUT_SECONDS,
+        )
+    values = {
+        match.group(1): match.group(2).strip()
+        for match in re.finditer(
+            r"^(width|height|n-pages):\s*(.+)$", raw.decode("utf-8", "replace"), re.M
+        )
+    }
+    try:
+        width = int(values["width"])
+        height = int(values["height"])
+        pages = int(values.get("n-pages", "1"))
+    except (KeyError, ValueError) as exc:
+        raise SightglassError(ErrorCode.RESOURCE_DECODE_FAILED) from exc
+    _require_safe_dimensions(width, height)
+    # libvips's `format` is the sample type (for example uchar), not the image
+    # container. Keep ImageInfo's format names aligned with the macOS backend.
+    mime = sniff_mime(data)
+    if not mime.startswith("image/") or pages < 1:
+        raise SightglassError(ErrorCode.RESOURCE_DECODE_FAILED)
+    format_name = mime.removeprefix("image/")
+    animated = pages > 1 or data.startswith((b"GIF87a", b"GIF89a"))
+    return ImageInfo(width, height, format_name, animated)
+
+def _vips_image_preview(data: bytes, *, max_bytes: int) -> tuple[bytes, ImageInfo]:
+    thumbnail = _command("vipsthumbnail")
+    inspect_image(data)
+    with _private_directory() as temporary_name:
+        directory = Path(temporary_name)
+        os.chmod(directory, 0o700)
+        source = _private_file(directory, "input", data)
+        output = directory / "preview.png"
+        preview = _run_bounded_file(
+            [
+                thumbnail,
+                f"--size={_PREVIEW_SCALE_BOUND}x{_PREVIEW_SCALE_BOUND}>",
+                f"--output={output.as_posix()}",
+                source.as_posix(),
+            ],
+            output,
+            max_output_bytes=max_bytes,
+            stdout_to_output=False,
+            timeout_seconds=_VIPS_HEADER_TIMEOUT_SECONDS,
+        )
+    if sniff_mime(preview) != "image/png":
+        raise SightglassError(ErrorCode.RESOURCE_DECODE_FAILED)
+    return preview, _vips_inspect_image(preview)
+
+_SIPS_BACKEND = _SipsImageBackend()
+_VIPS_BACKEND = _VipsImageBackend()
+
+def _image_backend() -> _ImageBackend:
+    """Select one probed image backend for this platform, or fail closed."""
+
+    if sys.platform == "darwin":
+        return _SIPS_BACKEND
+    if _vips_available():
+        return _VIPS_BACKEND
+    raise SightglassError(
+        ErrorCode.RESOURCE_UNAVAILABLE,
+        details={"reason": "image_backend_unavailable"},
+    )
+
+def _vips_available() -> bool:
+    return shutil.which("vipsheader") is not None and shutil.which("vipsthumbnail") is not None
+
+def image_preview_processor_version() -> str:
+    """The recipe version a generated image preview is attributed to on this platform.
+
+    It changes when the platform backend changes (macOS ``sips`` versus Linux
+    ``libvips``), so a cached
+    preview produced by one backend is never served as another backend's provenance.
+    Content-free: it names only the backend, never a path or a version string.
+    """
+
+    if sys.platform == "darwin":
+        return "sips-v1"
+    return "vips-v2" if _vips_available() else "vips-unavailable"
 
 def _pdf_has_encrypt_marker(data: bytes) -> bool:
     trailer = data.rfind(b"trailer")

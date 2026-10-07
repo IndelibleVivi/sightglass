@@ -27,6 +27,7 @@ from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.model.db import WindowDB
 from sightglass.policy.readers import ReaderPolicy
 from sightglass.resources.jobs import ResourceJobService
+from sightglass.resources.processors import processor_status
 from sightglass.resources.rich import XLSX_MIME, ZIP_MIME
 from sightglass.runtime.control import cleanup_cache
 from sightglass.runtime.lanes import LaneLimits, RuntimeLanes, WorkClass
@@ -391,16 +392,17 @@ class M3ResourceTests(unittest.TestCase):
 
     def test_list_resources_is_message_bound_and_policy_checked(self) -> None:
         status = self.tools.wechat_status("capabilities")
-        self.assertEqual(
-            status["resource_processors"],
-            {
-                "sips": True,
-                "pdfinfo": True,
-                "pdftotext": True,
-                "pdftoppm": True,
-                "ffmpeg": True,
-            },
-        )
+        processors = status["resource_processors"]
+        self.assertEqual(processors, processor_status())
+        self.assertEqual(set(processors), {
+            "sips", "pdfinfo", "pdftotext", "pdftoppm", "ffmpeg", "vipsheader", "vipsthumbnail",
+        })
+        for key in ("pdfinfo", "pdftotext", "pdftoppm", "ffmpeg"):
+            self.assertTrue(processors[key], key)
+        self.assertIn("vipsheader", processors)
+        self.assertIn("vipsthumbnail", processors)
+        self.assertIsInstance(processors["vipsheader"], bool)
+        self.assertIsInstance(processors["vipsthumbnail"], bool)
         resource = self._resource(self.image_message)
         self.assertEqual(resource["source_message_id"], self.image_message["message_id"])
         self.assertEqual(resource["availability"], "local_available")

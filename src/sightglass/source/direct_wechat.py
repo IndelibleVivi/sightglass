@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
 
+from sightglass.contracts.capture import CaptureRequest, ResourceCaptureBinding
 from sightglass.contracts.common import SourceSortKey, to_utc_iso, utc_now, validate_timezone
 from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.contracts.identity import (
@@ -790,6 +791,9 @@ class SyntheticSourceProvider:
         if scope.conversation_source_id is not None and conversation_source_id is not None:
             if scope.conversation_source_id != conversation_source_id:
                 raise SightglassError(ErrorCode.CONVERSATION_NOT_FOUND)
+        if scope.kind == "conversations" and conversation_source_id is not None:
+            if conversation_source_id not in scope.conversation_source_ids:
+                raise SightglassError(ErrorCode.CONVERSATION_NOT_FOUND)
         if scope.kind == "message":
             if source_message_id is None or scope.source_message_id != source_message_id:
                 raise SightglassError(ErrorCode.MESSAGE_NOT_FOUND)
@@ -820,6 +824,43 @@ class SyntheticSourceProvider:
     def list_accounts(self, snapshot: SourceSnapshot) -> list[SourceAccount]:
         state = self._assert_snapshot(snapshot)
         return [self._account(state.manifest)]
+
+    def get_conversation(
+        self,
+        account_id: str,
+        conversation_source_id: str,
+        snapshot: SourceSnapshot,
+    ) -> SourceConversation | None:
+        state = self._assert_snapshot(snapshot)
+        self._require_account(account_id, state.manifest)
+        self._enforce_scope(
+            state,
+            account_id=account_id,
+            conversation_source_id=conversation_source_id,
+        )
+        with self._catalog(state) as connection:
+            row = connection.execute(
+                "SELECT kind, title, last_message_at_utc, roster_complete "
+                "FROM conversations WHERE source_conversation_id = ?",
+                (conversation_source_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            aliases = connection.execute(
+                "SELECT alias FROM conversation_aliases WHERE source_conversation_id = ?",
+                (conversation_source_id,),
+            ).fetchall()
+        return SourceConversation(
+            source_conversation_id=conversation_source_id,
+            kind=str(row["kind"]),
+            title=str(row["title"]),
+            aliases=tuple(str(alias["alias"]) for alias in aliases),
+            last_message_at_utc=(
+                to_utc_iso(str(row["last_message_at_utc"]))
+                if row["last_message_at_utc"] else None
+            ),
+            roster_complete=bool(row["roster_complete"]),
+        )
 
     def list_conversations(
         self, account_id: str, snapshot: SourceSnapshot
@@ -975,6 +1016,8 @@ class SyntheticSourceProvider:
     ) -> list[SourceParticipant]:
         state = self._assert_snapshot(snapshot)
         account = self._require_account(account_id, state.manifest)
+        self._enforce_scope(state, account_id=account_id,
+                            conversation_source_id=conversation_source_id)
         principals = self._principal_rows(state)
         with self._catalog(state) as connection:
             memberships = connection.execute(
@@ -1793,10 +1836,27 @@ class SyntheticSourceProvider:
         )
         account = self._require_account(account_id, state.manifest)
         matches: list[tuple[sqlite3.Row, str, str]] = []
-        for row, logical_key, generation_id in self._read_rows(state):
-            if str(row["source_message_id"]) != source_message_id:
-                continue
-            matches.append((row, logical_key, generation_id))
+        allowed = (
+            state.scope.conversation_source_ids if state.scope is not None
+            and state.scope.kind == "conversations" else
+            (state.scope.conversation_source_id,) if state.scope is not None
+            and state.scope.conversation_source_id is not None else ()
+        )
+        for logical_key, generation_id, path in state.shards:
+            check_operation_budget()
+            with self._connect_readonly(path) as connection:
+                if allowed:
+                    placeholders = ",".join("?" for _ in allowed)
+                    selected = connection.execute(
+                        "SELECT * FROM messages WHERE source_message_id=? "
+                        f"AND source_conversation_id IN ({placeholders})",
+                        (source_message_id, *allowed),
+                    ).fetchall()
+                else:
+                    selected = connection.execute(
+                        "SELECT * FROM messages WHERE source_message_id=?", (source_message_id,),
+                    ).fetchall()
+            matches.extend((row, logical_key, generation_id) for row in selected)
         if not matches:
             self._assert_snapshot(snapshot)
             return None
@@ -1809,12 +1869,59 @@ class SyntheticSourceProvider:
             matches,
             key=lambda item: (item[1], int(item[0]["source_rowid"]), item[2]),
         )
+        self._enforce_scope(
+            state, account_id=account_id, source_message_id=source_message_id,
+            conversation_source_id=str(row["source_conversation_id"]),
+        )
         kind = self._conversation_kind(state, str(row["source_conversation_id"]))
         found = self._row_to_message(
             row, logical_key, generation_id, conversation_kind=kind, account=account
         )
         self._assert_snapshot(snapshot)
         return found
+
+    def capture_resource_binding(
+        self, request: CaptureRequest, snapshot: SourceSnapshot,
+    ) -> ResourceCaptureBinding:
+        """Prove a fixture's exact resource metadata binding in this one session.
+
+        This reads only ID/resource descriptor columns from the private copied
+        fixture. It does not hydrate/parse the message or open another snapshot.
+        """
+        from sightglass.contracts.capture import CaptureProtocolError
+        from sightglass.source.capture.resource import request_resource_binding
+
+        state = self._assert_snapshot(snapshot)
+        self._require_account(request.account_id, state.manifest)
+        self._enforce_scope(state, source_resource_key=request.resource_key)
+        binding = request_resource_binding(request)
+        descriptors = []
+        for _logical, _generation, path in state.shards:
+            with self._connect_readonly(path) as connection:
+                rows = connection.execute(
+                    "SELECT source_conversation_id, resources_json FROM messages "
+                    "WHERE source_message_id = ?",
+                    (binding.source_message_id,),
+                ).fetchall()
+            for row in rows:
+                if str(row["source_conversation_id"]) != binding.conversation_source_id:
+                    raise CaptureProtocolError("resource_locator_scope_mismatch")
+                try:
+                    resources = json.loads(str(row["resources_json"] or "[]"))
+                except json.JSONDecodeError as exc:
+                    raise CaptureProtocolError("resource_locator_invalid") from exc
+                descriptors.extend(
+                    item for item in resources
+                    if item.get("source_resource_key") == binding.source_resource_key
+                )
+        descriptor = request.resource_descriptor
+        if not descriptors or descriptor is None or any(
+            any(item.get(name) != getattr(descriptor, name) for name in (
+                "kind", "mime_type", "original_name", "declared_size", "declared_hash",
+            )) for item in descriptors
+        ):
+            raise CaptureProtocolError("resource_locator_scope_mismatch")
+        return binding
 
     def read_resource(
         self,

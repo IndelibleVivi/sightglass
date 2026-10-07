@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 import zstandard
 
+from sightglass.contracts.capture import CaptureRequest, ResourceCaptureBinding
 from sightglass.contracts.common import SourceSortKey, parse_aware_datetime, utc_now
 from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.contracts.identity import (
@@ -208,6 +209,15 @@ class _SnapshotState:
     scoped_identities: dict[str, _FileIdentity] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _ContactCatalog:
+    """Contact metadata and the exact native view that produced it."""
+
+    contacts: dict[str, tuple[str, str]]
+    identity: tuple[Any, ...]
+    revision: tuple[Any, ...]
+
+
 @dataclass
 class _MessageShardCatalog:
     """Generation-bound structural facts read from one native message shard."""
@@ -215,7 +225,18 @@ class _MessageShardCatalog:
     message_tables: frozenset[str]
     has_name2id: bool
     name2id_source_ids: frozenset[str]
+    identity: tuple[Any, ...]
+    revision: tuple[Any, ...]
     columns_by_table: dict[str, frozenset[str]] = field(default_factory=dict)
+
+
+@dataclass
+class _NegativeMessageRouting:
+    """Target tables proved absent without selecting this shard's message bodies."""
+
+    identity: tuple[Any, ...]
+    revision: tuple[Any, ...]
+    tables: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -254,6 +275,8 @@ class _ScopedSession:
     revisions: dict[str, tuple[Any, ...]] = field(default_factory=dict)
     # absolute path -> (device, inode, size, mtime_ns) captured when the file was read.
     files: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
+    message_candidates: tuple[str, ...] | None = None
+    negative_message_routing: dict[str, _NegativeMessageRouting] = field(default_factory=dict)
 
     def open(self) -> None:
         warnings = self.provider._binding_warnings()
@@ -293,9 +316,49 @@ class _ScopedSession:
             int(metadata.st_mtime_ns),
         )
 
+    def candidate_message_relatives(self) -> tuple[str, ...]:
+        relatives = self.provider._message_relatives()
+        for relative in relatives:
+            if not self.provider._keys.get(relative, {}).get("enc_key"):
+                raise SightglassError(
+                    ErrorCode.SOURCE_INCOMPLETE,
+                    retryable=True,
+                    details={"warning_codes": ["source_key_missing_or_invalid"]},
+                )
+        if self.message_candidates is None:
+            self.message_candidates = relatives
+        elif relatives != self.message_candidates:
+            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        return relatives
+
+    def record_negative_message_table(
+        self, relative: str, table: str, catalog: _MessageShardCatalog
+    ) -> None:
+        dependency = self.negative_message_routing.get(relative)
+        tables = {table} | (dependency.tables if dependency is not None else set())
+        revision = self.provider._dependency_revision(relative)
+        identity = self.provider._connection_identity(relative, auxiliary=False)[0]
+        if identity != catalog.identity or (
+            dependency is not None and identity != dependency.identity
+        ):
+            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        if revision != catalog.revision or (
+            dependency is not None and revision != dependency.revision
+        ):
+            identity, revision = self.provider._recheck_negative_message_tables(relative, tables)
+            if identity != catalog.identity:
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        if self.provider._dependency_revision(relative) != revision:
+            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        self.negative_message_routing[relative] = _NegativeMessageRouting(
+            identity, revision, tables
+        )
+
     def validate(self) -> None:
         if self.provider._binding_warnings():
             raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        if self.message_candidates is not None:
+            self.candidate_message_relatives()
         for relative, captured in sorted(self.identities.items()):
             try:
                 current = self.provider._connection_identity(
@@ -307,6 +370,30 @@ class _ScopedSession:
                 raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
             if self.provider._dependency_revision(relative) != self.revisions.get(relative):
                 raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        routing_revisions: dict[str, tuple[Any, ...]] = {}
+        for relative, dependency in sorted(self.negative_message_routing.items()):
+            check_operation_budget()
+            if relative in self.identities:
+                # Its pinned view already has the stricter selected-database fence.
+                continue
+            try:
+                identity = self.provider._connection_identity(relative, auxiliary=False)[0]
+                revision = self.provider._dependency_revision(relative)
+                if identity != dependency.identity:
+                    raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+                if revision != dependency.revision:
+                    identity, revision = self.provider._recheck_negative_message_tables(
+                        relative, dependency.tables
+                    )
+                    if identity != dependency.identity:
+                        raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+            except SightglassError as exc:
+                if exc.code == ErrorCode.SOURCE_INCOMPLETE:
+                    raise SightglassError(
+                        ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True
+                    ) from exc
+                raise
+            routing_revisions[relative] = revision
         for path, captured_identity in self.files.items():
             try:
                 metadata = os.lstat(path)
@@ -320,6 +407,11 @@ class _ScopedSession:
             )
             if current_identity != captured_identity:
                 raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        for relative, revision in routing_revisions.items():
+            if self.provider._dependency_revision(relative) != revision:
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        if self.message_candidates is not None:
+            self.candidate_message_relatives()
 
     def close(self) -> None:
         for connection in self.connections.values():
@@ -357,7 +449,7 @@ class MacOSWeChatSourceProvider:
         self._snapshots: dict[str, _SnapshotState] = {}
         self._message_shard_catalogs: dict[tuple[str, str, str], _MessageShardCatalog] = {}
         self._message_shard_catalog_builds: dict[tuple[str, str, str], threading.Event] = {}
-        self._contacts_by_generation: dict[tuple[str, str, str], dict[str, tuple[str, str]]] = {}
+        self._contacts_by_generation: dict[tuple[str, str, str], _ContactCatalog] = {}
         self._message_shard_catalog_lock = threading.RLock()
         self._connection_cache: dict[
             tuple[str, int, int, str, str], _CachedSQLCipherConnection
@@ -643,6 +735,9 @@ class MacOSWeChatSourceProvider:
         if conversation_source_id is not None and scope.conversation_source_id is not None:
             if conversation_source_id != scope.conversation_source_id:
                 raise SightglassError(ErrorCode.CONVERSATION_NOT_FOUND)
+        if scope.kind == "conversations" and conversation_source_id is not None:
+            if conversation_source_id not in scope.conversation_source_ids:
+                raise SightglassError(ErrorCode.CONVERSATION_NOT_FOUND)
         if scope.kind == "message":
             if source_message_id is None or scope.source_message_id != source_message_id:
                 raise SightglassError(ErrorCode.MESSAGE_NOT_FOUND)
@@ -692,20 +787,22 @@ class MacOSWeChatSourceProvider:
 
     @staticmethod
     def _scope_fingerprint(scope: SourceScope) -> str:
+        evidence = {
+            "schema": "sightglass.macos-wechat.scope.v1",
+            "kind": scope.kind,
+            "account_id": scope.account_id,
+            "conversation_source_id": scope.conversation_source_id,
+            "source_message_id": scope.source_message_id,
+            "source_resource_key_digest": (
+                hashlib.sha256(scope.source_resource_key.encode()).hexdigest()
+                if scope.source_resource_key else None
+            ),
+        }
+        if scope.kind == "conversations":
+            evidence["conversation_source_ids"] = scope.conversation_source_ids
         return hashlib.sha256(
             json.dumps(
-                {
-                    "schema": "sightglass.macos-wechat.scope.v1",
-                    "kind": scope.kind,
-                    "account_id": scope.account_id,
-                    "conversation_source_id": scope.conversation_source_id,
-                    "source_message_id": scope.source_message_id,
-                    "source_resource_key_digest": (
-                        hashlib.sha256(scope.source_resource_key.encode()).hexdigest()
-                        if scope.source_resource_key
-                        else None
-                    ),
-                },
+                evidence,
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode()
@@ -1243,6 +1340,44 @@ class MacOSWeChatSourceProvider:
         if session is not None:
             session.record_file(path, metadata)
 
+    def _recheck_negative_message_tables(
+        self, relative: str, tables: set[str]
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+        """Recheck changed routing facts in a new read-only view, outside caches.
+
+        This handle does not select message bodies or contribute a cursor logical
+        generation. Unrelated WAL commits may leave all declared target tables
+        absent, but a table appearance or a mutation while checking fails closed.
+        """
+
+        connection, identity, revision = self._open_scoped_connection(relative, auxiliary=False)
+        sqlite: Any = importlib.import_module("sqlcipher3.dbapi2")
+        try:
+            for table in sorted(tables):
+                check_operation_budget()
+                if connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                ).fetchone() is not None:
+                    raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+            if (
+                self._dependency_revision(relative) != revision
+                or self._connection_identity(relative, auxiliary=False)[0] != identity
+            ):
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+            return identity, revision
+        except sqlite.DatabaseError as exc:
+            check_operation_budget()
+            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True) from exc
+        finally:
+            try:
+                connection.execute("ROLLBACK")
+            finally:
+                try:
+                    connection.close()
+                finally:
+                    with self._connection_cache_lock:
+                        self._scoped_connection_count -= 1
+
     def _require_account(self, account_id: str) -> SourceAccount:
         account = SourceAccount(
             source_namespace="macos-wechat",
@@ -1264,24 +1399,47 @@ class MacOSWeChatSourceProvider:
     def _contacts(self, state: _SnapshotState) -> dict[str, tuple[str, str]]:
         if state.contacts is not None:
             return state.contacts
-        cache_key = self._message_shard_catalog_key(state, "contact/contact.db")
+        relative = "contact/contact.db"
+        # A cache hit still consumes this database's metadata. Pin and record its
+        # current session view before comparing cache provenance, so a cached
+        # contact/WAL correction cannot evade exit validation.
+        with self._connect(relative) as connection:
+            identity = self._connection_identity(relative, auxiliary=False)[0]
+            revision = self._dependency_revision(relative)
+            session = _ACTIVE_SCOPED_SESSION.get()
+            if session is not None and (
+                session.identities.get(relative) != identity
+                or session.revisions.get(relative) != revision
+            ):
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+            cache_key = self._message_shard_catalog_key(state, relative)
+            with self._message_shard_catalog_lock:
+                cached = self._contacts_by_generation.get(cache_key)
+            if cached is not None and (
+                cached.identity == identity and cached.revision == revision
+            ):
+                catalog = cached
+            else:
+                rows = connection.execute(
+                    "SELECT username, nick_name, remark FROM contact"
+                ).fetchall()
+                contacts = {
+                    str(row["username"]): (str(row["nick_name"] or ""), str(row["remark"] or ""))
+                    for row in rows
+                    if row["username"]
+                }
+                catalog = _ContactCatalog(contacts, identity, revision)
+            if (
+                self._dependency_revision(relative) != revision
+                or self._connection_identity(relative, auxiliary=False)[0] != identity
+            ):
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
         with self._message_shard_catalog_lock:
-            cached = self._contacts_by_generation.get(cache_key)
-        if cached is not None:
-            state.contacts = cached
-            return cached
-        with self._connect("contact/contact.db") as connection:
-            rows = connection.execute("SELECT username, nick_name, remark FROM contact").fetchall()
-        contacts = {
-            str(row["username"]): (str(row["nick_name"] or ""), str(row["remark"] or ""))
-            for row in rows
-            if row["username"]
-        }
-        with self._message_shard_catalog_lock:
-            contacts = self._contacts_by_generation.setdefault(cache_key, contacts)
-            self._contacts_by_generation = {cache_key: contacts}
-        state.contacts = contacts
-        return contacts
+            # An older in-flight cache entry must never win over newly read facts
+            # merely because both lookups used the same pre-open generation key.
+            self._contacts_by_generation = {cache_key: catalog}
+        state.contacts = catalog.contacts
+        return catalog.contacts
 
     def _message_shard_catalog_key(
         self, state: _SnapshotState, relative: str
@@ -1334,6 +1492,8 @@ class MacOSWeChatSourceProvider:
             wait_for_event(build)
 
         try:
+            revision = self._dependency_revision(relative)
+            identity = self._connection_identity(relative, auxiliary=False)[0]
             with self._connect(relative) as connection:
                 message_tables = frozenset(
                     str(row[0])
@@ -1356,10 +1516,19 @@ class MacOSWeChatSourceProvider:
                     if has_name2id is not None
                     else frozenset()
                 )
+            session = _ACTIVE_SCOPED_SESSION.get()
+            if (
+                self._dependency_revision(relative) != revision
+                or self._connection_identity(relative, auxiliary=False)[0] != identity
+                or (session is not None and session.revisions.get(relative) != revision)
+            ):
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
             catalog = _MessageShardCatalog(
                 message_tables=message_tables,
                 has_name2id=has_name2id is not None,
                 name2id_source_ids=name2id_source_ids,
+                identity=identity,
+                revision=revision,
             )
         except BaseException:
             with self._message_shard_catalog_lock:
@@ -1584,6 +1753,22 @@ class MacOSWeChatSourceProvider:
         state.known_conversations[conversation_source_id] = result
         return result
 
+    def get_conversation(
+        self,
+        account_id: str,
+        conversation_source_id: str,
+        snapshot: SourceSnapshot,
+    ) -> SourceConversation | None:
+        """Resolve one target without opening unrelated conversation shards."""
+        state = self._assert_snapshot(snapshot)
+        self._require_account(account_id)
+        self._enforce_scope(
+            state,
+            account_id=account_id,
+            conversation_source_id=conversation_source_id,
+        )
+        return self._conversation(state, conversation_source_id)
+
     def list_conversations(
         self, account_id: str, snapshot: SourceSnapshot
     ) -> list[SourceConversation]:
@@ -1666,6 +1851,8 @@ class MacOSWeChatSourceProvider:
     ) -> list[SourceParticipant]:
         state = self._assert_snapshot(snapshot)
         account = self._require_account(account_id)
+        self._enforce_scope(state, account_id=account_id,
+                            conversation_source_id=conversation_source_id)
         conversation = self._conversation(state, conversation_source_id)
         if conversation is None:
             raise SightglassError(ErrorCode.CONVERSATION_NOT_FOUND)
@@ -1833,22 +2020,24 @@ class MacOSWeChatSourceProvider:
     def _message_relatives(self) -> tuple[str, ...]:
         """Every message shard this installation currently exposes.
 
-        A dependency-scoped session enumerates shard files without a global
-        inventory; each shard it actually opens is captured as a dependency and
-        re-validated at exit.
+        A dependency-scoped session fences this eligible membership separately
+        from selected body dependencies and negative target-table routing facts.
         """
 
-        values = {relative for relative in self._keys if _MESSAGE_DB.fullmatch(relative)}
-        try:
-            for path in (self.settings.source_root / "message").iterdir():
-                if _MESSAGE_DB.fullmatch(f"message/{path.name}"):
-                    values.add(f"message/{path.name}")
-        except OSError:
-            pass
-        return tuple(sorted(values))
+        values, warnings = self._expected_databases()
+        if warnings:
+            raise SightglassError(
+                ErrorCode.SOURCE_INCOMPLETE,
+                retryable=True,
+                details={"warning_codes": list(warnings)},
+            )
+        return tuple(relative for relative in values if _MESSAGE_DB.fullmatch(relative))
 
     def _candidate_message_relatives(self, state: _SnapshotState) -> tuple[str, ...]:
         if state.scope is not None:
+            session = _ACTIVE_SCOPED_SESSION.get()
+            if session is not None and session.state is state:
+                return session.candidate_message_relatives()
             return self._message_relatives()
         return tuple(
             sorted(value for value in state.generation_by_shard if _MESSAGE_DB.fullmatch(value))
@@ -1863,6 +2052,9 @@ class MacOSWeChatSourceProvider:
             check_operation_budget()
             catalog = self._message_shard_catalog(state, relative)
             if table not in catalog.message_tables:
+                session = _ACTIVE_SCOPED_SESSION.get()
+                if session is not None and session.state is state:
+                    session.record_negative_message_table(relative, table, catalog)
                 continue
             columns = self._message_table_columns(state, relative, table, catalog)
             if not _MESSAGE_COLUMNS.issubset(columns):
@@ -3229,6 +3421,30 @@ class MacOSWeChatSourceProvider:
                 details={"warning_codes": ["duplicate_message_identity_conflict"]},
             )
         return min(matches, key=lambda message: message.sort_key.as_tuple())
+
+    def capture_resource_binding(
+        self, request: CaptureRequest, snapshot: SourceSnapshot,
+    ) -> ResourceCaptureBinding:
+        """Authenticate the exact opaque locator without hydrating its message."""
+        from sightglass.contracts.capture import CaptureProtocolError
+        from sightglass.source.capture.resource import request_resource_binding
+
+        state = self._assert_snapshot(snapshot)
+        self._require_account(request.account_id)
+        self._enforce_scope(state, source_resource_key=request.resource_key)
+        binding = request_resource_binding(request)
+        locator = self._resource_resolver._decode_locator(request.resource_key or "")
+        descriptor = request.resource_descriptor
+        if descriptor is None or (
+            locator.source_message_id != binding.source_message_id
+            or locator.conversation_source_id != binding.conversation_source_id
+            or locator.kind != descriptor.kind
+            or locator.declared_size != descriptor.declared_size
+            or locator.declared_hash != descriptor.declared_hash
+            or locator.original_name != descriptor.original_name
+        ):
+            raise CaptureProtocolError("resource_locator_scope_mismatch")
+        return binding
 
     def read_resource(
         self,
