@@ -1,0 +1,1772 @@
+{
+  "schema": "sightglass.synthetic-cloudflare-semantic.v1",
+  "recipe": "sg-synthetic-cf-v1",
+  "data": "generated synthetic only",
+  "dimensions": 1024,
+  "production_semantic_lane": "disabled",
+  "profiles": {
+    "bge-m3": {
+      "baseline8/message": {
+        "cases_count": 8,
+        "units": 32,
+        "model": "@cf/baai/bge-m3",
+        "document_embedding_seconds": 3.143,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 228.96,
+        "exact_local_cosine_ms_per_case": 1.82,
+        "raw_float32_vector_bytes": 131072,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 835.692,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "baseline8/local_window": {
+        "cases_count": 8,
+        "units": 24,
+        "model": "@cf/baai/bge-m3",
+        "document_embedding_seconds": 3.029,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 228.96,
+        "exact_local_cosine_ms_per_case": 1.365,
+        "raw_float32_vector_bytes": 98304,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 962.552,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "baseline8/topology_context": {
+        "cases_count": 8,
+        "units": 8,
+        "model": "@cf/baai/bge-m3",
+        "document_embedding_seconds": 0.8783,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 228.96,
+        "exact_local_cosine_ms_per_case": 0.455,
+        "raw_float32_vector_bytes": 32768,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 796.564,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/message": {
+        "cases_count": 4,
+        "units": 21,
+        "model": "@cf/baai/bge-m3",
+        "document_embedding_seconds": 2.3847,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 362.104,
+        "exact_local_cosine_ms_per_case": 1.174,
+        "raw_float32_vector_bytes": 86016,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 11
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 11,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 934.232,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/local_window": {
+        "cases_count": 4,
+        "units": 21,
+        "model": "@cf/baai/bge-m3",
+        "document_embedding_seconds": 2.8534,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 362.104,
+        "exact_local_cosine_ms_per_case": 1.186,
+        "raw_float32_vector_bytes": 86016,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 9
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 9,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 927.015,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/topology_context": {
+        "cases_count": 4,
+        "units": 14,
+        "model": "@cf/baai/bge-m3",
+        "document_embedding_seconds": 1.2619,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 362.104,
+        "exact_local_cosine_ms_per_case": 0.792,
+        "raw_float32_vector_bytes": 57344,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 5
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 5,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 1043.779,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/reply_context": {
+        "cases_count": 4,
+        "units": 4,
+        "model": "@cf/baai/bge-m3",
+        "document_embedding_seconds": 1.3252,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 362.104,
+        "exact_local_cosine_ms_per_case": 0.223,
+        "raw_float32_vector_bytes": 16384,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 1146.344,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      }
+    },
+    "qwen3": {
+      "baseline8/message": {
+        "cases_count": 8,
+        "units": 32,
+        "model": "@cf/qwen/qwen3-embedding-0.6b",
+        "document_embedding_seconds": 3.7298,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 200.29,
+        "exact_local_cosine_ms_per_case": 1.807,
+        "raw_float32_vector_bytes": 131072,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 765.972,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "baseline8/local_window": {
+        "cases_count": 8,
+        "units": 24,
+        "model": "@cf/qwen/qwen3-embedding-0.6b",
+        "document_embedding_seconds": 6.6817,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 200.29,
+        "exact_local_cosine_ms_per_case": 1.365,
+        "raw_float32_vector_bytes": 98304,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 745.264,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "baseline8/topology_context": {
+        "cases_count": 8,
+        "units": 8,
+        "model": "@cf/qwen/qwen3-embedding-0.6b",
+        "document_embedding_seconds": 3.9433,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 200.29,
+        "exact_local_cosine_ms_per_case": 0.453,
+        "raw_float32_vector_bytes": 32768,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "image",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 768.354,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/message": {
+        "cases_count": 4,
+        "units": 21,
+        "model": "@cf/qwen/qwen3-embedding-0.6b",
+        "document_embedding_seconds": 11.8581,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 348.288,
+        "exact_local_cosine_ms_per_case": 1.184,
+        "raw_float32_vector_bytes": 86016,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 11
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 11,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 824.226,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/local_window": {
+        "cases_count": 4,
+        "units": 21,
+        "model": "@cf/qwen/qwen3-embedding-0.6b",
+        "document_embedding_seconds": 6.7503,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 348.288,
+        "exact_local_cosine_ms_per_case": 1.18,
+        "raw_float32_vector_bytes": 86016,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 9
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.667,
+            "false_merge": true,
+            "boundary_loss": 1,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 9,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 747.905,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/topology_context": {
+        "cases_count": 4,
+        "units": 14,
+        "model": "@cf/qwen/qwen3-embedding-0.6b",
+        "document_embedding_seconds": 5.0824,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 348.288,
+        "exact_local_cosine_ms_per_case": 0.812,
+        "raw_float32_vector_bytes": 57344,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 6
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.5,
+            "false_merge": true,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 6,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 899.26,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      },
+      "hard4/reply_context": {
+        "cases_count": 4,
+        "units": 4,
+        "model": "@cf/qwen/qwen3-embedding-0.6b",
+        "document_embedding_seconds": 2.7643,
+        "document_cache_used": true,
+        "query_cache_used": true,
+        "query_embedding_ms_per_case_amortized": 348.288,
+        "exact_local_cosine_ms_per_case": 0.227,
+        "raw_float32_vector_bytes": 16384,
+        "remote_physical_bytes": null,
+        "exact_cosine_recall_at_5": 1,
+        "exact_cosine_first_page_correct": 1,
+        "exact_cosine_cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0
+          }
+        ],
+        "vectorize_state": "query_verified",
+        "cases": [
+          {
+            "case": "parallel_rail",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "parallel_vectors",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "long_debate",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          },
+          {
+            "case": "mixed_alias",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 0,
+            "ann_top5_set_matches_exact": true,
+            "manifest_recovery": true
+          }
+        ],
+        "vectorize_query_ms_median": 749.34,
+        "recall_at_5": 1,
+        "first_page_correct": 1
+      }
+    }
+  },
+  "topology_context_meaning": "30-second same-conversation temporal proxy (Apple baseline)",
+  "reply_context_meaning": "explicit synthetic reply family (hard suite only)",
+  "timing": "client wall time; embedding, publication/readback and query are separate",
+  "vector_rows": 248,
+  "vectorize_publication": {
+    "state": "full_readback_verified",
+    "visible_rows": 248,
+    "expected_rows": 248,
+    "seconds": 17.9516,
+    "readback_only": true
+  }
+}

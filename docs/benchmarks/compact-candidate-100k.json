@@ -1,0 +1,25 @@
+{
+  "schema": "sightglass.compact-benchmark.v2",
+  "generated_messages": 100000,
+  "admitted_group_messages": 100007,
+  "fixture_floor_reached": true,
+  "strict_id_parity": true,
+  "match_counts": {
+    "needle alpha": 20000,
+    "haystack beta": 80000,
+    "correction needle": 0
+  },
+  "episode_churn": "A-B-A",
+  "fts_churn_rows": 1000,
+  "fts_merge": true,
+  "source_bytes": 527396864,
+  "candidate_bytes": 490516480,
+  "recovery_bytes": 59571909,
+  "peak_workspace_bytes": 1098493952,
+  "peak_candidate_wal_bytes": 5908112,
+  "peak_process_rss_bytes": 284655616,
+  "elapsed_seconds": 896.202,
+  "verified": true,
+  "account_access": false,
+  "network_access": false
+}

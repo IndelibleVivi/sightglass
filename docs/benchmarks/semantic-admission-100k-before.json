@@ -1,0 +1,22 @@
+{
+  "schema": "sightglass.synthetic-semantic-admission.v1",
+  "synthetic_only": true,
+  "network_calls": 0,
+  "embedding_or_ann_quality_measurement": false,
+  "model_geometry": "@cf/baai/bge-m3",
+  "seeded_manifest_rows": 100000,
+  "canonical_rows": 100057,
+  "direct_fixture_seed_seconds": 9.7387,
+  "sidecar_database_bytes": 503975936,
+  "ann_double_matches": 20,
+  "canonical_admitted": 17,
+  "rejected_current_input_state_epoch": 3,
+  "query_probes": 25,
+  "query_admission_median_ms": 6.4608,
+  "reader_default_page_ms": 31271.8627,
+  "reader_contexts": 10,
+  "reader_focus_messages": 10,
+  "canonical_ids_only": true,
+  "reader_state_unchanged": true,
+  "scope": "direct-seeded local manifest + canonical query/reader; no ingestion/publication/cloud ANN"
+}

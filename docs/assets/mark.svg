@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" lang="en" fill="none" role="img" aria-labelledby="sg-title sg-desc" shape-rendering="geometricPrecision">
+  <title id="sg-title">Sightglass</title>
+  <desc id="sg-desc">Two pearl-glass leaves form a narrow open aperture.</desc>
+  <defs>
+    <linearGradient id="sg-pearl-left" x1="12" y1="14" x2="64" y2="114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF8"/>
+      <stop offset=".55" stop-color="#F6F2EA"/>
+      <stop offset="1" stop-color="#E9E3D9"/>
+    </linearGradient>
+    <linearGradient id="sg-pearl-right" x1="65" y1="13" x2="116" y2="114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFC"/>
+      <stop offset=".57" stop-color="#F7F3EC"/>
+      <stop offset="1" stop-color="#ECE6DC"/>
+    </linearGradient>
+    <linearGradient id="sg-blue-cut" x1="53" y1="18" x2="63" y2="110" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EFF8F9"/>
+      <stop offset=".5" stop-color="#C3DAE3"/>
+      <stop offset="1" stop-color="#8FA8B7"/>
+    </linearGradient>
+    <linearGradient id="sg-silver-cut" x1="65" y1="17" x2="75" y2="111" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset=".53" stop-color="#E4EAED"/>
+      <stop offset="1" stop-color="#B7C3CA"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M24.6 20.7 62.3 18.3C61.5 30.7 58.4 40.3 54.8 48.9 50.7 58.7 50.8 67.8 55.3 77.5 59.4 86.3 62.6 97 63 109.1L25.9 110.3C18.5 110.8 13.6 105.6 13.6 98.1V33C13.6 25.6 17.5 21.3 24.6 20.7Z" fill="url(#sg-pearl-left)" stroke="#172334" stroke-width="2.15" stroke-linejoin="round"/>
+  <path d="M65.8 17.2 102.2 19.7C109.8 20.3 114.4 25.5 114.4 33V96C114.4 103.6 109.4 108.5 101.9 109.1L65.4 111.2C66.8 99.6 69.6 89.3 72.5 80.6 76 70 75.4 60.7 70.9 51.6 67 43.6 64.7 32.5 65.8 17.2Z" fill="url(#sg-pearl-right)" stroke="#172334" stroke-width="2.15" stroke-linejoin="round"/>
+
+  <path d="M60.4 20.2C59.5 30.6 56.8 40.1 53.3 48.7 49 59 49.2 68.4 53.9 78.3 57.8 86.8 60.9 97.2 61.2 107.7L64 107.6C63.7 96.8 60.3 85.8 56.2 76.9 52 68 51.8 59.5 55.6 50.1 59.2 41.2 62 30.9 62.7 19.9Z" fill="url(#sg-blue-cut)"/>
+  <path d="M67.5 19.1C66.7 32.3 68.8 42.4 72.4 50.5 76.9 60.4 77.5 70.1 74 81 71.3 89.6 68.7 99 67.1 109.1L64.2 109.3C65.8 98.4 68.7 88.4 71.5 79.6 74.7 69.8 74.1 61.2 70.1 52.2 66.4 43.8 64.6 33.1 65.5 19Z" fill="url(#sg-silver-cut)" opacity=".94"/>
+
+  <path d="M25.8 23.7 56.8 21.6" stroke="#FFFFFF" stroke-width="1.05" stroke-linecap="round" opacity=".84"/>
+  <path d="M70.3 20.8 101.7 22.7" stroke="#FFFFFF" stroke-width="1.05" stroke-linecap="round" opacity=".8"/>
+  <path d="M16.9 35.1V96.5C16.9 102.4 20.5 106.4 26.3 106.1L57.5 105.1" stroke="#A8B6C0" stroke-width=".75" stroke-linecap="round" opacity=".28"/>
+  <path d="M111.2 35.3V95.7C111.2 101.4 107.5 105.4 101.7 105.8L70.8 107.6" stroke="#98A8B4" stroke-width=".75" stroke-linecap="round" opacity=".25"/>
+</svg>

@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1540" viewBox="0 0 1200 1540" role="img" aria-labelledby="title desc" lang="en">
+<title id="title">Inside Sightglass</title>
+<desc id="desc">A local MCP bridge uses reader credentials to call the daemon's authenticated Unix socket. The daemon checks conversation policy and validates source evidence before admission. A read-only source provider connects the source to reader and resource services. Residency controls source-body lifetime independently of access policy; projection and lease state share window.db. Pending payloads replay until ACK. Resource discovery, acquisition and durable derivation use a private content-addressed store, with optional local speech transcription and fenced commits. Keychain lookups are listed separately; the Mermaid model carries every internal edge. Link/context retrieval reads scoped canonical rows and rebuildable link/lexical indexes; an independent bounded worker publishes fenced batches. The optional semantic service keeps an encoded/queued/verified sidecar. Explicitly authorized text/query egress reaches Cloudflare BGE-M3 and Vectorize; returned candidates are re-admitted locally.</desc>
+<style>
+.title{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:46px;font-weight:300;fill:#172334;letter-spacing:-1px}
+.head{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:25px;font-weight:500;fill:#172334}
+.body{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:20px;font-weight:400;fill:#344859}
+.note{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:17px;font-weight:400;fill:#526573}
+.eyebrow{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:16px;letter-spacing:1.5px;fill:#526573}
+.route{fill:none;stroke:#526573;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round}
+.optional{fill:none;stroke:#526573;stroke-width:1.8;stroke-dasharray:5 5;stroke-linejoin:round}
+</style>
+
+<defs>
+    <linearGradient id="sg-pearl-left" x1="12" y1="14" x2="64" y2="114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF8"/>
+      <stop offset=".55" stop-color="#F6F2EA"/>
+      <stop offset="1" stop-color="#E9E3D9"/>
+    </linearGradient>
+    <linearGradient id="sg-pearl-right" x1="65" y1="13" x2="116" y2="114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFC"/>
+      <stop offset=".57" stop-color="#F7F3EC"/>
+      <stop offset="1" stop-color="#ECE6DC"/>
+    </linearGradient>
+    <linearGradient id="sg-blue-cut" x1="53" y1="18" x2="63" y2="110" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EFF8F9"/>
+      <stop offset=".5" stop-color="#C3DAE3"/>
+      <stop offset="1" stop-color="#8FA8B7"/>
+    </linearGradient>
+    <linearGradient id="sg-silver-cut" x1="65" y1="17" x2="75" y2="111" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset=".53" stop-color="#E4EAED"/>
+      <stop offset="1" stop-color="#B7C3CA"/>
+    </linearGradient>
+  </defs>
+<rect width="1200" height="1540" fill="#FFFDF8"/>
+<g id="header" data-readability-background="#FFFDF8">
+<text x="64" y="65" class="eyebrow" data-readability="supporting">SIGHTGLASS / ARCHITECTURE</text>
+<text x="62" y="124" class="title" data-readability="critical">A private window. A clear boundary.</text>
+<text x="64" y="169" class="body">Source authority stays local. Clients receive policy-checked context.</text>
+<g fill="none" transform="translate(1030 40) scale(.8)">
+
+  <path d="M24.6 20.7 62.3 18.3C61.5 30.7 58.4 40.3 54.8 48.9 50.7 58.7 50.8 67.8 55.3 77.5 59.4 86.3 62.6 97 63 109.1L25.9 110.3C18.5 110.8 13.6 105.6 13.6 98.1V33C13.6 25.6 17.5 21.3 24.6 20.7Z" fill="url(#sg-pearl-left)" stroke="#172334" stroke-width="2.15" stroke-linejoin="round"/>
+  <path d="M65.8 17.2 102.2 19.7C109.8 20.3 114.4 25.5 114.4 33V96C114.4 103.6 109.4 108.5 101.9 109.1L65.4 111.2C66.8 99.6 69.6 89.3 72.5 80.6 76 70 75.4 60.7 70.9 51.6 67 43.6 64.7 32.5 65.8 17.2Z" fill="url(#sg-pearl-right)" stroke="#172334" stroke-width="2.15" stroke-linejoin="round"/>
+
+  <path d="M60.4 20.2C59.5 30.6 56.8 40.1 53.3 48.7 49 59 49.2 68.4 53.9 78.3 57.8 86.8 60.9 97.2 61.2 107.7L64 107.6C63.7 96.8 60.3 85.8 56.2 76.9 52 68 51.8 59.5 55.6 50.1 59.2 41.2 62 30.9 62.7 19.9Z" fill="url(#sg-blue-cut)"/>
+  <path d="M67.5 19.1C66.7 32.3 68.8 42.4 72.4 50.5 76.9 60.4 77.5 70.1 74 81 71.3 89.6 68.7 99 67.1 109.1L64.2 109.3C65.8 98.4 68.7 88.4 71.5 79.6 74.7 69.8 74.1 61.2 70.1 52.2 66.4 43.8 64.6 33.1 65.5 19Z" fill="url(#sg-silver-cut)" opacity=".94"/>
+
+  <path d="M25.8 23.7 56.8 21.6" stroke="#FFFFFF" stroke-width="1.05" stroke-linecap="round" opacity=".84"/>
+  <path d="M70.3 20.8 101.7 22.7" stroke="#FFFFFF" stroke-width="1.05" stroke-linecap="round" opacity=".8"/>
+  <path d="M16.9 35.1V96.5C16.9 102.4 20.5 106.4 26.3 106.1L57.5 105.1" stroke="#A8B6C0" stroke-width=".75" stroke-linecap="round" opacity=".28"/>
+  <path d="M111.2 35.3V95.7C111.2 101.4 107.5 105.4 101.7 105.8L70.8 107.6" stroke="#98A8B4" stroke-width=".75" stroke-linecap="round" opacity=".25"/>
+</g>
+<path d="M64 202H1136" stroke="#D9DEDE"/>
+</g>
+<g id="daemon-region"><rect x="396" y="385" width="756" height="594" rx="18" fill="#F6F2EA" stroke="#D9DEDE"/>
+<text x="428" y="416" class="eyebrow" data-readability="supporting">SIGHTGLASSD</text>
+</g>
+<g id="private-state-region"><path d="M64 1068H1136" stroke="#D9DEDE"/>
+<text x="64" y="1100" class="eyebrow" data-readability="supporting">DAEMON-OWNED LOCAL STATE</text>
+</g>
+<path d="M446 552H752C740 580 738 614 752 665H446Q428 665 428 647V570Q428 552 446 552Z" fill="#FFFDF8" stroke="#D9DEDE"/>
+<path d="M826 552H1104Q1122 552 1122 570V647Q1122 665 1104 665H826C839 626 839 591 826 552Z" fill="#FFFDF8" stroke="#D9DEDE"/>
+<path d="M752 556C741 585 741 623 752 661" stroke="#C3DAE3" fill="none" stroke-width="3"/>
+<path d="M826 556C837 590 837 626 826 661" stroke="#D8E2E6" fill="none" stroke-width="3"/>
+<g id="routes">
+<path class="route" d="M744 650V867H590V875"/>
+<path class="route" d="M590 966V1130"/>
+<path class="route" d="M586 973L590 966L594 973"/>
+<path class="route" d="M1118 966V1095H744V1130"/>
+<path class="route" d="M740 1123L744 1130L748 1123"/>
+<path class="route" d="M1114 973L1118 966L1122 973"/>
+<path class="route" d="M321 274H428"/>
+<path class="route" d="M421 270L428 274L421 278"/>
+<path class="route" d="M591 321V440"/>
+<path class="route" d="M587 433L591 440L595 433"/>
+<path class="route" d="M1000 321V440"/>
+<path class="route" d="M996 433L1000 440L1004 433"/>
+<path class="route" d="M590 516V552"/>
+<path class="route" d="M586 545L590 552L594 545"/>
+<path class="route" d="M586 523L590 516L594 523"/>
+<path class="route" d="M752 609H826"/>
+<path class="route" d="M819 605L826 609L819 613"/>
+<path class="route" d="M325 767H363Q371 753 379 767H428"/>
+<path class="route" d="M421 763L428 767L421 771"/>
+<path class="route" d="M332 763L325 767L332 771"/>
+<path class="route" d="M590 715V665"/>
+<path class="route" d="M586 672L590 665L594 672"/>
+<path class="route" d="M752 771H790V641H826"/>
+<path class="route" d="M819 637L826 641L819 645"/>
+<path class="optional" d="M1000 665V715"/>
+<path class="route" d="M996 708L1000 715L1004 708"/>
+<path class="route" d="M428 640H371V1168H324"/>
+<path class="route" d="M331 1164L324 1168L331 1172"/>
+<path class="route" d="M421 636L428 640L421 644"/>
+<path class="route" d="M705 665V681H769V1022H590V1130"/>
+<path class="route" d="M586 1123L590 1130L594 1123"/>
+<path class="route" d="M701 672L705 665L709 672"/>
+<path class="route" d="M1000 840H1130V1026H814V1108H706V1130"/>
+<path class="route" d="M702 1123L706 1130L710 1123"/>
+<path class="route" d="M1122 608H1140V1041H1000V1130"/>
+<path class="route" d="M996 1123L1000 1130L1004 1123"/>
+<path class="route" d="M1129 604L1122 608L1129 612"/>
+</g>
+<g id="CLIENT" data-readability-background="#FFFDF8">
+<text x="64" y="266" class="head" data-readability="critical">MCP client</text>
+<text x="64" y="298" class="body">Requested context only</text>
+</g>
+<g id="BRIDGE" data-readability-background="#FFFDF8">
+<text x="444" y="266" class="head" data-readability="critical">Local stdio bridge</text>
+<text x="444" y="298" class="body">13 tools · reader credential</text>
+</g>
+<g id="OPERATOR" data-readability-background="#FFFDF8">
+<text x="880" y="266" class="head" data-readability="critical">sightglassctl</text>
+<text x="880" y="298" class="body">Operator credential</text>
+</g>
+<path d="M64 324H324M444 324H752M880 324H1136" stroke="#D9DEDE"/>
+<g id="KC" data-readability-background="#FFFDF8">
+<text x="64" y="432" class="head" data-readability="critical">macOS Keychain</text>
+<text x="64" y="464" class="body">Bridge → reader token</text>
+<text x="64" y="491" class="body">CLI → operator token</text>
+<text x="64" y="518" class="body">Provider → DB / image keys</text>
+<text x="64" y="545" class="body">Semantic → CF token (opt-in)</text>
+</g>
+<text x="64" y="582" class="note" data-readability="supporting">Separate, local secret lookups.</text>
+<text x="64" y="608" class="note" data-readability="supporting">Paths and keys stay private.</text>
+<g id="AUTH" data-readability-background="#E7EFF1"><rect x="428" y="440" width="694" height="76" rx="9" fill="#E7EFF1"/>
+<text x="448" y="469" class="head" data-readability="critical">Authenticated Unix socket</text>
+<text x="448" y="499" class="body">Same UID + token hash · reader / operator roles</text>
+</g>
+<g id="READER" data-readability-background="#FFFDF8">
+<text x="448" y="583" class="head" data-readability="critical">Reader service</text>
+<text x="448" y="615" class="body">Access · residency · identity</text>
+<text x="448" y="642" class="body">Search tokens · cursors · jobs</text>
+</g>
+<g id="RESOURCE" data-readability-background="#FFFDF8">
+<text x="850" y="583" class="head" data-readability="critical">Resource service</text>
+<text x="850" y="615" class="body">Catalog · acquire · derive</text>
+<text x="850" y="642" class="body">Message-bound resource_id</text>
+</g>
+<g id="SRC" data-readability-background="#FFFDF8">
+<text x="64" y="739" class="head" data-readability="critical">Source authority</text>
+<text x="64" y="771" class="body">WeChat DB + WAL / files</text>
+<text x="64" y="798" class="body">or synthetic fixtures</text>
+<text x="64" y="825" class="body">Read-only · untrusted</text>
+</g>
+<g id="PROVIDER" data-readability-background="#FFFDF8">
+<text x="448" y="747" class="head" data-readability="critical">Source provider</text>
+<text x="448" y="779" class="body">Evidence, never policy</text>
+<text x="448" y="806" class="body">Validate the snapshot</text>
+<text x="448" y="833" class="body">before admission commits</text>
+</g>
+<g id="VOICE" data-readability-background="#FFFDF8">
+<text x="850" y="747" class="head" data-readability="critical">Optional local voice</text>
+<text x="850" y="779" class="body">Capture → SILK decode</text>
+<text x="850" y="806" class="body">→ SpeechAnalyzer</text>
+<text x="850" y="833" class="body">→ fenced transcript commit</text>
+</g>
+<g id="RETRIEVAL" data-readability-background="#F6F2EA">
+<text x="448" y="894" class="head" data-readability="critical">Retrieval service</text>
+<text x="448" y="925" class="body">Links + lexical + opt-in recall</text>
+<text x="448" y="952" class="body">Context evidence · no ACK</text>
+</g>
+<g id="INDEX_WORKER" data-readability-background="#F6F2EA">
+<text x="850" y="894" class="head" data-readability="critical">Derived indexes</text>
+<text x="850" y="925" class="body">Worker → links + FTS5</text>
+<text x="850" y="952" class="body">Fenced · pressure pause</text>
+</g>
+<g id="SPOOL" data-readability-background="#FFFDF8">
+<text x="64" y="1157" class="head" data-readability="critical">Delivery spool</text>
+<text x="64" y="1189" class="body">Immutable payloads</text>
+<text x="64" y="1216" class="body">Replay until ACK</text>
+</g>
+<g id="WINDOW" data-readability-background="#FFFDF8">
+<text x="444" y="1157" class="head" data-readability="critical">window.db</text>
+<text x="444" y="1189" class="body">Projection · leases · reader state</text>
+<text x="444" y="1216" class="body">Links + FTS5 · bindings · jobs</text>
+</g>
+<g id="CACHE" data-readability-background="#FFFDF8">
+<text x="850" y="1157" class="head" data-readability="critical">Object store</text>
+<text x="850" y="1189" class="body">Content-addressed bytes</text>
+<text x="850" y="1216" class="body">Verified cache + outputs</text>
+</g>
+<g id="edge-labels" data-readability-background="#FFFDF8">
+<text x="337" y="258" class="note" data-readability="supporting">MCP</text>
+<text x="604" y="360" class="note" data-readability="supporting">reader IPC</text>
+<text x="995" y="360" class="note" data-readability="supporting">operator IPC</text>
+<text x="759" y="596" class="note" data-readability="supporting">ID</text>
+<text x="335" y="751" class="note" data-readability="supporting">read</text>
+<text x="600" y="712" class="note" data-readability="supporting">verified evidence</text>
+<text x="1014" y="695" class="note" data-readability="supporting">original</text>
+<text x="794" y="709" class="note" data-readability="supporting">bytes</text>
+<text x="64" y="898" class="note" data-readability="supporting">Materialize once. Replay until ACK.</text>
+<text x="610" y="1004" class="note" data-readability="supporting">admit / project</text>
+<text x="825" y="1052" class="note" data-readability="supporting">transcript</text>
+<text x="970" y="1030" class="note" data-readability="supporting">verified bytes</text>
+</g>
+<text x="64" y="1254" class="note" data-readability="supporting">Returned content reaches the connected MCP client; source paths and keys remain local.</text>
+<path d="M64 1280H1136" stroke="#D9DEDE"/>
+<text x="64" y="1313" class="eyebrow">OPTIONAL SEMANTIC / DISABLED BY DEFAULT</text>
+<rect x="64" y="1334" width="714" height="151" rx="12" fill="#F6F2EA" stroke="#D9DEDE"/>
+<path d="M810 1334V1485" stroke="#8FA8B7" stroke-dasharray="5 5"/>
+<g id="SEMANTIC_DB">
+<text x="84" y="1370" class="head">Private sidecar</text>
+<text x="84" y="1404" class="body">Encoded → queued → verified</text>
+<text x="84" y="1434" class="body">Rebuildable manifest</text>
+<text x="84" y="1461" class="note">Canonical truth stays in window.db</text>
+</g>
+<g id="SEMANTIC">
+<text x="464" y="1370" class="head">Semantic service</text>
+<text x="464" y="1404" class="body">Version + policy admission</text>
+<text x="464" y="1434" class="body">Independent bounded worker</text>
+<text x="464" y="1461" class="note">Focus → retrieval RRF</text>
+</g>
+<g id="CF">
+<text x="850" y="1370" class="head">Cloudflare</text>
+<text x="850" y="1404" class="body">BGE-M3 · Vectorize</text>
+<text x="850" y="1434" class="body">Explicit text / query egress</text>
+<text x="850" y="1461" class="note">Candidates need local admission</text>
+</g>
+<path class="optional" d="M418 1418H448M440 1414L448 1418L440 1422M426 1414L418 1418L426 1422"/>
+<path class="optional" d="M752 1345H850M842 1341L850 1345L842 1349M760 1341L752 1345L760 1349"/>
+<text x="64" y="1514" class="note">Only configured account/conversations ∩ current policy may cross; no source writes or implicit URL fetch.</text>
+</svg>

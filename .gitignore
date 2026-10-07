@@ -1,0 +1,25 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Sightglass local/private state. Never commit source data, keys, caches, logs,
+# generated fixtures, reader credentials, or the read model.
+.sightglass/
+window.db
+window.db-*
+*.log
+*.token
+*.key
+token-secret
+deliveries/
+resource-cache/
+tests/fixtures/generated/

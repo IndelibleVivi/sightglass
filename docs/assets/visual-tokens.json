@@ -1,0 +1,47 @@
+{
+  "name": "Sightglass / pearl glass",
+  "source": "Original Sightglass plugin icon, version 1.0.0",
+  "colors": {
+    "outline": "#172334",
+    "pearlLight": "#FFFDF8",
+    "pearlMid": "#F6F2EA",
+    "pearlShadow": "#E9E3D9",
+    "mistCut": "#C3DAE3",
+    "deepMist": "#8FA8B7",
+    "body": "#344859",
+    "supporting": "#526573",
+    "rule": "#D9DEDE"
+  },
+  "typography": {
+    "display": "Helvetica Neue, Helvetica, Arial, sans-serif",
+    "body": "Helvetica Neue, Helvetica, Arial, sans-serif",
+    "identifier": "SFMono-Regular, Consolas, monospace"
+  },
+  "geometry": {
+    "baseUnit": 8,
+    "mark": "Two original pearl-glass leaves forming a narrow open aperture",
+    "markClearSpace": "At least 8% of icon width on each side",
+    "markBackground": "Transparent; no enclosing tile unless required by the host"
+  },
+  "banner": {
+    "format": "Raster PNG, 2172 × 724, 3:1",
+    "displayType": "Generated editorial serif title and smaller italic caption emphasis, rasterized in the artwork",
+    "supportingType": "Generated sans-serif lettering, rasterized in the artwork",
+    "materials": ["Matte pearl/ivory fills", "Mist-blue inner cut edges", "Quiet mist-blue background"],
+    "composition": "Ink-navy title field at left; nearly flat original two-leaf silhouette at right; an ivory caption plate crosses the seam toward the mark",
+    "caption": "Tagline breaks after the comma; italic in view. is subordinate to the masthead; metadata sits below one fine divider; all copy shares one left axis",
+    "light": "Subtle smooth tonal shading inside the leaves; no glass-card layers, reflective floor or caustic light",
+    "frame": "Fine inset rule spans both fields; the caption plate is attached to the left frame edge"
+  },
+  "diagrams": {
+    "flow": "Named directed lines; opposite flows may share one bidirectional route",
+    "optional": "Dashed line, explicitly labeled optional",
+    "ownership": "Named region with a visible boundary"
+  },
+  "assets": {
+    "banner": "banner.png",
+    "mark": "mark.svg",
+    "architecture": "architecture.svg",
+    "topology": "architecture.mmd"
+  }
+}

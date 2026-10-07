@@ -1,0 +1,334 @@
+{
+  "schema": "sightglass.synthetic-lifecycle-benchmark.v1",
+  "label": "candidate",
+  "scope": "generated only; no installation, account, network or busy-source proof",
+  "lifecycle": {
+    "before_release": {
+      "messages": 7,
+      "message_observations": 7,
+      "message_link_projection": 7,
+      "message_lexical_projection": 7,
+      "message_lexical": 7,
+      "available_bodies": 7,
+      "three_equal_current_text_copies": 0,
+      "ordinary_text_copy_count": 4
+    },
+    "after_release": {
+      "messages": 7,
+      "message_observations": 7,
+      "message_link_projection": 0,
+      "message_lexical_projection": 0,
+      "message_lexical": 0,
+      "available_bodies": 0,
+      "three_equal_current_text_copies": 0,
+      "ordinary_text_copy_count": 0
+    },
+    "after_backfill": {
+      "messages": 7,
+      "message_observations": 7,
+      "message_link_projection": 0,
+      "message_lexical_projection": 0,
+      "message_lexical": 0,
+      "available_bodies": 0,
+      "three_equal_current_text_copies": 0,
+      "ordinary_text_copy_count": 0
+    },
+    "after_restart_rebuild": {
+      "messages": 7,
+      "message_observations": 7,
+      "message_link_projection": 0,
+      "message_lexical_projection": 0,
+      "message_lexical": 0,
+      "available_bodies": 0,
+      "three_equal_current_text_copies": 0,
+      "ordinary_text_copy_count": 0
+    },
+    "empty_resource_recovery": {
+      "calls": 10,
+      "recovered": 0,
+      "writer_acquisitions": 0
+    },
+    "seconds": {
+      "cold_read": 0.032758,
+      "warm_read": 0.004542
+    },
+    "process_samples": {
+      "after_cold_read": {
+        "cpu_seconds": 0.161655,
+        "peak_rss_bytes": 49954816,
+        "block_input_operations": 0,
+        "block_output_operations": 0,
+        "open_fds": 4
+      },
+      "after_warm_read": {
+        "cpu_seconds": 0.165964,
+        "peak_rss_bytes": 49954816,
+        "block_input_operations": 0,
+        "block_output_operations": 0,
+        "open_fds": 4
+      },
+      "after_release_backfill_restart_rebuild": {
+        "cpu_seconds": 0.186568,
+        "peak_rss_bytes": 50003968,
+        "block_input_operations": 0,
+        "block_output_operations": 0,
+        "open_fds": 4
+      }
+    },
+    "idle_resource_worker": {
+      "elapsed_seconds": 2.060731,
+      "cpu_seconds": 0.003505,
+      "writer_acquisitions": 0,
+      "connection_calls": 3,
+      "process_before": {
+        "cpu_seconds": 0.196979,
+        "peak_rss_bytes": 50003968,
+        "block_input_operations": 0,
+        "block_output_operations": 0,
+        "open_fds": 4
+      },
+      "process_after": {
+        "cpu_seconds": 0.200484,
+        "peak_rss_bytes": 50036736,
+        "block_input_operations": 0,
+        "block_output_operations": 0,
+        "open_fds": 4
+      },
+      "completed_jobs": 0
+    }
+  },
+  "scale": [
+    {
+      "durable_messages": 10000,
+      "resident_messages": 0,
+      "resident_conversations": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000969
+      },
+      "warm_candidate_page": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000972
+      },
+      "warm_forward_page": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.001005
+      },
+      "warm_backward_page": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.00093
+      },
+      "warm_bounds": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.001038
+      },
+      "warm_read_plane": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000818
+      },
+      "warm_scope_present": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000796
+      },
+      "empty_inbox": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000877
+      }
+    },
+    {
+      "durable_messages": 10000,
+      "resident_messages": 10,
+      "resident_conversations": {
+        "returned": 1,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000967
+      },
+      "warm_candidate_page": {
+        "returned": 5,
+        "vm_steps_upper_bound": 1500,
+        "seconds": 0.001057,
+        "sort_seqs": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "warm_forward_page": {
+        "returned": 5,
+        "vm_steps_upper_bound": 1300,
+        "seconds": 0.001016,
+        "sort_seqs": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "warm_backward_page": {
+        "returned": 5,
+        "vm_steps_upper_bound": 1300,
+        "seconds": 0.000943,
+        "sort_seqs": [
+          5,
+          6,
+          7,
+          8,
+          9
+        ]
+      },
+      "warm_bounds": {
+        "returned": 2,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.001052
+      },
+      "warm_read_plane": {
+        "returned": 1,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000828
+      },
+      "warm_scope_present": {
+        "returned": 1,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000816
+      },
+      "empty_inbox": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1400,
+        "seconds": 0.0009
+      }
+    },
+    {
+      "durable_messages": 100000,
+      "resident_messages": 0,
+      "resident_conversations": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000947
+      },
+      "warm_candidate_page": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000953
+      },
+      "warm_forward_page": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.001029
+      },
+      "warm_backward_page": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000985
+      },
+      "warm_bounds": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.001092
+      },
+      "warm_read_plane": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000874
+      },
+      "warm_scope_present": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000807
+      },
+      "empty_inbox": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.0009
+      }
+    },
+    {
+      "durable_messages": 100000,
+      "resident_messages": 10,
+      "resident_conversations": {
+        "returned": 1,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.001002
+      },
+      "warm_candidate_page": {
+        "returned": 5,
+        "vm_steps_upper_bound": 1500,
+        "seconds": 0.001046,
+        "sort_seqs": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "warm_forward_page": {
+        "returned": 5,
+        "vm_steps_upper_bound": 1300,
+        "seconds": 0.001025,
+        "sort_seqs": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "warm_backward_page": {
+        "returned": 5,
+        "vm_steps_upper_bound": 1300,
+        "seconds": 0.000967,
+        "sort_seqs": [
+          5,
+          6,
+          7,
+          8,
+          9
+        ]
+      },
+      "warm_bounds": {
+        "returned": 2,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.001041
+      },
+      "warm_read_plane": {
+        "returned": 1,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.00082
+      },
+      "warm_scope_present": {
+        "returned": 1,
+        "vm_steps_upper_bound": 1000,
+        "seconds": 0.000805
+      },
+      "empty_inbox": {
+        "returned": 0,
+        "vm_steps_upper_bound": 1400,
+        "seconds": 0.000892
+      }
+    }
+  ],
+  "process_before": {
+    "cpu_seconds": 0.043501,
+    "peak_rss_bytes": 33177600,
+    "block_input_operations": 0,
+    "block_output_operations": 0,
+    "open_fds": 4
+  },
+  "process_after": {
+    "cpu_seconds": 3.01891,
+    "peak_rss_bytes": 51970048,
+    "block_input_operations": 0,
+    "block_output_operations": 0,
+    "open_fds": 4
+  }
+}

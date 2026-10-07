@@ -1,0 +1,24 @@
+{
+  "schema": "sightglass.synthetic-semantic-storage.v1",
+  "synthetic_only": true,
+  "network_calls": 0,
+  "embedding_or_quality_measurement": false,
+  "model_geometry": "@cf/baai/bge-m3",
+  "recipe_geometry": "sightglass.semantic.bge-m3.message.v1",
+  "rows": 100000,
+  "dimensions": 1024,
+  "sqlite_version": "3.49.1",
+  "raw_float32_bytes": 409600000,
+  "checkpointed_database_bytes": 489529344,
+  "post_commit_database_wal_shm_bytes": 982971896,
+  "bytes_per_entry": 4895.29344,
+  "insertion_seconds": 3.3901,
+  "lookup_batch": 20,
+  "lookup_probes": 50,
+  "lookup_median_ms": 2.1359,
+  "all_exact_manifest_lookups": true,
+  "lookup_plan": [
+    "SEARCH semantic_entries USING INDEX sqlite_autoindex_semantic_entries_2 (remote_id=?)"
+  ],
+  "scope": "local sidecar geometry and indexed lookup; no canonical admission or ANN"
+}

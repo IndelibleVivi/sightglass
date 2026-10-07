@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sightglass"
+version = "0.1.0.dev1"
+description = "Local-first, read-only, coverage-aware WeChat reading service"
+readme = "README.md"
+license = "AGPL-3.0-only AND CC-BY-NC-SA-4.0"
+license-files = ["LICENSE", "LICENSE-DOCUMENTATION.md", "LICENSING.md", "NOTICE.md", "docs/WGO-REUSE-MAP.md"]
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=45,<51",
+  "httpx>=0.28,<1",
+  "mcp[cli]>=1.0.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyright>=1.1.400,<2",
+  "ruff>=0.12,<1",
+]
+macos-wechat = [
+  "imageio-ffmpeg>=0.6,<1",
+  "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
+  "pyobjc-framework-Security>=10,<13; sys_platform == 'darwin'",
+  "sqlcipher3==0.6.2; sys_platform == 'darwin'",
+  "zstandard>=0.22,<1",
+]
+voice = [
+  "silk-python>=0.2.8,<0.3; sys_platform == 'darwin'",
+]
+
+[project.urls]
+Repository = "https://github.com/IndelibleVivi/sightglass"
+Documentation = "https://github.com/IndelibleVivi/sightglass#readme"
+Issues = "https://github.com/IndelibleVivi/sightglass/issues"
+
+[project.scripts]
+sightglassd = "sightglass.runtime.daemon:main"
+sightglass-mcp = "sightglass.mcp.server:main"
+sightglassctl = "sightglass.cli:main"
+sightglass-pair = "sightglass.runtime.paired:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"

@@ -1,0 +1,10 @@
+include README.md README.zh-CN.md AGENTS.md
+include LICENSE LICENSE-DOCUMENTATION.md LICENSING.md NOTICE.md
+include pyproject.toml uv.lock
+recursive-include docs *.md *.json *.svg *.mmd *.png
+recursive-include scripts *.py *.sh
+recursive-include swift *.swift
+recursive-include examples *.py *.mjs
+recursive-include tests *.py
+include .github/workflows/synthetic.yml
+global-exclude .DS_Store *.py[cod] *.db *.db-* *.key *.token *.log

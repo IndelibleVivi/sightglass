@@ -1,0 +1,88 @@
+name: Synthetic source gates
+on:
+  push:
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'README.zh-CN.md'
+      - 'AGENTS.md'
+      - 'NOTICE.md'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'README.zh-CN.md'
+      - 'AGENTS.md'
+      - 'NOTICE.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: synthetic-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install uv
+      - run: uv sync --frozen --extra dev --extra macos-wechat
+      - name: Portable policy, migrations, recovery, links, retrieval and IPC
+        run: >-
+          uv run python -m unittest
+          tests.unit.test_contracts tests.unit.test_runtime_config tests.unit.test_peer_credentials
+          tests.unit.test_schema_v2_migration tests.unit.test_schema_v3_migration
+          tests.unit.test_schema_v4_migration tests.unit.test_schema_v5_migration
+          tests.unit.test_schema_v6_migration tests.unit.test_schema_v8_migration
+          tests.unit.test_message_links tests.unit.test_source_parser
+          tests.unit.test_source_worker tests.unit.test_resource_jobs
+          tests.unit.test_worker_scheduling tests.unit.test_worker_commit_wake
+          tests.unit.test_storage_backups tests.unit.test_restore_recovery
+          tests.unit.test_storage_budget tests.unit.test_storage_history
+          tests.unit.test_storage_diagnostics tests.unit.test_cli_observation_maintenance
+          tests.integration.test_reading_correctness_sequences tests.integration.test_observation_maintenance
+          tests.integration.test_async_search_preparation
+          tests.integration.test_cold_retrieval_discovery
+          tests.integration.test_source_discovery_scan.SyntheticDiscoveryScanTests
+          tests.unit.test_released_observations tests.integration.test_residency
+          tests.integration.test_resident_consolidation
+          tests.integration.test_compact_candidate tests.integration.test_paired_runtime
+          tests.unit.test_cache_control tests.unit.test_v2_decoder tests.unit.test_semantic_benchmark
+          tests.unit.test_semantic_runtime tests.unit.test_semantic_service
+          tests.unit.test_cloudflare_semantic tests.integration.test_semantic_retrieval
+          tests.integration.test_m2_reader tests.integration.test_retrieval
+          tests.integration.test_reading_resilience tests.integration.test_materialized_read_plane
+          tests.integration.test_search_candidate_window tests.integration.test_m4_daemon
+          tests.contract.test_mcp_contract tests.contract.test_mcp_brief
+      - run: uv run python -m compileall -q src tests examples
+      - run: uv run ruff check src tests examples/benchmarks
+      - run: uv build
+      - run: uv run python examples/synthetic_read.py
+  macos:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: brew install sqlcipher poppler
+      - run: python -m pip install uv
+      - name: Install optional native fixture dependencies
+        run: |
+          CPPFLAGS="-I$(brew --prefix sqlcipher)/include" \
+          LDFLAGS="-L$(brew --prefix sqlcipher)/lib" \
+          uv sync --frozen --extra dev --extra macos-wechat --extra voice
+      - run: uv run python -m unittest discover -s tests -t . -p 'test_*.py'
+      - run: uv run pyright
+      - run: uv build
+      - run: uv run python examples/synthetic_read.py

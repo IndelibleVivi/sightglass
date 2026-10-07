@@ -1,0 +1,64 @@
+%% Topology source for architecture.svg (hand-authored composition).
+%% Node IDs match architecture.svg and docs/ARCHITECTURE.md.
+flowchart LR
+    CLIENT["MCP client<br/>stdio only"]
+    OPERATOR["sightglassctl<br/>operator mutations"]
+    KC["Keychain<br/>tokens + native DB/image keys"]
+    BRIDGE["MCP bridge<br/>reader credential<br/>validate - project - call"]
+
+    SRC["Source authority<br/>read-only WeChat store or synthetic fixture"]
+
+    subgraph D["sightglassd (owner region)"]
+        AUTH["Auth boundary<br/>Unix socket 0600<br/>same UID + token hash"]
+        READER["Reader service + search preparation<br/>hydrate - residency - admit - cursors<br/>tokens + private sidecar jobs; delivers results"]
+        RETRIEVAL["Retrieval service<br/>links + lexical + optional semantic candidates<br/>policy + version scope; no ACK"]
+        INDEX_WORKER["Derived index worker<br/>bounded links + lexical backfill<br/>version fence + pressure pause"]
+        SEMANTIC["Semantic service + worker (opt-in)<br/>BGE-M3 message recipe; canonical re-admission"]
+        SEMANTIC_DB[("Private semantic sidecar<br/>encoded - queued - verified<br/>rebuildable, never canonical truth")]
+        RESOURCE["Resource service<br/>catalog - acquire - derive<br/>message-bound resource_id"]
+        VOICE["Voice lane (optional)<br/>capture - SILK-PCM - SpeechAnalyzer"]
+        PROVIDER["Source provider<br/>synthetic or macos-wechat<br/>evidence + snapshot gate"]
+        SPOOL[("Delivery spool<br/>immutable payload<br/>replay until ACK")]
+        WINDOW[("window.db<br/>canonical projection + reader state<br/>residency leases; links + FTS5; durable jobs")]
+        CACHE[("Object store (CAS)<br/>content-addressed bytes")]
+    end
+
+    CF["Cloudflare (explicit egress)<br/>Workers AI BGE-M3 + Vectorize<br/>untrusted candidate IDs"]
+
+    CLIENT -->|"MCP over stdio"| BRIDGE
+    BRIDGE -->|"local IPC: framed JSON + reader token"| AUTH
+    OPERATOR -->|"operator token"| AUTH
+    KC -->|"reader token"| BRIDGE
+    KC -->|"operator token"| OPERATOR
+    KC -->|"native DB / image keys"| PROVIDER
+    AUTH -->|"authenticated role"| READER
+
+    SRC -->|"read-only handle"| PROVIDER
+    PROVIDER -->|"snapshot + validate"| SRC
+    PROVIDER -->|"evidence"| READER
+    PROVIDER -->|"bounded resource read"| RESOURCE
+
+    READER -->|"residency admission txn"| WINDOW
+    WINDOW -->|"projected rows"| READER
+    READER -->|"discovery request"| RETRIEVAL
+    WINDOW -->|"scoped canonical rows + derived candidates"| RETRIEVAL
+    RETRIEVAL -->|"focus / context + receipts"| READER
+    WINDOW -->|"captured message versions"| INDEX_WORKER
+    INDEX_WORKER -->|"fenced rows + checkpoint"| WINDOW
+    READER -->|"materialize payload"| SPOOL
+    SPOOL -->|"replay until ACK"| READER
+    READER -->|"message-bound resource_id"| RESOURCE
+    RESOURCE -->|"cache binding"| WINDOW
+    RESOURCE -->|"put / verify bytes"| CACHE
+    CACHE -->|"digest-verified bytes"| RESOURCE
+    RESOURCE -->|"recovered voice original"| VOICE
+    VOICE -->|"fenced transcript commit"| WINDOW
+    READER -->|"projected result"| AUTH
+    KC -->|"CF token only after opt-in"| SEMANTIC
+    WINDOW -->|"current permitted message versions"| SEMANTIC
+    SEMANTIC -->|"durable input/vector + send intent"| SEMANTIC_DB
+    SEMANTIC_DB -->|"verified local manifest"| SEMANTIC
+    RETRIEVAL -->|"concept within configured scope"| SEMANTIC
+    SEMANTIC -->|"policy/version admitted focus"| RETRIEVAL
+    SEMANTIC -->|"authorized text / vectors / query"| CF
+    CF -->|"async readback / ANN candidates"| SEMANTIC

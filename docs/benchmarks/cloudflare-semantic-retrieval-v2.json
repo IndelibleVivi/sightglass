@@ -1,0 +1,181 @@
+{
+  "schema": "sightglass.synthetic-semantic-retrieval.v1",
+  "synthetic_only": true,
+  "model": "@cf/baai/bge-m3",
+  "recipe": "sightglass.semantic.bge-m3.message.v2",
+  "corpus_recipe": "sightglass.synthetic-canonical-semantic.v1",
+  "case_count": 13,
+  "readback_only": true,
+  "index_batches": [
+    {
+      "state": "building",
+      "indexed": 23,
+      "pending": 0,
+      "processed": 23,
+      "scanned": 23
+    },
+    {
+      "state": "ready",
+      "indexed": 0,
+      "pending": 0,
+      "processed": 0,
+      "scanned": 0
+    }
+  ],
+  "status": {
+    "schema": "sightglass.semantic-status.v1",
+    "model": "@cf/baai/bge-m3",
+    "recipe": "sightglass.semantic.bge-m3.message.v2",
+    "dimensions": 1024,
+    "metric": "cosine",
+    "state": "ready",
+    "coverage": "complete",
+    "generation": 1,
+    "revision": 2,
+    "indexed": 53,
+    "indexed_scope": 53,
+    "pending": 0,
+    "pending_total": 0,
+    "bytes": 217088,
+    "failure": null,
+    "configured_conversations": 1
+  },
+  "publication_seconds": 2.4593,
+  "complete": true,
+  "cases": [
+    {
+      "case": "projects",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 2.3407,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "law",
+      "semantic_state": "ready",
+      "top_context_relevant": true,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 1.0,
+      "query_seconds": 2.0385,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "sleep",
+      "semantic_state": "ready",
+      "top_context_relevant": true,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 1.0,
+      "query_seconds": 1.752,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "travel",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 1.7413,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "vector",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 1.8618,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "pronoun",
+      "semantic_state": "ready",
+      "top_context_relevant": true,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 1.0,
+      "query_seconds": 2.1839,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "image",
+      "semantic_state": "ready",
+      "top_context_relevant": true,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 1.0,
+      "query_seconds": 1.4659,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "debate",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 1.6625,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "parallel_rail",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 2.063,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "parallel_vectors",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 1.4548,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "long_debate",
+      "semantic_state": "ready",
+      "top_context_relevant": true,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 1.0,
+      "query_seconds": 1.9039,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "mixed_alias",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 2.0427,
+      "canonical_ids_only": true
+    },
+    {
+      "case": "aggregate_pair",
+      "semantic_state": "ready",
+      "top_context_relevant": false,
+      "first_page_relevant": true,
+      "first_context_focus_purity": 0.0,
+      "query_seconds": 1.5615,
+      "canonical_ids_only": true,
+      "pair_context_position": 3,
+      "both_original_links": true
+    }
+  ],
+  "publication_operation_counts": {
+    "readback": 2
+  },
+  "operation_counts": {
+    "readback": 2,
+    "encode": 13,
+    "query": 13
+  },
+  "http_status_counts": {
+    "readback:200": 2,
+    "encode:200": 13,
+    "query:200": 13
+  },
+  "reader_state_unchanged": true,
+  "page_limit": 10
+}

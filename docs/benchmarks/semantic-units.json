@@ -1,0 +1,478 @@
+{
+  "schema": "sightglass.synthetic-semantic-benchmark.v1",
+  "cases": 8,
+  "profiles": {
+    "zh-Hans": {
+      "message": {
+        "units": 32,
+        "model": "apple.nlembedding.sentence.zh-Hans",
+        "revision": 1,
+        "dimensions": 640,
+        "build_seconds": 0.2991,
+        "query_ms_per_case": 1.2619,
+        "sqlite_bytes": 139264,
+        "bytes_per_unit": 4352.0,
+        "recall_at_5": 0.5,
+        "first_page_correct": 0.125,
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "travel",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 2
+          },
+          {
+            "case": "image",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "debate",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          }
+        ]
+      },
+      "local_window": {
+        "units": 24,
+        "model": "apple.nlembedding.sentence.zh-Hans",
+        "revision": 1,
+        "dimensions": 640,
+        "build_seconds": 0.34,
+        "query_ms_per_case": 0.9447,
+        "sqlite_bytes": 106496,
+        "bytes_per_unit": 4437.33,
+        "recall_at_5": 0.75,
+        "first_page_correct": 0.125,
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "image",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "debate",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          }
+        ]
+      },
+      "topology_context": {
+        "units": 8,
+        "model": "apple.nlembedding.sentence.zh-Hans",
+        "revision": 1,
+        "dimensions": 640,
+        "build_seconds": 0.1854,
+        "query_ms_per_case": 0.324,
+        "sqlite_bytes": 40960,
+        "bytes_per_unit": 5120.0,
+        "recall_at_5": 0.75,
+        "first_page_correct": 0.25,
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "image",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "debate",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          }
+        ]
+      }
+    },
+    "en": {
+      "message": {
+        "units": 32,
+        "model": "apple.nlembedding.sentence.en",
+        "revision": 1,
+        "dimensions": 512,
+        "build_seconds": 0.1744,
+        "query_ms_per_case": 1.013,
+        "sqlite_bytes": 139264,
+        "bytes_per_unit": 4352.0,
+        "recall_at_5": 0.375,
+        "first_page_correct": 0.0,
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "law",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "vector",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "image",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          }
+        ]
+      },
+      "local_window": {
+        "units": 24,
+        "model": "apple.nlembedding.sentence.en",
+        "revision": 1,
+        "dimensions": 512,
+        "build_seconds": 0.2787,
+        "query_ms_per_case": 0.7569,
+        "sqlite_bytes": 106496,
+        "bytes_per_unit": 4437.33,
+        "recall_at_5": 0.5,
+        "first_page_correct": 0.125,
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "vector",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 1.0,
+            "false_merge": false,
+            "boundary_loss": 1
+          },
+          {
+            "case": "image",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          }
+        ]
+      },
+      "topology_context": {
+        "units": 8,
+        "model": "apple.nlembedding.sentence.en",
+        "revision": 1,
+        "dimensions": 512,
+        "build_seconds": 0.1493,
+        "query_ms_per_case": 0.2667,
+        "sqlite_bytes": 40960,
+        "bytes_per_unit": 5120.0,
+        "recall_at_5": 0.625,
+        "first_page_correct": 0.25,
+        "cases": [
+          {
+            "case": "projects",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "law",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "sleep",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "travel",
+            "recall_at_5": true,
+            "first_page_correct": true,
+            "purity": 0.75,
+            "false_merge": false,
+            "boundary_loss": 0
+          },
+          {
+            "case": "vector",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "pronoun",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "image",
+            "recall_at_5": false,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          },
+          {
+            "case": "debate",
+            "recall_at_5": true,
+            "first_page_correct": false,
+            "purity": 0.0,
+            "false_merge": false,
+            "boundary_loss": 3
+          }
+        ]
+      }
+    }
+  }
+}
