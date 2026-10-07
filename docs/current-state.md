@@ -93,15 +93,16 @@ semantic configuration was preserved. That initial gate covered installation
 and status. Subsequent controlled installation checks passed bounded live message
 context, link/retrieval continuations, image preview, a cached transcript batch
 and PDF metadata through the existing ChatGPT app after refreshing its catalog.
-Those host checks used Pro and do not establish ordinary-model daily-use acceptance;
-a fresh ordinary-model run reached the current tool catalog but its reads failed
-with `STORAGE_PRESSURE`. Daily-use acceptance remains incomplete until the capacity
-guard permits reads and ordinary-model revalidation passes. Sightglass acceptance
-must never select Pro.
+Those initial host checks used Pro and do not establish ordinary-model daily-use
+acceptance. A fresh ordinary-model run initially failed with `STORAGE_PRESSURE`;
+after volume headroom returned and admission reported `ok`, all the same bounded
+host checks passed with the operator-selected ordinary model and reasoning
+intensity. Sightglass acceptance must never select Pro.
 Local PDF page/text reads and actual Apple helper recognition of generated speech
 also passed; the helper source matches the installed release's source commit.
 These checks do not establish complete history, a new recognition of real audio,
-zero-hint discovery quality or login/restart supervision. Installation manifests,
+continuous filesystem headroom, zero-hint discovery quality or login/restart
+supervision. Installation manifests,
 account/host details and independently verified rollback/recovery receipts remain
 private operator records outside Git.
 

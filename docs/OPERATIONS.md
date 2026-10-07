@@ -162,6 +162,8 @@ Compact 的断点与完成 receipt 绑定 `sightglass.current-body.v1` 转换；
 
 ## Storage budget and maintenance
 
+`sightglassctl status` 的 `ready` 表示 daemon lifecycle readiness，不证明当前 reader admission 或一次 Chat 读取可成功。还须核对 `storage.admission_allowed`、`available_bytes` 与实际 host call。文件系统余量包含同卷的其他应用和系统占用；短暂恢复后的一轮成功不能证明持续容量稳定。压力时保留明确失败和诊断证据，不降低 free floor 来通过验收。
+
 `sightglassctl storage status` 返回 content-free 分项字节数、reserved/available/remaining bytes、limits 和 `ok` / `soft_limit` / `hard_limit`。Daemon 已支持预算时，operator status 会完整 reconcile 私有文件，并补充 message count、DB bytes/message 和 freelist bytes；离线或仍运行旧 daemon 时，新 CLI 只盘点文件，不打开或迁移数据库。新 CLI/旧 daemon 的过渡期 fallback 仅限缺少 storage status 的响应；安装切换完成后使用 daemon 的统一统计。MCP summary 只更新可变文件 stats 与 filesystem free bytes，不扫描所有对象、不查询消息表。
 
 | Config `storage` 字段 | 默认 | 作用 |
