@@ -83,6 +83,16 @@ these generated checks do not establish a real-account footprint or RAM result.
 Installation acceptance is recorded separately; no real-account migration or
 VPS content egress is claimed by this source publication.
 
+An explicitly authorized same-schema local production promotion on 2026-10-07
+passed a separate runtime-only noneditable wheel acceptance (**76 tests in 36.251
+seconds**), content-free schema/ready/doctor/storage/worker checks, installed stdio
+initialize/list/brief/diagnostic status checks for all thirteen tools, and fresh
+Codex connector status through the existing tunnel. The original account/policy/
+semantic configuration was preserved. This proves that installation and status
+path, not real-content retrieval/resource fidelity, historical completeness or
+ChatGPT cold-task acceptance. Installation manifests and independently verified
+rollback/recovery receipts remain private operator records outside Git.
+
 ## Verification and review follow-up
 
 The repository-owned synthetic example, encrypted native fixtures, process-level
