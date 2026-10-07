@@ -26,14 +26,17 @@ VOICE_TEXT = "Synthetic daemon transcript"
 
 
 class SyntheticVoiceTranscriber:
-    """Test-only recognizer; the production daemon always passes ``None``."""
+    """Test-only recognizer with explicitly released completion."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.release = threading.Event()
 
     def transcribe(
         self, job: dict[str, Any], *, duration_ms: int, deadline: float | None,
     ) -> str:
+        if not self.release.wait(timeout=POLL_TIMEOUT_SECONDS):
+            raise TimeoutError("synthetic transcript completion was not released")
         self.calls.append(str(job["job_id"]))
         return f"{VOICE_TEXT} {len(self.calls) - 1}"
 
@@ -69,6 +72,7 @@ class VoiceReadDaemonTests(unittest.TestCase):
         self.start_daemon()
 
     def tearDown(self) -> None:
+        self.transcriber.release.set()
         self.stop_daemon()
         self.temp.cleanup()
 
@@ -150,6 +154,8 @@ class VoiceReadDaemonTests(unittest.TestCase):
         self.assertEqual(sidecar["coverage"]["selected"], 2)
         jobs = self.job_count()
         self.assertEqual(jobs, 2)
+        self.assertEqual(sidecar["coverage"]["pending"], 2)
+        self.transcriber.release.set()
         self.wait_until(lambda: self.transcriber.calls and self._ready_count() == 2)
 
         cached = self.bridge.wechat_read_messages(
@@ -247,6 +253,17 @@ class VoiceReadDaemonTests(unittest.TestCase):
             voice="auto",
         )
         self.assertEqual(restored["voice"]["state"], "prepared")
+        self.assertEqual(restored["voice"]["coverage"]["pending"], 2)
+        self.assertEqual(self.job_count(), 2)
+        self.transcriber.release.set()
+        self.wait_until(lambda: self._ready_count() == 2)
+        cached = self.bridge.wechat_read_messages(
+            mode="recent", conversation_id=conversation_id, projection="detail", limit=50,
+            voice="cached",
+        )
+        self.assertEqual(cached["voice"]["state"], "cached")
+        self.assertEqual(cached["voice"]["coverage"]["ready"], 2)
+        self.assertEqual(len(self.transcriber.calls), 2)
         self.assertEqual(self.job_count(), 2)
 
 
