@@ -119,7 +119,7 @@ uv sync --extra dev --extra macos-wechat --extra voice
 bash scripts/compile-voice-helper.sh
 ```
 
-编译脚本只生成本地 executable，不启动服务、不 enroll key、不下载 speech asset。缺少 decoder、helper 或语言资产会明确报告 readiness／blocked 状态，不影响普通读取。配置步骤见 [本地语音转写](docs/OPERATIONS.md#local-voice-transcription)。
+编译脚本只生成本地 executable，不启动服务、不 enroll key、不下载 speech asset。默认输出属于默认 data directory；paired production 安装须显式传入 active config 的 helper path，设置为空时使用该 pair 的 `<data_dir>/voice/sightglass-transcribe`。另一个 pair 中的 helper 不会让当前 pair ready。缺少 decoder、helper 或语言资产会明确报告 readiness／blocked 状态，不影响普通读取。配置步骤见 [本地语音转写](docs/OPERATIONS.md#local-voice-transcription)。
 
 ## 架构
 

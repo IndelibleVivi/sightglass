@@ -139,7 +139,7 @@ uv sync --extra dev --extra macos-wechat --extra voice
 bash scripts/compile-voice-helper.sh
 ```
 
-The helper build only compiles a local executable. It does not start a service, enroll keys or download speech assets. Missing decoder, helper or language assets produce explicit readiness/blocking states; ordinary reads remain available. See the [voice setup procedure](docs/OPERATIONS.md#local-voice-transcription).
+The helper build only compiles a local executable. It does not start a service, enroll keys or download speech assets. Its default destination belongs to the default data directory. For a paired production installation, pass the active configuration's helper path, or `<data_dir>/voice/sightglass-transcribe` when that setting is empty; a helper in another pair does not make the active pair ready. Missing decoder, helper or language assets produce explicit readiness/blocking states; ordinary reads remain available. See the [voice setup procedure](docs/OPERATIONS.md#local-voice-transcription).
 
 ## Architecture
 

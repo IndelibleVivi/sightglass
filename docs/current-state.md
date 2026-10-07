@@ -71,8 +71,9 @@ code locations and aggregate handle counts. Final source validation passed **1,1
 tests in 223.061 seconds**, full Pyright, Ruff and compileall. A separate noneditable
 wheel environment passed **76 tests in 30.065 seconds**, including actual daemon/stdio
 MCP, generated native, lifecycle and paired activation/crash/rollback checks, plus
-the synthetic example. All 114 installed Python modules match the source bytes;
-wheel/sdist retain five license/provenance files and the Swift/build sources.
+the synthetic example. All 114 installed Python modules match the source bytes.
+The wheel retains five license/provenance files; the source distribution also
+retains the Swift helper and build sources.
 Generated [lifecycle/scale and native resource receipts](benchmarks/README.md#resident-lifecycle-and-warm-read-scale)
 separate reduced VM work/copies/writes from unproven production RAM or latency.
 The [100k full compact/recovery run](benchmarks/README.md#compact-candidate-100kjson)
@@ -88,10 +89,16 @@ passed a separate runtime-only noneditable wheel acceptance (**76 tests in 36.25
 seconds**), content-free schema/ready/doctor/storage/worker checks, installed stdio
 initialize/list/brief/diagnostic status checks for all thirteen tools, and fresh
 Codex connector status through the existing tunnel. The original account/policy/
-semantic configuration was preserved. This proves that installation and status
-path, not real-content retrieval/resource fidelity, historical completeness or
-ChatGPT cold-task acceptance. Installation manifests and independently verified
-rollback/recovery receipts remain private operator records outside Git.
+semantic configuration was preserved. That initial gate covered installation
+and status. Subsequent controlled installation checks passed bounded live message
+context, link/retrieval continuations, image preview, a cached transcript batch
+and PDF metadata through the existing ChatGPT app after refreshing its catalog.
+Local PDF page/text reads and actual Apple helper recognition of generated speech
+also passed; the helper source matches the installed release's source commit.
+These checks do not establish complete history, a new recognition of real audio,
+zero-hint discovery quality or login/restart supervision. Installation manifests,
+account/host details and independently verified rollback/recovery receipts remain
+private operator records outside Git.
 
 ## Verification and review follow-up
 

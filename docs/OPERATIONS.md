@@ -590,8 +590,11 @@ Daemon 生命周期内有一个 daemon sibling voice worker（`sightglass-voice-
 安装与启用：
 
 ```bash
-uv sync --extra voice                        # SILK→PCM decoder（可选依赖）
-bash scripts/compile-voice-helper.sh         # 预编译 Swift helper
+uv sync --extra voice                        # Development SILK→PCM decoder extra
+# Set VOICE_HELPER to the active config's explicit helper_path, or its
+# <data_dir>/voice/sightglass-transcribe when helper_path is empty.
+# Use helper source from the same verified release as the installed runtime.
+bash scripts/compile-voice-helper.sh "$VOICE_HELPER"
 uv run sightglassctl daemon stop
 # 在 config.json 的 voice 节设置 enabled=true、policy=auto、language=<本机已安装的 BCP-47>
 uv run sightglassctl daemon start
@@ -605,8 +608,7 @@ uv run sightglassctl status                  # voice_read.readiness 会说明是
 ```bash
 # 1) 安装资产（helper 的 operator-only 模式，经 Apple AssetInventory 下载；
 #    这是 helper 唯一会联网的路径，转写路径本身永不下载）：
-"$HOME/Library/Application Support/Sightglass/voice/sightglass-transcribe" \
-  --install-assets --locale zh-CN
+"$VOICE_HELPER" --install-assets --locale zh-CN
 
 # 2) 资产装好后，把既有 blocked job 显式归还队列：
 uv run sightglassctl voice retry-blocked
@@ -615,6 +617,8 @@ uv run sightglassctl voice retry-blocked
 `voice retry-blocked` 把全部 `blocked` job 置回 `pending`（清 error/lease，fencing token +1，因此 blocked 那一轮的迟到结果永远无法提交），并唤醒 transcript waiter 与 voice worker；提交后立即提示新工作，durable queue 保留兜底恢复。它不做环境检查——operator 确认环境已修复后再执行，否则 job 只会再次落 `blocked`。
 
 配置变更后需要 daemon reload/重启（`operator.pause`/`resume` 等会触发 reload），长驻 stdio bridge 的行为本身不需要重启。
+
+Production 的 decoder extra 使用 frozen wheel environment，不执行上面的 development `uv sync`。先确认 helper 确实位于 active pair 解析出的路径，再 reload daemon 并检查 `voice_read.readiness.ready` 与 `voice_worker.enabled/running`。`ready` 仅证明 decoder/helper 可用；资产安装结果与一次合成语音识别分别验证语言资产和真实 recognizer，既有 cached transcript 不证明本轮重新识别过音频。
 
 ## MCP and ChatGPT tunnel
 
@@ -636,6 +640,19 @@ ChatGPT → OpenAI Secure MCP Tunnel → tunnel-client → sightglass-mcp (stdio
 Tunnel 仅在 daemon `ready=true` 且一次真实 stdio MCP initialize/list/call smoke 通过后连接。当前 bridge 的 expected surface 是十三个 tools，包含 `wechat_read_inbox`、`wechat_read_transcripts`、`wechat_find_links`、`wechat_retrieve` 与 `wechat_find_resources`。ChatGPT connector activation、source installation、policy activation、local stdio success、tunnel process 与 named-host live acceptance 是彼此独立的状态。Source/config schema、tool list 或 input schema 更新后，必须重启现有 `tunnel-client`，否则长驻 bridge child 可能继续运行旧代码。
 
 `tunnel-client run ...` 必须由一个会在 operator session 结束后仍保持运行的本机 supervisor 或明确保持打开的 terminal 拥有；不要把一次性 shell 中的短暂 process existence 当作 tunnel live。使用当前 `tunnel-client` 的 managed native runtime 时，先按它自己的 `runtimes connect --help` 提供既有 tunnel/runtime credential reference，再用 `tunnel-client runtimes status <alias>` 验证；缺少 admin/runtime credential 时不要反复重建 remote tunnel，继续使用已经验证的 private profile 与受控本机 process owner。无论哪种 owner，最终都要同时验证 `/healthz`、`/readyz` 与 control-plane poll，而不是只看 PID。
+
+从既有 private profile 的 `health.url_file` 取得 `TUNNEL_HEALTH_URL_FILE`，不要猜文件名。支持该选项的 installed client 可直接要求一次成功 poll：
+
+```bash
+tunnel-client health --url-file "$TUNNEL_HEALTH_URL_FILE" \
+  --require-control-plane-poll --json
+```
+
+Managed status 缺少 live admin UI snapshot 时可能把 poll health 报为 unknown；上述 health probe 的成功 poll 是独立证据。它仍不能代替一次 named-host authenticated tool call。
+
+macOS 用户级 launchd 接管必须先停止原 owner，使用 foreground `sightglassd` 与 `tunnel-client run --profile ...`，分别验证唯一 PID、实际 installed runtime、IPC、health/poll 和 host call，失败时恢复原 owner。`RunAtLoad`、异常退出恢复、operator 有意停止和维护命令各有不同语义；不要让自动恢复立即重启一个正在维护的 daemon。后台 owner 还须能读取 runtime 所在卷、private config、Keychain 与已授权 source，并能找到配置所需的外部 processor。仅写入 plist 或显示 process running 不算 activation。锁屏、系统权限或文件打开阻断须先解决并重新验收；不能通过扩大 account policy 或降低保护来绕过。
+
+重启 tunnel 后，在已有 ChatGPT app 的管理页刷新工具，并在一个新 Chat 核对当前参数与实际调用。保留既有 app/tunnel identity 和权限，旧对话或旧 catalog 的展示不证明新 schema 已被消费。`preparing`/`processing` 要按 `next_actions` 复用同一参数和 token 到实际结果；失败或 partial coverage 不能当成零命中。
 
 ## Production wheel installation and upgrade
 
