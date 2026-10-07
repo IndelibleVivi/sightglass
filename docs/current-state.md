@@ -49,8 +49,14 @@ Real PNG/JPEG/TIFF/BMP/WebP/GIF/HEIC previews, PDF page rendering and an MP4 fra
 passed. Whole-job 2 GiB OOM, forced whisper OOM and a 2.5-second timeout stopped
 their owned systemd scopes while a separate installed reader remained available.
 
-The final source suite passed 1,403 tests on macOS; the installed Linux wheel passed
-836 tests with four platform/optional-test skips. An actual SSH transfer of a
+The [public hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/37691402170)
+passed for commit `a250086`: the full macOS suite completed 1,404 tests with four
+skips, and the portable suite completed 767 tests with two skips. Pyright,
+Ruff/compileall, package builds and the synthetic example also passed. The installed
+Linux wheel completed its separate 836-test gate with four platform/optional-test
+skips. The final public candidate's 135 installed Python modules and five
+license/provenance files match its verified wheel; `pip check`, CLI help and the
+installed synthetic example passed. An actual SSH transfer of a
 generated installation preserved pending payload/token bytes and all-table/row
 parity after declared path relocation. An actual SSH capture session admitted fresh
 messages, then preserved exact request replay, replica reads and ACK after disconnect;

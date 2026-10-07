@@ -301,6 +301,11 @@ top-level import alone as decoder evidence.
 - Actual timeout: a helper tree containing a sleeping descendant hit the 2.5-second
   outer deadline. Its owned scope was stopped in 2.591 seconds while the same daemon
   served 22 replica reads (15 ms observed maximum), and another read afterwards.
-- Mac full source suite: 1,403 tests passed. Linux installed wheel: 836 tests passed
-  with four platform/optional-test skips. Production transfer, activation and
+- [Public hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/37691402170)
+  at commit `a250086` passed: the full macOS suite completed 1,404 tests with four
+  skips, and the portable suite completed 767 tests with two skips. The separate
+  installed Linux wheel gate completed 836 tests with four platform/optional-test
+  skips. The final public candidate's 135 installed Python modules and five
+  license/provenance files match its verified wheel; `pip check`, CLI help and the
+  installed synthetic example passed. Production transfer, activation and
   ordinary-client acceptance remain unverified.
