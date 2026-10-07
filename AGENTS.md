@@ -88,6 +88,8 @@ No hosted job reads a real account.
 
 ## Verification
 
+Sightglass acceptance tests must never select a Pro model. Use the operator-selected ordinary model and reasoning intensity; verify the actual model before submitting each acceptance run. Pro results do not establish ordinary daily-use acceptance, and an unavailable ordinary model is a blocker rather than permission to substitute Pro.
+
 Schema v8 requires SQLite with FTS5 trigram support; the SG-059 contentless-delete target additionally requires SQLite ≥3.43 and an actual capability probe. Preserve detail=none; columnsize=0 is incompatible with this backend. `reader/retrieval.py` version `sightglass.retrieval.rrf-context.v3` expands same-conversation link neighbors independently of the body-radius and resolves explicit reply targets only within hard policy/time/sender scope. `.github/workflows/synthetic.yml` separates portable Linux gates from the full macOS synthetic/native fixture suite; full-repository Pyright runs in the macOS job with all declared extras, while Linux runs compileall/Ruff and the portable suite; neither CI job reads an account. IPC peer identity uses macOS getpeereid or Linux SO_PEERCRED; keep same-owner UID and token checks on both paths, and do not interpret synthetic Linux coverage as native WeChat support.
 
 Run from the repository root:

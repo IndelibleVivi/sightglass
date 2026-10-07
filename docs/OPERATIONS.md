@@ -654,6 +654,8 @@ macOS 用户级 launchd 接管必须先停止原 owner，使用 foreground `sigh
 
 重启 tunnel 后，在已有 ChatGPT app 的管理页刷新工具，并在一个新 Chat 核对当前参数与实际调用。保留既有 app/tunnel identity 和权限，旧对话或旧 catalog 的展示不证明新 schema 已被消费。`preparing`/`processing` 要按 `next_actions` 复用同一参数和 token 到实际结果；失败或 partial coverage 不能当成零命中。
 
+Sightglass 验收测试永远不选 Pro model。沿用 operator 选择的普通模型与思考强度，提交每轮验收前先核对实际模型；Pro 下的结果不能作为普通模型的日常使用验收。普通模型不可用时明确记录阻断，不切换 Pro 替代。
+
 ## Production wheel installation and upgrade
 
 Cold startup/health refresh、普通 `status` 与 `doctor` 只读小型 derivative generation/checkpoint 状态；它们的 retrieval `statistics_collected=false`，count 字段为 null，不以零冒充未统计。完整 link/lexical row counts 由 operator `retrieval status|explain` 显式请求，不放在 daemon 的 socket readiness 之前。
