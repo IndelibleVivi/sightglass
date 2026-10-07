@@ -15,7 +15,7 @@ from sightglass.runtime.config import SightglassConfig
 class ActivationTests(unittest.TestCase):
     def test_revocation_during_writer_rolls_back_and_blocks_later_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             config = replace(
                 SightglassConfig.create(root / "data", root),
                 activation_generation="synthetic-owner",
@@ -54,7 +54,7 @@ class ActivationTests(unittest.TestCase):
 
     def test_revoked_old_host_cannot_restart_and_target_needs_new_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             config = SightglassConfig.create(root / "data", root)
             old = replace(
                 config, activation_generation="synthetic-old", activation_path=root / "old.json"
@@ -109,13 +109,14 @@ class ActivationTests(unittest.TestCase):
 
     def test_generation_transition_requires_expected_current_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "activation.json"
+            root = Path(temporary).resolve()
+            path = root / "activation.json"
             write_activation(
                 path,
                 generation="synthetic-one",
                 state="active",
                 role="core",
-                namespace=Path(temporary) / "data" / "window.db",
+                namespace=root / "data" / "window.db",
             )
             with self.assertRaises(RuntimeError):
                 write_activation(
@@ -123,7 +124,7 @@ class ActivationTests(unittest.TestCase):
                     generation="synthetic-two",
                     state="active",
                     role="core",
-                    namespace=Path(temporary) / "data" / "window.db",
+                    namespace=root / "data" / "window.db",
                 )
             with self.assertRaises(RuntimeError):
                 write_activation(
@@ -132,12 +133,12 @@ class ActivationTests(unittest.TestCase):
                     state="active",
                     role="core",
                     expected_generation="synthetic-wrong",
-                    namespace=Path(temporary) / "data" / "window.db",
+                    namespace=root / "data" / "window.db",
                 )
 
     def test_recovery_clone_cannot_reuse_namespace_host_or_missing_credential(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             config = replace(
                 SightglassConfig.create(root / "active", root),
                 activation_generation="synthetic-live",
@@ -167,7 +168,7 @@ class ActivationTests(unittest.TestCase):
 
     def test_revoked_generation_cannot_reactivate_and_successor_increases_counter(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             path, namespace = root / "grant", root / "data" / "window.db"
             write_activation(
                 path, generation="synthetic-one", state="active", role="core", namespace=namespace
@@ -208,6 +209,23 @@ class ActivationTests(unittest.TestCase):
                 predecessor="synthetic-one",
             )
             self.assertEqual(read_activation(path)["counter"], 2)
+
+    def test_namespace_symlink_is_rejected_before_activation_is_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            namespace = root / "data"
+            namespace.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(namespace, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                write_activation(
+                    root / "grant",
+                    generation="synthetic-owner",
+                    state="active",
+                    role="core",
+                    namespace=alias / "window.db",
+                )
+            self.assertFalse((root / "grant").exists())
 
 
 if __name__ == "__main__":

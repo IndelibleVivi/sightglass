@@ -40,7 +40,7 @@ class CaptureRecoveryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         source = create_synthetic_source(self.root / "source")
         provider, repository, service, tools = build_test_stack(
             source,
