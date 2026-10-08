@@ -668,9 +668,13 @@ Managed status 缺少 live admin UI snapshot 时可能把 poll health 报为 unk
 macOS 用户级 launchd 接管必须先停止原 owner，使用 foreground `sightglassd` 与 `tunnel-client run --profile ...`，分别验证唯一 PID、实际 installed runtime、IPC、health/poll 和 host call，失败时恢复原 owner。`RunAtLoad`、异常退出恢复、operator 有意停止和维护命令各有不同语义；不要让自动恢复立即重启一个正在维护的 daemon。后台 owner 还须能读取 runtime 所在卷、private config、Keychain 与已授权 source，并能找到配置所需的外部 processor。仅写入 plist 或显示 process running 不算 activation。锁屏、系统权限或文件打开阻断须先解决并重新验收；不能通过扩大 account policy 或降低保护来绕过。
 
 Mac edge 的 managed process 还要单独验证 macOS App Data 访问；同一 interpreter
-在前台能初始化 provider，不证明其 launchd 进程已有权限。若系统正在等待 owner
-确认，保留该请求并由 owner 亲自操作，然后检查 edge handshake 和 bounded fresh
-capture。Keychain item access、App Data access 与进程的 I/O 调度是独立条件。
+在前台能初始化 provider，不证明其 launchd 进程已有权限。受保护 app data container
+的即时访问确认只在该 app instance 存续期间有效，因此同一 interpreter 的新 edge
+进程仍可能再次询问；参见 [Apple 的平台说明](https://developer.apple.com/videos/play/wwdc2023/10053/?time=1066)。
+若系统正在等待 owner 确认，保留该请求并由 owner 亲自操作，然后检查 edge handshake
+和 bounded fresh capture。不要把一次放行记成 unattended restart permission。
+Keychain item access 与 App Data access 分别验证；VPS 的 replica 读取与 ACK 可继续
+在 edge 离线时使用。
 
 重启 tunnel 后，在已有 ChatGPT app 的管理页刷新工具，并在一个新 Chat 核对当前参数与实际调用。保留既有 app/tunnel identity 和权限，旧对话或旧 catalog 的展示不证明新 schema 已被消费。`preparing`/`processing` 要按 `next_actions` 复用同一参数和 token 到实际结果；失败或 partial coverage 不能当成零命中。
 

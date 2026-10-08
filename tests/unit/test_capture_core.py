@@ -7,13 +7,14 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from inspect import signature
 from pathlib import Path
 from unittest import mock
 
-from sightglass.contracts.capture import CaptureCeiling
+from sightglass.contracts.capture import CaptureCeiling, CaptureProtocolError, CaptureRequest
 from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.mcp.tools import ReaderTools
 from sightglass.reader.service import ReaderService
@@ -21,8 +22,14 @@ from sightglass.runtime.activation import write_activation
 from sightglass.runtime.capture_core import CoreCapture
 from sightglass.runtime.config import SightglassConfig
 from sightglass.runtime.edge import EdgeSpool
-from sightglass.runtime.edge_relay import EdgeSession, FramedStream, edge_token_hash
+from sightglass.runtime.edge_relay import (
+    EdgeSession,
+    FramedStream,
+    PreparedRemoteCapture,
+    edge_token_hash,
+)
 from sightglass.source.capture import CaptureExecutor
+from sightglass.source.capture.codec import SealedCapture
 from sightglass.source.remote import RemoteCaptureProvider, RemoteCaptureSettings
 from sightglass.source.synthetic import create_synthetic_source
 from tests.fixtures.factory import build_test_stack
@@ -143,6 +150,118 @@ class CoreCaptureTests(unittest.TestCase):
 
     def call(self, name: str, **arguments):
         return self.core.call(name, arguments, lambda: getattr(self.tools, name)(**arguments))
+
+    def _unfinalized_catalog_ticket(self, *, expired: bool = False) -> PreparedRemoteCapture:
+        request = CaptureRequest(
+            "synthetic-unfinalized-catalog", "catalog", self.settings.account_id,
+            self.core.expected.policy_revision,
+        )
+        self.core._record_request(request)
+        envelope = self.executor.capture(
+            request, stream_epoch=self.settings.stream_epoch, sequence=1,
+            batch_id="synthetic-unfinalized-batch",
+        )
+        if expired:
+            document = envelope.document()
+            envelope = SealedCapture.seal(
+                replace(
+                    document,
+                    origin=replace(document.origin, captured_at="2000-01-01T00:00:00+00:00"),
+                    receipt=replace(
+                        document.receipt, sealed_at="2000-01-01T00:00:00+00:00",
+                        fresh_until="2000-01-01T00:01:00+00:00",
+                    ),
+                )
+            )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiter = pool.submit(self.core.broker.submit, request, timeout=2)
+            with self.core.broker._condition:
+                self.assertTrue(
+                    self.core.broker._condition.wait_for(lambda: bool(self.core.broker._queue), 1)
+                )
+            self.assertIsNotNone(self.core.broker._next_work())
+            ticket = self.core.broker._receive_capture(envelope)
+            self.assertIs(waiter.result(timeout=1), ticket)
+        assert isinstance(ticket, PreparedRemoteCapture)
+        return ticket
+
+    def test_failed_catalog_reject_detaches_caller_for_exact_durable_recovery(self) -> None:
+        from sightglass.runtime.capture_journal import CAPTURE_REQUEST_TOOL, _identity
+
+        ticket = self._unfinalized_catalog_ticket()
+        original = self.core.journal.record_terminal
+
+        def fail_after_write(document, ack):
+            original(document, ack)
+            raise SightglassError(ErrorCode.SERVICE_BUSY, retryable=True)
+
+        with mock.patch.object(self.core.journal, "record_terminal", side_effect=fail_after_write):
+            with self.assertRaises(SightglassError):
+                self.core._reject(ticket)
+        self.assertIsNone(ticket.durable_ack)
+        self.assertIsNone(self.core.receiver.lookup_terminal(ticket.envelope))
+        with self.core.database.connection() as connection:
+            row = connection.execute(
+                "SELECT outcome FROM access_receipts WHERE receipt_id=? AND tool_name=?",
+                (_identity("request", ticket.request.request_id), CAPTURE_REQUEST_TOOL),
+            ).fetchone()
+        self.assertEqual(row[0], "pending")
+        replayed = self.core.broker._receive_capture(ticket.envelope)
+        self.assertIs(replayed, ticket)
+        ack = ticket.durable_ack
+        assert ack is not None
+        self.assertEqual(ack.terminal, "rejected")
+        self.assertEqual(self.core.receiver.lookup_terminal(ticket.envelope), ack)
+        with self.core.database.connection() as connection:
+            row = connection.execute(
+                "SELECT outcome FROM access_receipts WHERE receipt_id=? AND tool_name=?",
+                (_identity("request", ticket.request.request_id), CAPTURE_REQUEST_TOOL),
+            ).fetchone()
+        self.assertEqual(row[0], "rejected")
+
+    def test_expired_abandoned_ticket_can_reject_but_cannot_admit_new_body(self) -> None:
+        ticket = self._unfinalized_catalog_ticket(expired=True)
+        with self.assertRaisesRegex(CaptureProtocolError, "fresh_receipt_expired"):
+            self.core.receiver.admit(
+                self.core.receiver.prepare(ticket.envelope),
+                lambda *_: self.fail("expired capture body was admitted"),
+                receipt_id="synthetic-expired-must-not-accept",
+            )
+        self.assertIsNone(self.core.receiver.lookup_terminal(ticket.envelope))
+        self.core.broker.abandon(ticket)
+        self.assertIs(self.core.broker._receive_capture(ticket.envelope), ticket)
+        ack = ticket.durable_ack
+        assert ack is not None
+        self.assertEqual(ack.terminal, "rejected")
+        self.assertEqual(self.core.receiver.lookup_terminal(ticket.envelope), ack)
+
+    def test_unknown_exact_replays_fail_closed_on_every_recovery_attempt(self) -> None:
+        request = CaptureRequest(
+            "synthetic-unknown-catalog", "catalog", self.settings.account_id,
+            self.core.expected.policy_revision,
+        )
+        envelope = self.executor.capture(
+            request, stream_epoch=self.settings.stream_epoch, sequence=1,
+            batch_id="synthetic-unknown-batch",
+        )
+        for _ in range(2):
+            with self.assertRaisesRegex(CaptureProtocolError, "requires_operator_recovery"):
+                self.core.broker._receive_capture(envelope)
+            self.assertIsNone(self.core.receiver.lookup_terminal(envelope))
+
+    def test_replay_recovery_checks_current_owner_before_terminal_write(self) -> None:
+        ticket = self._unfinalized_catalog_ticket()
+        self.core.broker.abandon(ticket)
+        assert self.config.activation_path is not None
+        write_activation(
+            self.config.activation_path, generation=self.config.activation_generation,
+            state="revoked", role="core", namespace=self.config.window_db_path,
+            expected_generation=self.config.activation_generation,
+        )
+        with self.assertRaisesRegex(RuntimeError, "active core ownership"):
+            self.core.broker._receive_capture(ticket.envelope)
+        self.assertIsNone(ticket.durable_ack)
+        self.assertIsNone(self.core.receiver.lookup_terminal(ticket.envelope))
 
     def test_fresh_capture_accepts_the_complete_mcp_proxy_defaults(self) -> None:
         self.start_edge()

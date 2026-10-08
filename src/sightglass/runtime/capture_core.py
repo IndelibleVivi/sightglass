@@ -242,24 +242,29 @@ class CoreCapture:
     def _reject(self, ticket: PreparedRemoteCapture) -> None:
         # A failed/cancelled request releases the ordered stream without advancing
         # reader ACK or admitting a body. This bounded transaction contains no RPC.
-        prepared = self.receiver.prepare(ticket.envelope)
-        with operation_budget(2.0):
-            with self.database.transaction(maintenance=True):
-                duplicate = self.receiver.lookup_terminal(ticket.envelope)
-                if duplicate is not None:
-                    self.database.wake_after_commit(lambda: ticket.complete(duplicate))
-                    return
-                terminal = prepared.document.receipt.terminal
-                self._claim_request(
-                    ticket.request, "cancelled" if terminal == "cancelled" else "rejected"
-                )
-                ack = self.receiver.admit_in_transaction(
-                    prepared,
-                    None,
-                    receipt_id=_identity("terminal", ticket.request.request_id),
-                    reject=True,
-                )
-                self.database.wake_after_commit(lambda: ticket.complete(ack))
+        try:
+            prepared = self.receiver.prepare(ticket.envelope)
+            with operation_budget(2.0):
+                with self.database.transaction(maintenance=True):
+                    require_core_activation(self.config)
+                    duplicate = self.receiver.lookup_terminal(ticket.envelope)
+                    if duplicate is not None:
+                        self.database.wake_after_commit(lambda: ticket.complete(duplicate))
+                        return
+                    terminal = prepared.document.receipt.terminal
+                    self._claim_request(
+                        ticket.request, "cancelled" if terminal == "cancelled" else "rejected"
+                    )
+                    ack = self.receiver.admit_in_transaction(
+                        prepared,
+                        None,
+                        receipt_id=_identity("terminal", ticket.request.request_id),
+                        reject=True,
+                    )
+                    self.database.wake_after_commit(lambda: ticket.complete(ack))
+        finally:
+            if ticket.durable_ack is None:
+                self.broker.abandon(ticket)
 
     def _recover(self, ticket: PreparedRemoteCapture) -> None:
         # Reconnect can cancel an exact previously authorized pending task. It may

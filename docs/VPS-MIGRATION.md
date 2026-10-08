@@ -135,10 +135,14 @@ Mac SSH key 只允许 exact installed `edge-session` command，使用 pinned kno
 或撤权后 delayed ACK 不能释放 edge pending。
 
 Mac edge 由用户级 LaunchAgent 接管时，验证的是该 managed process 的实际 source
-访问权限。前台 provider 初始化成功不能证明 launchd 下也能打开 source；新的
-interpreter 可能需要 owner 亲自确认 macOS App Data 访问。保持正在等待的请求，
-核实对应的 interpreter 和 source，确认后重新验证握手与一次 bounded fresh capture。
-不要用修改 TCC 数据库、扩大 reader policy 或关闭系统保护代替系统确认。
+访问权限。前台 provider 初始化成功不能证明 launchd 下也能打开 source。对于另一个
+developer 的受保护 app data container，macOS 的即时访问确认只在该 app instance
+存续期间有效；即使 interpreter 没变，重启 edge 后仍可能再次询问。参见
+[Apple 的 app container protection 说明](https://developer.apple.com/videos/play/wwdc2023/10053/?time=1066)。
+保持正在等待的请求，核实对应的 interpreter 和 source，由 owner 亲自确认，然后
+重新验证握手与一次 bounded fresh capture。不能从一次确认推断 unattended restart
+已获权限；VPS replica 读取与 ACK 不依赖 edge 在线。不要用修改 TCC 数据库、扩大
+reader policy 或关闭系统保护代替系统确认。
 
 在 target 验证原 tunnel client release 的官方 digest、signature/attestation 和
 exact artifact；沿用原 tunnel identity 与 credential reference。先停止 Mac 上同一

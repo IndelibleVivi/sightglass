@@ -353,7 +353,18 @@ edge egress ceiling, ReaderPolicy or independent edge capability.
 
 The broker bounds pending requests. A submit timeout detaches the waiter and
 retains the exact authorized work. A late capture enters the configured recovery
-hook even when its request is already known. After a core restart, an unknown
+hook even when its request is already known. If a returned ticket has no durable
+ACK when its finalization wait expires, or its caller cannot commit rejection,
+the broker marks that exact work abandoned. Its next identical pending replay
+uses the same authorized recovery hook; a still-active ticket is not recovered
+before that deadline. Recovery runs outside the broker lock with one attempt per
+work item at a time. A failed or unfinished attempt clears that in-flight marker
+so another exact replay can retry. Current ownership, request binding, policy,
+batch digest and stream sequence still apply. An expired complete capture may be
+durably rejected without admitting its body, and only an outer-committed terminal
+ACK may release the edge spool.
+
+After a core restart, an unknown
 pending capture needs an exact durable request binding and an authorized recovery
 decision; parsing it is insufficient to accept it. The core may reject such a
 previously authorized abandoned task without admitting bodies or advancing

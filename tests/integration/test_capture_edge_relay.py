@@ -8,6 +8,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from sightglass.contracts.capture import (
     CAPTURE_VERSION,
@@ -42,6 +43,215 @@ class CaptureEdgeRelayTests(unittest.TestCase):
     setUp = fixtures.CaptureBoundaryTests.setUp
     request = fixtures.CaptureBoundaryTests.request
     capture = fixtures.CaptureBoundaryTests.capture
+
+    def _pending_session(
+        self, envelope: SealedCapture, *, poll: bool = False
+    ) -> tuple[FramedStream, io.BytesIO]:
+        wire, outgoing = io.BytesIO(), io.BytesIO()
+        writer = FramedStream(io.BytesIO(), wire)
+        writer.send(
+            {
+                "schema": CAPTURE_VERSION,
+                "kind": "hello",
+                "role": "edge",
+                "token": "synthetic-token",
+                "source_instance_id": self.executor.source_instance_id,
+                "account_id": self.ceiling.account_id,
+                "origin_epoch": self.executor.origin_epoch,
+                "stream_epoch": "fixture-stream",
+                "next_sequence": 2,
+                "core_generation": "",
+            }
+        )
+        if poll:
+            writer.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+        writer.send(envelope)
+        return FramedStream(io.BytesIO(wire.getvalue()), outgoing), outgoing
+
+    def _unfinalized_ticket(
+        self, broker: CaptureBroker, envelope: SealedCapture
+    ) -> PreparedRemoteCapture:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiter = pool.submit(broker.submit, envelope.document().request, timeout=2)
+            with broker._condition:
+                self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+            channel, outgoing = self._pending_session(envelope, poll=True)
+            broker.serve_connection(channel)
+            ticket = waiter.result(timeout=1)
+        responses = FramedStream(io.BytesIO(outgoing.getvalue()), io.BytesIO())
+        self.assertEqual(
+            responses.receive(), {"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": ""}
+        )
+        work = responses.receive()
+        assert isinstance(work, dict)
+        self.assertEqual(work["kind"], "work")
+        self.assertEqual(responses.receive(), {"schema": CAPTURE_VERSION, "kind": "retry"})
+        self.assertIsNone(ticket.durable_ack)
+        self.assertFalse(broker.connected)
+        return ticket
+
+    def test_existing_unfinalized_catalog_recovers_on_exact_replay_after_timeout(self) -> None:
+        journal = fixtures.FixtureReceiveJournal(self.root / "receive.sqlite")
+        receiver = CaptureReceiver(journal, self.expected, stream_epoch="fixture-stream")
+        recovered: list[PreparedRemoteCapture] = []
+
+        def recover(ticket):
+            recovered.append(ticket)
+            ack = receiver.admit(
+                receiver.prepare(ticket.envelope), None,
+                receipt_id="synthetic-timeout-reject", reject=True,
+            )
+            ticket.complete(ack)
+
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=receiver.lookup_terminal, recover=recover,
+            finalization_timeout=0.01,
+        )
+        self.addCleanup(broker.close)
+        envelope = self.capture(self.request("catalog"))
+        spool = EdgeSpool.initialize(
+            self.root / "timeout-spool", source_instance_id=self.executor.source_instance_id,
+            account_id=self.ceiling.account_id, origin_epoch=self.executor.origin_epoch,
+            stream_epoch="fixture-stream",
+        )
+        self.addCleanup(spool.close)
+        spool.store(envelope)
+        ticket = self._unfinalized_ticket(broker, envelope)
+        self.assertEqual(recovered, [])
+        self.assertIsNone(receiver.lookup_terminal(envelope))
+        pending = spool.pending()
+        assert pending is not None
+        self.assertEqual(pending.to_bytes(), envelope.to_bytes())
+        channel, outgoing = self._pending_session(envelope)
+        with self.assertRaises(RelayDisconnected):
+            broker.serve_connection(channel)
+        self.assertEqual(recovered, [ticket])
+        ack = ticket.durable_ack
+        assert ack is not None
+        self.assertEqual(ack.terminal, "rejected")
+        self.assertEqual(ticket.envelope.to_bytes(), envelope.to_bytes())
+        self.assertEqual(receiver.lookup_terminal(envelope), ack)
+        responses = FramedStream(io.BytesIO(outgoing.getvalue()), io.BytesIO())
+        self.assertEqual(
+            responses.receive(), {"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": ""}
+        )
+        self.assertEqual(
+            responses.receive(),
+            {"schema": CAPTURE_VERSION, "kind": "ack", "ack": json_value(ack)},
+        )
+        with journal.connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM episodes").fetchone()[0], 0)
+            self.assertEqual(
+                connection.execute("SELECT position FROM reader_state").fetchone()[0], 0
+            )
+        spool.acknowledge(ack)
+        self.assertIsNone(spool.pending())
+        self.assertEqual(spool.next_sequence, 2)
+        self.assertEqual(broker._by_request, {})
+
+    def test_existing_ticket_retries_recovery_after_terminal_transaction_rollback(self) -> None:
+        journal = fixtures.FixtureReceiveJournal(self.root / "receive.sqlite")
+        receiver = CaptureReceiver(journal, self.expected, stream_epoch="fixture-stream")
+        attempts: list[PreparedRemoteCapture] = []
+
+        def recover(ticket):
+            attempts.append(ticket)
+            ack = receiver.admit(
+                receiver.prepare(ticket.envelope), None,
+                receipt_id="synthetic-retry-reject", reject=True,
+            )
+            ticket.complete(ack)
+
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=receiver.lookup_terminal, recover=recover,
+            finalization_timeout=0.01,
+        )
+        self.addCleanup(broker.close)
+        envelope = self.capture(self.request("catalog"))
+        ticket = self._unfinalized_ticket(broker, envelope)
+        original = journal.record_terminal
+
+        def fail_after_write(document, ack):
+            original(document, ack)
+            raise RuntimeError("synthetic temporary terminal failure")
+
+        channel, outgoing = self._pending_session(envelope)
+        with mock.patch.object(journal, "record_terminal", side_effect=fail_after_write):
+            with self.assertRaisesRegex(RuntimeError, "temporary terminal failure"):
+                broker.serve_connection(channel)
+        self.assertIsNone(ticket.durable_ack)
+        self.assertIsNone(receiver.lookup_terminal(envelope))
+        self.assertIsNone(
+            journal.stream_position(self.executor.source_instance_id, self.ceiling.account_id)
+        )
+        responses = FramedStream(io.BytesIO(outgoing.getvalue()), io.BytesIO())
+        self.assertEqual(
+            responses.receive(), {"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": ""}
+        )
+        with self.assertRaises(RelayDisconnected):
+            responses.receive()  # No ACK escaped the rolled-back terminal writer.
+        channel, outgoing = self._pending_session(envelope)
+        with self.assertRaises(RelayDisconnected):
+            broker.serve_connection(channel)
+        self.assertEqual(attempts, [ticket, ticket])
+        self.assertEqual(ticket.envelope.to_bytes(), envelope.to_bytes())
+        ack = ticket.durable_ack
+        assert ack is not None
+        self.assertEqual(receiver.lookup_terminal(envelope), ack)
+        self.assertEqual(ack.terminal, "rejected")
+
+    def test_active_ticket_exact_replay_does_not_start_recovery_before_deadline(self) -> None:
+        recovered: list[PreparedRemoteCapture] = []
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=lambda _capture: None, recover=recovered.append,
+        )
+        self.addCleanup(broker.close)
+        envelope = self.capture()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiter = pool.submit(broker.submit, envelope.document().request, timeout=2)
+            with broker._condition:
+                self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+            self.assertIsNotNone(broker._next_work())
+            ticket = broker._receive_capture(envelope)
+            self.assertIs(waiter.result(timeout=1), ticket)
+        self.assertIs(broker._receive_capture(envelope), ticket)
+        self.assertEqual(recovered, [])
+        assert isinstance(ticket, PreparedRemoteCapture)
+        self.assertIsNone(ticket.durable_ack)
+
+    def test_exact_replay_recovery_is_singleflight_and_unfinished_attempt_can_retry(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        attempts: list[PreparedRemoteCapture] = []
+
+        def recover(ticket):
+            attempts.append(ticket)
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError("synthetic recovery barrier timed out")
+
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=lambda _capture: None, recover=recover,
+            finalization_timeout=0.01,
+        )
+        self.addCleanup(broker.close)
+        envelope = self.capture(self.request("catalog"))
+        ticket = self._unfinalized_ticket(broker, envelope)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(broker._receive_capture, envelope)
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertIs(broker._receive_capture(envelope), ticket)
+                self.assertEqual(attempts, [ticket])
+            finally:
+                release.set()
+            self.assertIs(first.result(timeout=1), ticket)
+        self.assertIs(broker._receive_capture(envelope), ticket)
+        self.assertEqual(attempts, [ticket, ticket])
+        self.assertIsNone(ticket.durable_ack)
 
     def test_disconnect_detaches_waiters_and_does_not_reissue_inflight_read(self) -> None:
         broker = CaptureBroker(

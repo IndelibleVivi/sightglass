@@ -21,6 +21,11 @@ tools and schema-v10 state. A thin Mac edge owns native read-only sessions and o
 deliveries, CAS, processing and MCP. The edge initiates a fixed SSH stdio connection;
 there is no public Sightglass listener or arbitrary provider-method RPC.
 
+On macOS, access to another app's protected data container may require the owner
+to confirm an App Data prompt for each new edge process, including a managed
+restart. Verify the actual handshake and fresh read after confirmation; see the
+[operating procedure](docs/VPS-MIGRATION.md#owner-activation-与原-tunnel-路由).
+
 Remote configurations default to `view="replica"`: messages, search, links, retrieval,
 resource catalog and cached bytes use admitted state while the Mac is offline. Results
 report partial resident coverage and bounded freshness; a zero-hit replica result

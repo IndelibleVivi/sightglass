@@ -20,6 +20,10 @@ Remote core implementation 当前是 candidate；安装与 production cutover �
 `window.db`、reader ACK、immutable deliveries、CAS、processing 与 MCP。Edge 主动建立固定
 SSH stdio 连接；Sightglass 没有 public listener，也不开放任意 provider-method RPC。
 
+macOS 访问另一个 app 的受保护 data container 时，每个新 edge 进程（包括受管重启）
+都可能需要 owner 亲自确认 App Data 提示。确认后还要验证实际 handshake 与 fresh
+read，见 [操作说明](docs/VPS-MIGRATION.md#owner-activation-与原-tunnel-路由)。
+
 Remote config 默认 `view="replica"`：Mac 离线时，消息、搜索、链接、retrieval、resource
 catalog 与 cached bytes 仍从 admitted state 读取。结果明确标注 partial resident coverage
 与 bounded freshness；零命中不证明 source absence。`wechat_list_resources` 只列出 owning

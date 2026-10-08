@@ -166,7 +166,7 @@ class _BrokerWork:
     failure: CaptureProtocolError | RelayDisconnected | None = None
     waiters: int = 0
     detached: bool = False
-    recovery_started: bool = False
+    recovering: bool = False
 
 
 class CaptureBroker:
@@ -233,22 +233,12 @@ class CaptureBroker:
             work.waiters += 1
             work.detached = False
         completed = work.captured.wait(timeout)
-        recovery_ticket = None
         with self._condition:
             work.waiters -= 1
             if not completed and work.waiters == 0:
                 work.detached = True
-                if (
-                    work.ticket is not None
-                    and not work.recovery_started
-                    and self.recover is not None
-                ):
-                    work.recovery_started = True
-                    recovery_ticket = work.ticket
-        if recovery_ticket is not None:
-            assert self.recover is not None
-            self.recover(recovery_ticket)
         if not completed:
+            self._recover_work(work)
             # Do not fabricate a terminal ACK or release an in-flight source read.
             raise CaptureWaitTimeout("capture_waiter_timed_out_pending_work_retained")
         if work.failure is not None:
@@ -256,6 +246,38 @@ class CaptureBroker:
         if work.ticket is None:
             raise RelayDisconnected("capture_broker_closed")
         return work.ticket
+
+    def abandon(self, ticket: PreparedRemoteCapture) -> None:
+        """Mark an unfinished local caller for exact replay recovery; performs no I/O."""
+        with self._condition:
+            work = self._by_request.get(ticket.request.request_id)
+            if work is not None and work.ticket is ticket and ticket.durable_ack is None:
+                work.detached = True
+                self._condition.notify_all()
+
+    def _recover_work(self, work: _BrokerWork) -> None:
+        with self._condition:
+            ticket = work.ticket
+            recover = self.recover
+            if (
+                not work.detached
+                or work.recovering
+                or ticket is None
+                or ticket.durable_ack is not None
+                or recover is None
+            ):
+                return
+            work.recovering = True
+        try:
+            if self.ownership_guard is not None:
+                self.ownership_guard()
+            # The callback must resolve the exact durable request binding and may
+            # complete only after its outer commit. It runs outside the broker lock.
+            recover(ticket)
+        finally:
+            with self._condition:
+                work.recovering = False
+                self._condition.notify_all()
 
     def _next_work(self) -> _BrokerWork | None:
         with self._condition:
@@ -287,28 +309,22 @@ class CaptureBroker:
                 if work.ticket is not None:
                     if work.ticket.envelope.digest != envelope.digest:
                         raise CaptureProtocolError("request_capture_conflict")
-                    return work.ticket
-                if self._inflight is not work:
+                elif self._inflight is not work:
                     raise CaptureProtocolError("unexpected_capture_order")
             else:
                 if self.recover is None:
                     raise CaptureProtocolError("unknown_request_requires_authorized_recovery")
                 if len(self._by_request) >= self.max_pending_requests:
                     raise CaptureProtocolError("capture_broker_queue_full")
-                work = _BrokerWork(document.request)
+                work = _BrokerWork(document.request, detached=True)
                 self._by_request[document.request.request_id] = work
-            ticket = PreparedRemoteCapture(envelope)
-            work.ticket = ticket
+            if work.ticket is None:
+                work.ticket = PreparedRemoteCapture(envelope)
+            ticket = work.ticket
             work.captured.set()
             self._condition.notify_all()
-            recovered = self._inflight is not work or work.detached
-            if recovered:
-                work.recovery_started = True
             self._inflight = work
-        if recovered:
-            if self.recover is None:
-                raise CaptureProtocolError("unexpected_capture_order")
-            self.recover(ticket)
+        self._recover_work(work)
         return ticket
 
     def _fail_uncaptured(self) -> None:
@@ -421,6 +437,8 @@ class CaptureBroker:
                         else received.wait_for_ack(self.finalization_timeout)
                     )
                     if ack is None:
+                        assert isinstance(received, PreparedRemoteCapture)
+                        self.abandon(received)
                         channel.send({"schema": CAPTURE_VERSION, "kind": "retry"})
                         return
                     if self.ownership_guard is not None:

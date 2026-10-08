@@ -67,7 +67,7 @@ was verified against its release attestation, signed digests, exact archive and 
 inventory, then installed separately without activating the original tunnel profile.
 These candidate checks do not establish production or ordinary-host acceptance.
 
-The current migration is **activating; acceptance remains incomplete**. Production preparation has created
+The current migration is **activated; host acceptance remains incomplete**. Production preparation has created
 encrypted target storage and provisioned scoped reader/operator/tunnel credentials,
 typed configurations, fixed SSH capabilities and supervisor definitions. Native database
 and image keys remain in the Mac Keychain. The final Linux speech helper and its
@@ -84,16 +84,33 @@ confirmed macOS App Data access, the managed Mac edge connected and preserved th
 native interpretation epoch under the same initial ownership grants. Foreground
 provider initialization alone does not establish managed access.
 
-Controlled production resident checks passed twelve tools, including context,
-retrieval, image preview, PDF access and cached transcripts. An offline replica
-update committed without its first response being read, then replayed exactly and
-ACKed successfully; explicit fresh access failed closed. The thirteenth tool,
-`wechat_list_resources`, exposed a dispatch gap that reopened the remote provider.
-Its focused source correction now uses current resident bindings under one local
-read snapshot; 90 replica/resource tests passed, with Ruff, compileall and full
-Pyright clean. New hosted CI, installed correction and actual resident revalidation
-remain pending. Fresh capture, managed edge reconnect, ordinary-host acceptance,
-footprint comparison and approved retirement also remain operator gates. See [VPS migration](VPS-MIGRATION.md),
+The resource-list correction in `b1c1c28` uses current resident bindings under one
+local read snapshot. Its [hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/37715145609)
+passed 1,410 macOS tests with four skips and 773 portable tests with two skips,
+plus full Pyright, Ruff, compileall, builds and the synthetic example. A separate
+immutable Linux wheel passed module/license byte verification, frozen dependency
+checks and 90 installed replica/resource tests with two skips, then was activated
+under the existing grants and database.
+
+Controlled production online checks exercised all thirteen tools, bounded fresh
+ingestion and exact replay after discarding the first committed update response.
+With the managed Mac edge stopped, resident context matched exactly; search, links,
+retrieval, cached resources, resource metadata, exact replay and durable ACK passed.
+Explicit fresh access failed closed. The managed edge reconnected after the owner
+confirmed the new process's App Data prompt; this does not establish unattended
+restart permission. Before/after process and storage samples are recorded privately.
+
+The ordinary-model ChatGPT run exercised all thirteen tools and passed resident,
+resource and cached-transcript reads, but fresh revalidation exposed an unfinalized
+capture ticket that kept replaying without a terminal ACK. Restarting the same core
+recovered that exact pending batch under the same grants. The source correction now
+marks unfinalized work abandoned, recovers exact replay through a retryable
+single-flight rejection, and rechecks ownership inside the terminal writer. Its
+55 focused capture/relay tests passed, including transaction rollback, active-ticket
+and terminal-CAS races, expired-body rejection and two-process lost ACK. Hosted
+coverage, immutable installation and renewed host acceptance for this correction
+are pending. Exact old-database
+retirement still requires the owner's inventory approval. See [VPS migration](VPS-MIGRATION.md),
 [Capture protocol](CAPTURE-PROTOCOL.md) and [Linux processing](LINUX-PROCESSING.md).
 
 ## Implemented paths
