@@ -471,6 +471,20 @@ explicit consent and canonical-validation requirements.
 
 `wechat_list_resources` begins from an opaque message ID and returns only resources bound to that message. Both list and finder use `sightglass.resource.v2` descriptors with the owning opaque message/conversation IDs, declared and detected MIME, `format_family`, `available_views`, declared metadata and availability; they never carry a local path, source key, decoder key, or raw source message ID.
 
+在 `default_view="replica"` 的 core，`wechat_list_resources` 从一个短 query-only
+`window.db` snapshot 列出已 admitted 的当前 resource metadata，不请求 edge capture 或 provider
+snapshot，也不要求 recent/on-demand scope 的 history 完整。拥有资源的 message 必须在当前
+provider/parser epoch、present/current observation 下，正文 resident、未过期且没有 active release
+job；旧 epoch、released/expired body、identity conflict 或其它不可读的已知 message 返回
+`SOURCE_INCOMPLETE`，未知 opaque message ID 返回 `MESSAGE_NOT_FOUND`。当前 correction 已撤销的
+resolver 不进入列表，历史 observation 不用于补回旧资源。每次仍检查 pause、conversation policy
+和 `resource_metadata` capability；禁止访问返回既有 `SERVICE_PAUSED` 或 `POLICY_DENIED`。
+Receipt 标明 `served_from="window_db"`、`view="replica"`、`freshness.state="bounded_stale"`、
+`live_refresh_confirmed=false` 和 partial resident coverage。Descriptor 的 source-declared availability
+也是该 admitted version 的观察，不证明当前 edge 在线或可取得 bytes。本机 `default_view="auto"`
+保留 source snapshot、owning-message revalidation/admission 和 `live_source` receipt 的原路径；该工具
+不增加公开 `view` 或其它参数。
+
 `wechat_read_resource` recognizes `metadata`, `preview`, `original`, `text`, `page`, `members`, `table`, and `slide`. A locally available voice original supports generic `metadata` without decoding or transcription and returns an `audio` descriptor containing its format and verified MIME (for example `silk` / `audio/silk`). Safe local media inspection covers HEIC/TIFF/BMP in addition to existing images, strict UTF-8/UTF-16/GB18030 text decoding, bounded audio/video metadata, and a PNG first-frame preview for supported local video; none of these paths performs a network fetch or general video transcoding. A PDF `page` call requires a positive page; line ranges apply only to plain text-like files. ZIP uses `members` for a bounded directory and `text + member` for one explicitly selected safe text member. XLSX uses `table` with optional `sheet` and bounded A1 `cell_range`; CSV/TSV use `table` without workbook selectors. PPTX uses `slide + page` for one 1-based slide and returns speaker notes separately from slide text; DOCX/XLSX/PPTX also support bounded metadata/text/original as applicable. Conflicting, unsupported, or ignored selectors return `QUERY_INVALID` rather than being silently discarded.
 
 A resource whose source retained only a derived image entry reports `availability="preview_only"`, `preview_available=true`, and `original_available=false`. `preview` may read that entry with `resolution.variant="thumbnail"`; `original` returns `RESOURCE_UNAVAILABLE` and can never relabel the derivative as `source_original`. If a full source original later appears, it supersedes the cached thumbnail for original reads while the variants remain distinct. Opaque safe binary originals are returned as blob content; markup/active content does not gain an original egress path merely from its extension.

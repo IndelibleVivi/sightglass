@@ -134,6 +134,12 @@ Mac SSH key 只允许 exact installed `edge-session` command，使用 pinned kno
 `core_generation`，每次 source/store/send/ACK-release 都重查 ownership。旧 generation
 或撤权后 delayed ACK 不能释放 edge pending。
 
+Mac edge 由用户级 LaunchAgent 接管时，验证的是该 managed process 的实际 source
+访问权限。前台 provider 初始化成功不能证明 launchd 下也能打开 source；新的
+interpreter 可能需要 owner 亲自确认 macOS App Data 访问。保持正在等待的请求，
+核实对应的 interpreter 和 source，确认后重新验证握手与一次 bounded fresh capture。
+不要用修改 TCC 数据库、扩大 reader policy 或关闭系统保护代替系统确认。
+
 在 target 验证原 tunnel client release 的官方 digest、signature/attestation 和
 exact artifact；沿用原 tunnel identity 与 credential reference。先停止 Mac 上同一
 tunnel owner，再把其 MCP command 指向 Linux stable installed command。禁止同时

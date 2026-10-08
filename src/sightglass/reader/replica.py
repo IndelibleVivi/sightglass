@@ -124,6 +124,25 @@ class ReplicaReader:
         result["read_plane"]["freshness"] = "bounded_stale"
         return result
 
+    def list_resources(self, message_id: str) -> dict[str, Any]:
+        """Describe only the current resident message's admitted resource bindings."""
+
+        self.service.reader.require_resource("metadata")
+        with self.repository.database.read_snapshot():
+            target = self.service._materialized_target(
+                mode="message", conversation_id=None, message_id=message_id,
+                anchor=None, view="replica",
+            )
+            if target is None or not self.repository.frozen_message_rows((message_id,)):
+                raise SightglassError(
+                    ErrorCode.SOURCE_INCOMPLETE,
+                    details={"view": "replica", "coverage": {"state": "body_unavailable"}},
+                )
+            receipt = self.service._materialized_receipt(
+                target, observation_watermark=self.repository.observation_watermark(),
+            )
+            return self.service.resource_service._resource_list(message_id, receipt)
+
     def fresh_search_candidate_ids(self, arguments: dict[str, Any]) -> tuple[str, ...]:
         """Pure local prefix for one sealed current-source verification operation."""
         with self.repository.database.read_snapshot():

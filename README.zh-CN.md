@@ -22,7 +22,9 @@ SSH stdio 连接；Sightglass 没有 public listener，也不开放任意 provid
 
 Remote config 默认 `view="replica"`：Mac 离线时，消息、搜索、链接、retrieval、resource
 catalog 与 cached bytes 仍从 admitted state 读取。结果明确标注 partial resident coverage
-与 bounded freshness；零命中不证明 source absence。需要有界 source 验证时用
+与 bounded freshness；零命中不证明 source absence。`wechat_list_resources` 只列出 owning
+message 的当前 resident bindings；正文过期或已 released 时返回 `SOURCE_INCOMPLETE`，
+不会恢复 inactive 的历史 resolver。需要有界 source 验证时，在提供该参数的 tool 上用
 `view="fresh"`。Fresh updates 的 reconciliation 独立于 ACK position，完成一轮后从起点
 继续发现旧位置 arrivals/corrections；跨页不宣称同一 global change snapshot。缺失 source
 prefix 会 fail closed。当前 scope 的 `request_id` 可在 30 天内精确 replay 已完成的 update

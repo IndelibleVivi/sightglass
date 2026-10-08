@@ -67,11 +67,33 @@ was verified against its release attestation, signed digests, exact archive and 
 inventory, then installed separately without activating the original tunnel profile.
 These candidate checks do not establish production or ordinary-host acceptance.
 
-The current migration is **candidate, not live**. No real account has been sent to
-the VPS by this tranche; the prior local installation is still distinct. Encrypted
-recovery/target storage, old-owner revocation, exact frozen transfer, original tunnel
-identity, offline/ordinary-host acceptance, footprint comparison and approved
-retirement remain operator gates. See [VPS migration](VPS-MIGRATION.md),
+The current migration is **activating; acceptance remains incomplete**. Production preparation has created
+encrypted target storage and provisioned scoped reader/operator/tunnel credentials,
+typed configurations, fixed SSH capabilities and supervisor definitions. Native database
+and image keys remain in the Mac Keychain. The final Linux speech helper and its
+independent model copy have been verified at their intended paths. Persistent
+vault-helper access and the fixed SSH unlock capability have passed verification.
+The original local core and tunnel have been stopped and their automatic starts
+disabled. Encrypted local recovery, the exact frozen installation transfer and
+complete target relocation parity have passed verification. The legacy configuration,
+reader credentials and local tunnel entry points have been retired. Initial ownership
+grants are installed and the Linux core is ready. The original-identity VPS tunnel
+has passed health, ready and control-plane-poll checks; authenticated fixed stdio
+and a status call through the original Codex connector also passed. After the owner
+confirmed macOS App Data access, the managed Mac edge connected and preserved the
+native interpretation epoch under the same initial ownership grants. Foreground
+provider initialization alone does not establish managed access.
+
+Controlled production resident checks passed twelve tools, including context,
+retrieval, image preview, PDF access and cached transcripts. An offline replica
+update committed without its first response being read, then replayed exactly and
+ACKed successfully; explicit fresh access failed closed. The thirteenth tool,
+`wechat_list_resources`, exposed a dispatch gap that reopened the remote provider.
+Its focused source correction now uses current resident bindings under one local
+read snapshot; 90 replica/resource tests passed, with Ruff, compileall and full
+Pyright clean. New hosted CI, installed correction and actual resident revalidation
+remain pending. Fresh capture, managed edge reconnect, ordinary-host acceptance,
+footprint comparison and approved retirement also remain operator gates. See [VPS migration](VPS-MIGRATION.md),
 [Capture protocol](CAPTURE-PROTOCOL.md) and [Linux processing](LINUX-PROCESSING.md).
 
 ## Implemented paths

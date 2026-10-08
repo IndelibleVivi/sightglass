@@ -621,6 +621,26 @@ class ResourceService:
             "freshness": {"mode": "live_source", "live_refresh_confirmed": True},
         }
 
+    def _resource_list(
+        self, message_id: str, source_receipt: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Publish descriptors inside the caller's validated admission/read snapshot."""
+
+        self.reader.require_resource("metadata")
+        self._message_row(message_id)
+        resources = []
+        for item in self.repository.resources_for_message(message_id):
+            context = self.repository.resource_context(str(item["resource_id"]))
+            if context is None:
+                raise SightglassError(ErrorCode.INTERNAL_ERROR)
+            resources.append(self._descriptor(context))
+        return {
+            "schema": "sightglass.resource-list.v1",
+            "message_id": message_id,
+            "resources": resources,
+            "source_receipt": source_receipt,
+        }
+
     def list_resources(self, message_id: str) -> dict[str, Any]:
         self.reader.require_resource("metadata")
         with self._source_read() as (stack, snapshot):
@@ -628,18 +648,7 @@ class ResourceService:
             source, parsed = self._source_message(row, snapshot)
             with self._admission(stack):
                 self._admit_message(row, source, parsed)
-                resources = []
-                for item in self.repository.resources_for_message(message_id):
-                    context = self.repository.resource_context(str(item["resource_id"]))
-                    if context is None:
-                        raise SightglassError(ErrorCode.INTERNAL_ERROR)
-                    resources.append(self._descriptor(context))
-                return {
-                    "schema": "sightglass.resource-list.v1",
-                    "message_id": message_id,
-                    "resources": resources,
-                    "source_receipt": self._source_receipt(snapshot),
-                }
+                return self._resource_list(message_id, self._source_receipt(snapshot))
 
     @staticmethod
     def _effective_mime(

@@ -441,7 +441,7 @@ class ReaderService:
                 return False
         if self.default_view == "replica" and name in {
             "wechat_status", "wechat_find_conversations", "wechat_find_participants",
-            "wechat_read_inbox",
+            "wechat_read_inbox", "wechat_list_resources",
         }:
             return True
         if name == "wechat_search_messages" and self.search_preparation is not None:
@@ -6745,6 +6745,8 @@ class ReaderService:
                 return result
 
     def list_resources(self, message_id: str) -> dict[str, Any]:
+        if self.default_view == "replica":
+            return self.replica.list_resources(message_id)
         return self.resource_service.list_resources(message_id)
 
     def _voice_resource_text(

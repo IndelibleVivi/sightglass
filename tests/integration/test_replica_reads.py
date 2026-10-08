@@ -25,11 +25,14 @@ from sightglass.policy.readers import ReaderPolicy
 from sightglass.reader.cursors import cursor_scope
 from sightglass.reader.replica import UPDATE_REQUEST_TOOL, request_spool_ids
 from sightglass.reader.service import ReaderService
+from sightglass.runtime.capture_core import CoreCapture
+from sightglass.runtime.config import SightglassConfig
 from sightglass.runtime.control import cleanup_deliveries
 from sightglass.source.capture.executor import CaptureExecutor
 from sightglass.source.capture.frozen import FrozenCaptureProvider
 from sightglass.source.identity import SignedTokenCodec
 from sightglass.source.parser import parse_message
+from sightglass.source.remote import RemoteCaptureProvider, RemoteCaptureSettings
 from sightglass.source.synthetic import _create_shard, _row, create_synthetic_source
 from tests.fixtures.factory import build_test_stack
 
@@ -1751,6 +1754,307 @@ class ReplicaReadTests(unittest.TestCase):
         self.assertTrue(result["items"])
         self.assertEqual(result["source_receipt"]["view"], "replica")
         self.assertEqual(result["source_receipt"]["coverage"]["conversation"], "resident_subset")
+
+    def _resource_message(self) -> Any:
+        return next(
+            row
+            for row in self.repository.materialized_message_rows(
+                self.group,
+                projection_epoch=self.service._projection_inventory_epoch(),
+                observation_watermark=self.repository.observation_watermark(),
+                direction="forward",
+                limit=100,
+            )
+            if any(
+                item["original_name"] == "notes.md"
+                for item in self.repository.resources_for_message(str(row["message_id"]))
+            )
+        )
+
+    def test_replica_resource_list_is_local_in_partial_resident_scopes(self) -> None:
+        row = self._resource_message()
+        message_id = str(row["message_id"])
+        expected = self.service.list_resources(message_id)["resources"]
+        self.assertTrue(expected)
+        for mode in ("recent", "on_demand"):
+            with self.subTest(mode=mode):
+                self.offline(partial_mode=mode)
+                with (
+                    patch.object(
+                        self.provider, "snapshot", side_effect=AssertionError("source snapshot")
+                    ),
+                    patch.object(
+                        self.provider, "get_message", side_effect=AssertionError("source message")
+                    ),
+                ):
+                    self.assertTrue(
+                        self.service.local_only_tool_call(
+                            "wechat_list_resources", {"message_id": message_id}
+                        )
+                    )
+                    listed = self.tools.wechat_list_resources(message_id)
+                self.assertEqual(listed["schema"], "sightglass.resource-list.v1")
+                self.assertEqual(listed["resources"], expected)
+                receipt = listed["source_receipt"]
+                self.assertEqual(
+                    (receipt["served_from"], receipt["view"]), ("window_db", "replica")
+                )
+                self.assertEqual(receipt["freshness"]["state"], "bounded_stale")
+                self.assertFalse(receipt["freshness"]["live_refresh_confirmed"])
+                self.assertFalse(receipt["complete"])
+                self.assertEqual(receipt["coverage"]["conversation"], "resident_subset")
+                self.assertNotIn(str(self.source_root), str(listed))
+                self.assertNotIn(str(row["source_message_id"]), str(listed))
+                for item in listed["resources"]:
+                    self.assertEqual(item["source_message_id"], message_id)
+                    self.assertNotIn("source_resource_key", item)
+                    self.assertNotIn("resolver_json", item)
+
+    def test_replica_resource_list_honors_current_corrections_and_active_resolver(self) -> None:
+        assert self.context is not None
+        row = self._resource_message()
+        message_id = str(row["message_id"])
+        original_items = self.repository.resources_for_message(message_id)
+        original_resource_id = original_items[0]["resource_id"]
+        with self.provider.snapshot() as snapshot:
+            source = self.provider.get_message(
+                self.context["source_account_key"], str(row["source_message_id"]), snapshot
+            )
+        assert source is not None
+        changed = replace(
+            source,
+            resources=(replace(source.resources[0], original_name="synthetic-corrected.md"),),
+        )
+        self.repository.upsert_message(
+            self.account,
+            self.group,
+            row["sender_id"],
+            row["sender_membership_id"],
+            changed,
+            parse_message(changed),
+            projection_epoch=self.service._projection_inventory_epoch(),
+        )
+        current = self.repository.message_position_row(message_id)
+        assert current is not None
+        self.assertGreater(current["current_observation_seq"], row["current_observation_seq"])
+        self.offline()
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source snapshot")):
+            listed = self.service.list_resources(message_id)
+            self.assertEqual(listed["resources"][0]["resource_id"], original_resource_id)
+            self.assertEqual(listed["resources"][0]["original_name"], "synthetic-corrected.md")
+            self.assertEqual(
+                listed["source_receipt"]["freshness"]["observation_watermark"],
+                self.repository.observation_watermark(),
+            )
+            removed = replace(changed, resources=())
+            self.repository.upsert_message(
+                self.account,
+                self.group,
+                row["sender_id"],
+                row["sender_membership_id"],
+                removed,
+                parse_message(removed),
+                projection_epoch=self.service._projection_inventory_epoch(),
+            )
+            self.assertEqual(self.service.list_resources(message_id)["resources"], [])
+        retained = self.repository.resource_context(original_resource_id)
+        assert retained is not None
+        self.assertFalse(json.loads(retained["resolver_json"])["active"])
+
+    def test_remote_resource_list_dispatch_never_requests_capture_or_snapshot(self) -> None:
+        assert self.context is not None
+        message_id = str(self._resource_message()["message_id"])
+        remote = RemoteCaptureProvider(
+            RemoteCaptureSettings(
+                source_instance_id="synthetic-resource-list-source",
+                account_id=str(self.context["source_account_key"]),
+                conversations=frozenset({str(self.context["source_conversation_id"])}),
+                egress_revision="synthetic-resource-list-egress",
+                stream_epoch="synthetic-resource-list-stream",
+                edge_token_hash=hashlib.sha256(b"synthetic-resource-list-edge-token").hexdigest(),
+                socket_path=self.repository.database.path.parent / "synthetic-edge.sock",
+                origin=self.provider.descriptor,
+            )
+        )
+        replica = ReaderService(
+            remote,
+            self.repository,
+            self.service.reader,
+            self.service.token_codec,
+            default_view="replica",
+        )
+        core = CoreCapture(
+            replica,
+            SightglassConfig(
+                data_dir=self.repository.database.path.parent,
+                source_root=None,
+                window_db_path=self.repository.database.path,
+                socket_path=self.repository.database.path.parent / "synthetic-reader.sock",
+                source_kind="remote-capture",
+                source_instance_id=remote.settings.source_instance_id,
+                reader_default_view="replica",
+                activation_generation="synthetic-resource-list-generation",
+            ),
+        )
+        # No broker listener or edge is started. This uses the actual Core dispatch
+        # with a generated remote binding whose provider has no direct read RPC.
+        with (
+            patch.object(
+                remote, "snapshot", side_effect=AssertionError("remote snapshot")
+            ) as opened,
+            patch.object(
+                core, "_submit", side_effect=AssertionError("capture request")
+            ) as submitted,
+        ):
+            self.assertTrue(
+                replica.local_only_tool_call("wechat_list_resources", {"message_id": message_id})
+            )
+            listed = core.call(
+                "wechat_list_resources",
+                {"message_id": message_id},
+                lambda: replica.list_resources(message_id),
+            )
+        opened.assert_not_called()
+        submitted.assert_not_called()
+        self.assertTrue(listed["resources"])
+        self.assertEqual(listed["source_receipt"]["view"], "replica")
+        self.assertEqual(
+            replica._projection_inventory_epoch(), self.service._projection_inventory_epoch()
+        )
+
+    def test_replica_resource_list_excludes_unavailable_current_message_bodies(self) -> None:
+        assert self.context is not None
+        template = self._resource_message()
+        with self.provider.snapshot() as snapshot:
+            source = self.provider.get_message(
+                self.context["source_account_key"], str(template["source_message_id"]), snapshot
+            )
+        assert source is not None
+        identities = []
+        for index in range(6):
+            cloned = replace(source, source_message_id=f"synthetic-list-ineligible-{index}")
+            identities.append(
+                self.repository.upsert_message(
+                    self.account,
+                    self.group,
+                    template["sender_id"],
+                    template["sender_membership_id"],
+                    cloned,
+                    parse_message(cloned),
+                    projection_epoch=self.service._projection_inventory_epoch(),
+                )
+            )
+        with self.repository.database.transaction() as connection:
+            connection.execute(
+                "UPDATE messages SET body_available=0 WHERE message_id=?", (identities[0],)
+            )
+            connection.execute(
+                "INSERT INTO message_body_residency VALUES "
+                "(?,?,'on_demand',0,'1999-01-01','2000-01-01T00:00:00Z')",
+                (identities[1], self.group),
+            )
+            connection.execute(
+                "INSERT INTO body_release_jobs SELECT message_id,current_observation_seq,0 "
+                "FROM messages WHERE message_id=?",
+                (identities[2],),
+            )
+            connection.execute(
+                "UPDATE messages SET projection_epoch='synthetic-old-epoch' WHERE message_id=?",
+                (identities[3],),
+            )
+            connection.execute(
+                "UPDATE messages SET current_state='recalled' WHERE message_id=?", (identities[4],)
+            )
+            connection.execute(
+                "UPDATE messages SET current_observation_seq=NULL WHERE message_id=?",
+                (identities[5],),
+            )
+        self.offline()
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source snapshot")):
+            for message_id in identities:
+                with self.subTest(message_id=message_id):
+                    self.assertTrue(self.repository.resources_for_message(message_id))
+                    self.assert_error(
+                        ErrorCode.SOURCE_INCOMPLETE,
+                        self.service.list_resources,
+                        message_id=message_id,
+                    )
+            self.assert_error(
+                ErrorCode.MESSAGE_NOT_FOUND,
+                self.service.list_resources,
+                message_id="wxmsg_synthetic_unobserved_resource_owner",
+            )
+
+    def test_replica_resource_list_rechecks_policy_pause_and_metadata_capability(self) -> None:
+        message_id = str(self._resource_message()["message_id"])
+        self.offline()
+        reader = self.service.reader
+        original_policy = reader.policy
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source snapshot")):
+            self.assertTrue(self.service.list_resources(message_id)["resources"])
+            for policy in (
+                replace(original_policy, denied_conversation_ids=frozenset({self.group})),
+                replace(original_policy, resource_metadata=False),
+                replace(original_policy, messages=False),
+            ):
+                reader.policy = policy
+                self.assert_error(
+                    ErrorCode.POLICY_DENIED, self.service.list_resources, message_id=message_id
+                )
+            reader.policy = original_policy
+            reader.paused = True
+            self.assert_error(
+                ErrorCode.SERVICE_PAUSED, self.service.list_resources, message_id=message_id
+            )
+            reader.paused = False
+            with self.repository.database.transaction() as connection:
+                connection.execute(
+                    "UPDATE source_conversation_state SET last_error_code="
+                    "'duplicate_message_identity_conflict' WHERE conversation_id=?",
+                    (self.group,),
+                )
+            self.assert_error(
+                ErrorCode.SOURCE_INCOMPLETE, self.service.list_resources, message_id=message_id
+            )
+
+    def test_auto_resource_list_still_confirms_source_metadata(self) -> None:
+        row = self._resource_message()
+        message_id = str(row["message_id"])
+        self.assertFalse(
+            self.service.local_only_tool_call("wechat_list_resources", {"message_id": message_id})
+        )
+        with closing(sqlite3.connect(self.source_root / "messages-2.db")) as connection:
+            source = connection.execute(
+                "SELECT resources_json FROM messages WHERE source_message_id=?",
+                (row["source_message_id"],),
+            ).fetchone()
+            assert source is not None
+            resources = json.loads(source[0])
+            resources[0]["original_name"] = "synthetic-fresh-source-name.md"
+            connection.execute(
+                "UPDATE messages SET resources_json=? WHERE source_message_id=?",
+                (json.dumps(resources), row["source_message_id"]),
+            )
+            connection.commit()
+        self.service.default_view = "replica"
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source snapshot")):
+            admitted = self.service.list_resources(message_id)
+        self.assertEqual(admitted["resources"][0]["original_name"], "notes.md")
+        self.assertFalse(admitted["source_receipt"]["freshness"]["live_refresh_confirmed"])
+        self.service.default_view = "auto"
+        with patch.object(self.provider, "snapshot", wraps=self.provider.snapshot) as opened:
+            listed = self.service.list_resources(message_id)
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(listed["resources"][0]["original_name"], "synthetic-fresh-source-name.md")
+        self.assertTrue(listed["source_receipt"]["complete"])
+        self.assertEqual(listed["source_receipt"]["freshness"]["mode"], "live_source")
+        self.assertTrue(listed["source_receipt"]["freshness"]["live_refresh_confirmed"])
+        with patch.object(
+            self.provider, "snapshot", side_effect=SightglassError(ErrorCode.SERVICE_UNAVAILABLE)
+        ):
+            self.assert_error(
+                ErrorCode.SERVICE_UNAVAILABLE, self.service.list_resources, message_id=message_id
+            )
 
     def test_actual_fresh_range_tie_boundary_and_overlap_survive_restart(self) -> None:
         expected = self.append_tied_source()

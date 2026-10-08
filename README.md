@@ -24,7 +24,10 @@ there is no public Sightglass listener or arbitrary provider-method RPC.
 Remote configurations default to `view="replica"`: messages, search, links, retrieval,
 resource catalog and cached bytes use admitted state while the Mac is offline. Results
 report partial resident coverage and bounded freshness; a zero-hit replica result
-cannot prove source absence. Use `view="fresh"` for bounded source verification.
+cannot prove source absence. `wechat_list_resources` lists the owning message's current
+resident bindings; an expired or released body returns `SOURCE_INCOMPLETE`, and an
+inactive historical resolver is never restored. Use `view="fresh"` on tools that expose
+it for bounded source verification.
 Fresh updates reconcile independently of the ACK position, eventually restarting a
 completed scan to find old-position arrivals/corrections; pages never claim one global
 change snapshot. Missing source prefixes fail closed. A scoped `request_id` retains
