@@ -68,7 +68,9 @@ inventory, then installed separately without activating the original tunnel prof
 These candidate checks do not establish production or ordinary-host acceptance.
 
 The current migration is **activated and accepted for the configured installation**.
-Exact old-database retirement awaits the owner's inventory decision. Production
+The owner-approved inactive local database has been retired as one exact file.
+The remaining native enrollment/state, previous usable release and verified local
+and target recovery copies are retained. Production
 preparation has created
 encrypted target storage and provisioned scoped reader/operator/tunnel credentials,
 typed configurations, fixed SSH capabilities and supervisor definitions. Native database
@@ -122,7 +124,8 @@ context, a fresh owning message, local resource metadata and a second actual fre
 context call. Content-free backend receipts confirm all five calls; fresh pages
 carry their new `fresh_as_of`, while resource metadata retains replica/bounded-stale
 semantics. This closes the failed host path without repeating unaffected tools.
-Exact old-database retirement still requires the owner's inventory approval.
+Post-retirement checks confirmed the active core, connected edge and original tunnel;
+installation-specific inventory, authorization and receipts remain outside Git.
 See [VPS migration](VPS-MIGRATION.md),
 [Capture protocol](CAPTURE-PROTOCOL.md) and [Linux processing](LINUX-PROCESSING.md).
 
