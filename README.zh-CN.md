@@ -14,7 +14,7 @@ Sightglass 是一个采用 macOS native source 与 portable core 的实验性 re
 
 ## 可选 Mac edge 与 Linux core
 
-Remote core implementation 当前是 candidate；安装与 production cutover 按
+可选 remote core 属于开发预览；安装与 production cutover 按
 [VPS 迁移操作](docs/VPS-MIGRATION.md)执行。仍使用同一套十三个 tools 与 schema-v10 state。
 薄 Mac edge 只拥有 native read-only session 和一个 64 MiB ordered spool；Linux core 独占
 `window.db`、reader ACK、immutable deliveries、CAS、processing 与 MCP。Edge 主动建立固定

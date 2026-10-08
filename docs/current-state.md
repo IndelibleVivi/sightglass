@@ -12,7 +12,7 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Mac edge and Linux core candidate
+## Mac edge and Linux core
 
 The remote-core source adds the registered `remote-capture` binding, Linux file-backed
 credentials, a bounded Mac capture edge, authenticated outgoing SSH stdio and a
@@ -67,7 +67,9 @@ was verified against its release attestation, signed digests, exact archive and 
 inventory, then installed separately without activating the original tunnel profile.
 These candidate checks do not establish production or ordinary-host acceptance.
 
-The current migration is **activated; host acceptance remains incomplete**. Production preparation has created
+The current migration is **activated and accepted for the configured installation**.
+Exact old-database retirement awaits the owner's inventory decision. Production
+preparation has created
 encrypted target storage and provisioned scoped reader/operator/tunnel credentials,
 typed configurations, fixed SSH capabilities and supervisor definitions. Native database
 and image keys remain in the Mac Keychain. The final Linux speech helper and its
@@ -100,17 +102,28 @@ Explicit fresh access failed closed. The managed edge reconnected after the owne
 confirmed the new process's App Data prompt; this does not establish unattended
 restart permission. Before/after process and storage samples are recorded privately.
 
+The relay correction in `09dc5d3` marks unfinalized work abandoned, recovers exact
+replay through a retryable single-flight rejection, and rechecks ownership inside
+the terminal writer. Its [hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/37720731261)
+passed 1,418 macOS tests with four skips and 781 portable tests with two skips,
+plus full Pyright, Ruff, compileall, builds and the synthetic example. An immutable
+Linux candidate passed 145 installed capture/relay/replica/resource tests with two
+skips and exact module/license, frozen dependency and native SILK byte checks, then
+was activated under the existing database, configuration and grants. The same Mac
+edge process reconnected; the original tunnel and Codex connector status passed.
+Controlled fresh reads and fresh update lost-response replay passed, and the earlier
+pending batch's exact durable rejected terminal was verified.
+
 The ordinary-model ChatGPT run exercised all thirteen tools and passed resident,
-resource and cached-transcript reads, but fresh revalidation exposed an unfinalized
-capture ticket that kept replaying without a terminal ACK. Restarting the same core
-recovered that exact pending batch under the same grants. The source correction now
-marks unfinalized work abandoned, recovers exact replay through a retryable
-single-flight rejection, and rechecks ownership inside the terminal writer. Its
-55 focused capture/relay tests passed, including transaction rollback, active-ticket
-and terminal-CAS races, expired-body rejection and two-process lost ACK. Hosted
-coverage, immutable installation and renewed host acceptance for this correction
-are pending. Exact old-database
-retirement still requires the owner's inventory approval. See [VPS migration](VPS-MIGRATION.md),
+resource and cached-transcript reads, but fresh revalidation had exposed the
+unfinalized ticket. After the relay promotion, the same ordinary model and reasoning
+intensity passed the five-step fresh revalidation: ready/unpaused status, fresh
+context, a fresh owning message, local resource metadata and a second actual fresh
+context call. Content-free backend receipts confirm all five calls; fresh pages
+carry their new `fresh_as_of`, while resource metadata retains replica/bounded-stale
+semantics. This closes the failed host path without repeating unaffected tools.
+Exact old-database retirement still requires the owner's inventory approval.
+See [VPS migration](VPS-MIGRATION.md),
 [Capture protocol](CAPTURE-PROTOCOL.md) and [Linux processing](LINUX-PROCESSING.md).
 
 ## Implemented paths

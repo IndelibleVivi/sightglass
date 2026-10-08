@@ -14,9 +14,10 @@ Use it when a reader needs to inspect the original conversation, follow one part
 
 ## Optional Mac edge and Linux core
 
-The remote-core implementation is a candidate; installation and production cutover
-require the [VPS migration procedure](docs/VPS-MIGRATION.md). It uses the same thirteen
-tools and schema-v10 state. A thin Mac edge owns native read-only sessions and one
+The optional remote core is part of the development preview. Installation and
+production cutover require the [VPS migration procedure](docs/VPS-MIGRATION.md).
+It uses the same thirteen tools and schema-v10 state. A thin Mac edge owns native
+read-only sessions and one
 64 MiB ordered spool; the Linux core alone owns `window.db`, reader ACK, immutable
 deliveries, CAS, processing and MCP. The edge initiates a fixed SSH stdio connection;
 there is no public Sightglass listener or arbitrary provider-method RPC.
