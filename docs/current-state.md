@@ -38,13 +38,12 @@ the redundant `view` argument missing from an existing host catalog.
 The `10bb2fe` noneditable Linux core and Mac edge candidates passed 206 and 64
 installed tests respectively, with exact package/source and frozen-runtime parity.
 The authorized core installation is active and its original tunnel is healthy.
-A follow-up Linux core wheel from local commit `20964ac` also passed 206 installed
-tests with exact package/source and frozen-runtime parity. It remains a candidate;
-that source commit has not been pushed because Git credentials are unavailable.
+A follow-up Linux core wheel from commit `20964ac` also passed 206 installed
+tests with exact package/source and frozen-runtime parity. It remains a candidate.
 The verified Mac edge runtime is selected in its supervisor, while activation and
 native acceptance remain blocked by local macOS authentication. The earlier edge
-runtime and private state are retained. The
-original MCP connection still serves resident reads during that actual disconnect.
+runtime and private state are retained. The original MCP connection still serves
+resident reads during that actual disconnect.
 Current ordinary-host acceptance and unattended edge restart are not established.
 Optional semantic remains disabled without separate exact-scope
 authorization; it is not implied by these local reliability changes. The preceding
