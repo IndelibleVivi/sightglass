@@ -34,6 +34,9 @@ the final cancellation hardening. Its hosted portable and full macOS gates also
 passed. A subsequent guidance compatibility check passed 63 contract/replica tests:
 the cold conversation action selects fresh through `refresh=true`, without requiring
 the redundant `view` argument missing from an existing host catalog.
+That follow-up in `20964ac` also passed the
+[hosted portable and full macOS gates](https://github.com/IndelibleVivi/sightglass/actions/runs/38055298267)
+on public main `7a01036`.
 
 The `10bb2fe` noneditable Linux core and Mac edge candidates passed 206 and 64
 installed tests respectively, with exact package/source and frozen-runtime parity.
