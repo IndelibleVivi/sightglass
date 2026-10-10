@@ -66,11 +66,23 @@ in both directions and retains exact-second controls. The affected native/captur
 suite passed 171 tests, plus full Pyright and Ruff/compileall. Commit `4224374`
 passed its [hosted portable and full macOS gates](https://github.com/IndelibleVivi/sightglass/actions/runs/38063371431).
 Its noneditable Mac wheel passed the installed edge suite and the added boundary
-regression, with exact module/license and frozen-runtime parity. It is selected in
+regression, with exact module/license and frozen-runtime parity. It is activated in
 the existing supervisor; the Linux core remains on the compatible `20964ac` source.
-The replacement Mac process is waiting at file access while the screen is locked,
-so its activation, live time-window check, ordinary-host native fresh acceptance
-and unattended edge restart are not yet established.
+After the operator accepted the replacement process's macOS App Data prompt, the
+edge connected. Bounded fresh recent, point, context, backward pagination and the
+fractional-bound forward time window passed with consistent canonical identities.
+The original Codex MCP connection also passed fresh recent and context reads,
+with resident reads remaining explicitly `bounded_stale`.
+The original ChatGPT conversation completed the same native fresh path with
+ordinary GPT-6 at the selected reasoning intensity. Its final single-turn run
+passed fresh recent and same-anchor context, with context succeeding on its first
+attempt; resident reads retained their replica freshness. An earlier context
+attempt failed closed with `SOURCE_GENERATION_CHANGED`; that result is retained
+separately and is not rewritten as a success. These bounded checks do not establish
+complete history coverage or acceptance of every other capability.
+The controlled replacement restart recovered after the owner confirmation;
+unattended edge restart permission is not established. Existing configuration,
+ownership, database, spool namespace and previous runtimes remain retained.
 Optional semantic remains disabled without separate exact-scope
 authorization; it is not implied by these local reliability changes. The preceding
 installation and hosted evidence below belongs to the earlier source versions.
