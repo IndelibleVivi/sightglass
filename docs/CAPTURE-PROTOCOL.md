@@ -1,9 +1,10 @@
 # Sealed source capture protocol
 
 This document specifies `sightglass.capture.v1`, the private boundary between a
-thin source edge and the Sightglass core. The implementation is a source
-candidate. Passing fixture checks does not enroll an account, authorize content
-egress, establish a live SSH configuration, or activate a deployment.
+thin source edge and the Sightglass core. [Current state](current-state.md) owns
+source and installation acceptance status. Passing fixture checks does not enroll
+an account, authorize content egress, establish a live SSH configuration, or
+activate a deployment.
 
 The edge owns native source access and native image decryption. The core owns
 reader policy, residency, message admission, delivery/ACK state, resource
@@ -64,10 +65,10 @@ against the ceiling before serialization, including their titles and aliases.
 | Operation | Declared input | Captured result |
 | --- | --- | --- |
 | `catalog` | Exact account | Filtered account/conversation evidence and catalog coverage flags; no message bodies. |
-| `recent` | One conversation and a limit | One bounded recent page, its metadata/roster and page flags. |
-| `range` | One conversation; source sort bounds, direction, limit; optional exact participant/time filters | One bounded base page, metadata/roster and page flags. Optional cursor boundary IDs are canonically verified separately. |
+| `recent` | One conversation and a limit | One bounded recent page, its metadata, required sender evidence and page flags. |
+| `range` | One conversation; source sort bounds, direction, limit; optional exact participant/time filters | One bounded base page, metadata, required sender evidence and page flags. Optional cursor boundary IDs are canonically verified separately. |
 | `context` | One conversation, exact focus message and before/after counts | Focus plus its bounded canonical context and context flags. |
-| `verify` | One conversation, or an explicit tuple of at most 200 conversations; at most 200 exact message IDs | Canonical current messages or bounded missing-ID evidence, with the declared conversations' metadata/rosters. |
+| `verify` | One conversation, or an explicit tuple of at most 200 conversations; at most 200 exact message IDs | Canonical current messages or bounded missing-ID evidence, with the declared conversations' metadata and required sender evidence. |
 | `discovery` | One conversation, opaque typed continuation position, limit and optional time bounds | A bounded physical candidate page, canonical verification of captured candidates, exact continuation and scanned-row evidence. |
 | `resource` | One conversation, owning source message, binding-authenticated opaque resource key, exact descriptor and expected resolver revision | One exact resource variant and its full bytes; no owning-message hydration. |
 
@@ -100,6 +101,14 @@ used by timeline cursors.
 An empty verification request still needs at least one declared conversation and
 captures that scope's metadata lease. It never widens to an implicit account-wide
 search or claims that the whole history was searched.
+
+The executor follows the provider's `message_sender_evidence_complete` contract.
+When every returned message already carries the stable sender and current-label
+evidence needed for admission, a message operation does not additionally capture
+a participant-discovery roster. Providers without that guarantee retain roster
+capture. Explicit participant discovery remains independent; skipping an
+unrequested roster does not establish full membership coverage or relax canonical
+identity validation inside the requested page/context.
 
 A `range` request may include before/after context counts for every base-page
 message. The executor collects those exact neighbor windows in the same source
@@ -139,6 +148,13 @@ resource bytes. The document binds:
   page/context/discovery/resource evidence.
 - A terminal receipt with seal time, bounded fresh-until time, operation coverage
   and a content-free error reason when rejected.
+
+An identity-conflict rejection uses the finite
+`duplicate_message_identity_conflict` reason. The frozen provider projects it as
+`SOURCE_INCOMPLETE` with the same warning code, allowing the core to preserve
+diagnostic and degraded-conversation semantics. Arbitrary exception details,
+identities and source content never enter an error receipt. Older edges that
+report only `SOURCE_INCOMPLETE` remain readable but cannot supply this subtype.
 
 The native provider implementation remains the original v6 implementation. The
 origin interpretation epoch uses the existing tail-projection provider/parser

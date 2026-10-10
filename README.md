@@ -34,6 +34,19 @@ cannot prove source absence. `wechat_list_resources` lists the owning message's 
 resident bindings; an expired or released body returns `SOURCE_INCOMPLETE`, and an
 inactive historical resolver is never restored. Use `view="fresh"` on tools that expose
 it for bounded source verification.
+`wechat_status` distinguishes transport from confirmation in `view="replica"`:
+`read_plane.capture_transport` reports whether the capture edge is currently connected
+(transport evidence only, without probing the source); `read_plane.live_refresh_available`
+reports whether a fresh request can be started now (connected transport or a confirmed
+capture, never while paused) while `read_plane.live_refresh_confirmed` reports whether a
+current capture actually confirmed source facts, and
+`readiness.live_refresh`/`resource_acquisition` report `awaiting_confirmation` until a
+current capture actually confirms source facts, and `degraded` only when that transport
+is disconnected or unobserved. An empty resident inbox likewise means no resident body,
+not a missing observed catalog: its `next_actions` point at `wechat_find_conversations`
+(enumerating the observed catalog under the caller's account/kind scope) and then an
+explicit bounded `wechat_read_messages` fresh read of one chosen `conversation_id`.
+The guidance is caller instruction only and never executes or bulk-fills history.
 Fresh updates reconcile independently of the ACK position, eventually restarting a
 completed scan to find old-position arrivals/corrections; pages never claim one global
 change snapshot. Missing source prefixes fail closed. A scoped `request_id` retains

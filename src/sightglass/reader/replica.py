@@ -113,6 +113,11 @@ class ReplicaReader:
              "display_name": str(row["current_display_name"]), "active": bool(row["active"])}
             for row in self.repository.active_accounts()
         ]
+        # The replica view never claims live source availability or a fresh capture
+        # confirmation. ``_status_payload`` adds the owner-supplied transport evidence
+        # (``read_plane.capture_transport``) so a connected edge is not mistaken for a
+        # disconnected source, and ``readiness.live_refresh`` distinguishes
+        # ``awaiting_confirmation`` from ``degraded``. This reads local metadata only.
         result = self.service._status_payload(
             SourceHealth(configured=True, available=False, account_count=len(accounts),
                          source_state="unknown", fresh_as_of="", inventory_digest="",
@@ -122,6 +127,7 @@ class ReplicaReader:
         )
         result["read_plane"]["default_view"] = "replica"
         result["read_plane"]["freshness"] = "bounded_stale"
+        result["read_plane"]["view"] = "replica"
         return result
 
     def list_resources(self, message_id: str) -> dict[str, Any]:

@@ -102,6 +102,41 @@ def next_actions(
                         "parameter": "reading_token", "token_path": "reading_token",
                         "reuse_arguments": True, "clear_arguments": ["cursor"],
                         "wait_ms": value.get("retry_after_ms", 1000)})
+    # An empty resident inbox is not proof that the observed catalog is empty: an
+    # ``on_demand``/replica body view deliberately holds no continuous history. Point
+    # the caller at the observed conversation catalog (which does not require resident
+    # bodies) and then at a bounded fresh source read of a single chosen conversation,
+    # without leaking unauthorized conversation counts, IDs or labels. These are
+    # caller guidance only: nothing is executed, and no bulk history is filled. The
+    # discovery action preserves the caller's account/kind scope and never widens the
+    # account filter; the message read is explicitly a bounded fresh reread.
+    if (
+        name == "wechat_read_inbox"
+        and not value.get("items")
+        and isinstance(value.get("coverage"), dict)
+        and value["coverage"].get("message_scope") == "resident"
+    ):
+        discover_arguments: dict[str, Any] = {"query": ""}
+        account_id = value.get("account_id") or arguments.get("account_id")
+        if isinstance(account_id, str) and account_id:
+            discover_arguments["account_id"] = account_id
+        kinds = arguments.get("kinds")
+        if isinstance(kinds, (list, tuple)) and kinds:
+            discover_arguments["kinds"] = list(kinds)
+        actions.append({"kind": "discover", "tool": "wechat_find_conversations",
+                        "arguments": discover_arguments})
+        # The caller must pick one conversation_id from the discover result; the read
+        # is a deliberate bounded source acquisition (never an implicit auto-refresh),
+        # so it names mode/refresh/view explicitly and leaves voice off.
+        actions.append({
+            "kind": "message_read",
+            "tool": "wechat_read_messages",
+            "requires_arguments": ["conversation_id"],
+            "select_from": {"tool": "wechat_find_conversations",
+                            "field": "candidates[].conversation_id"},
+            "arguments": {"mode": "recent", "refresh": True, "view": "fresh",
+                          "voice": "off"},
+        })
     if name == "wechat_read_transcripts" and not value.get("processing_complete") and not value.get(
         "has_more_results_now"
     ) and arguments.get("reading_token"):

@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-08. This page owns current source, candidate and publication status.
+Updated: 2026-10-10. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -11,6 +11,30 @@ history belong in private operator records outside Git.
 - Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and native provider `sightglass.macos-wechat.sqlcipher.v6`. Native access supports only WeChat **4.1.13 / build 269602 / arm64** on macOS; one exact account and verified keys require explicit operator authorization.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
+
+## Daily-use reliability follow-up
+
+The current source separates replica freshness from capture transport evidence:
+a connected edge permits an explicit fresh request while source confirmation stays
+unknown until capture. Empty resident inboxes guide catalog discovery followed by
+one bounded fresh conversation read. They do not trigger history refill or change
+on-demand residency. Ordinary native message capture reuses its complete sender
+evidence instead of scanning an unrelated participant roster; finite identity
+conflict reasons survive sealed transport without exposing arbitrary error details.
+
+Equivalent same-shard ordinary-text copies retain one stable minimum-rowid position
+across recent/range, point, context and preparation. Exact raw evidence equality is
+required; real conflicts and media ambiguity still fail closed. Duplicate-heavy
+windows refill their positions within the same lease instead of losing neighbors.
+Schema v10, native v6 and stable message-token formats remain unchanged.
+
+Local source verification passed 1,431 tests, full Pyright, Ruff/compileall and
+diff checks; focused native/capture/replica checks also passed after the final
+cancellation hardening. Immutable candidate preparation, activation and current
+ordinary-host acceptance have not yet been established for this source.
+Optional semantic remains disabled without separate exact-scope
+authorization; it is not implied by these local reliability changes. The preceding
+installation and hosted evidence below belongs to the earlier source versions.
 
 ## Mac edge and Linux core
 

@@ -318,6 +318,57 @@ class CoreCaptureTests(unittest.TestCase):
             )
         )
 
+    def test_replica_status_reports_edge_transport_without_source_or_capture_confirmation(
+        self,
+    ) -> None:
+        # The broker is the single transport-evidence owner. Status must reflect a live
+        # edge connection without opening the source, initiating capture, or claiming a
+        # fresh capture confirmation.
+        with (
+            mock.patch.object(
+                self.provider, "session", side_effect=AssertionError("status opened source")
+            ),
+            mock.patch.object(
+                self.provider, "snapshot", side_effect=AssertionError("status opened source")
+            ),
+            mock.patch.object(
+                self.core, "_submit", side_effect=AssertionError("status requested capture")
+            ),
+        ):
+            disconnected = self.service.status()
+            self.assertEqual(disconnected["read_plane"]["default_view"], "replica")
+            self.assertEqual(
+                disconnected["read_plane"]["capture_transport"], "edge_disconnected"
+            )
+            self.assertEqual(disconnected["readiness"]["live_refresh"], "degraded")
+            self.assertFalse(disconnected["read_plane"]["live_refresh_available"])
+            self.assertFalse(disconnected["read_plane"]["live_refresh_confirmed"])
+            self.assertIn("replica_view_not_live", disconnected["source"]["warnings"])
+
+            self.start_edge()
+            connected = self.service.status()
+            self.assertEqual(connected["read_plane"]["capture_transport"], "edge_connected")
+            # Connected transport is evidence, not confirmation: a fresh request can be
+            # initiated, but source facts remain unconfirmed and readiness is explicitly
+            # awaiting confirmation.
+            self.assertEqual(connected["readiness"]["live_refresh"], "awaiting_confirmation")
+            self.assertTrue(connected["read_plane"]["live_refresh_available"])
+            self.assertFalse(connected["read_plane"]["live_refresh_confirmed"])
+            self.assertIn("replica_view_not_live", connected["source"]["warnings"])
+            self.assertEqual(connected["source"]["source_state"], "unknown")
+            self.assertFalse(connected["source"]["available"])
+        # The broker remains the sole source of transport evidence.
+        self.assertEqual(self.core.transport_evidence(), "edge_connected")
+        self.assertEqual(self.core.status()["edge_connected"], True)
+        self.stop_edge()
+        deadline = time.monotonic() + 2
+        while self.core.broker.connected and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual(self.core.transport_evidence(), "edge_disconnected")
+        self.assertEqual(
+            self.service.status()["read_plane"]["capture_transport"], "edge_disconnected"
+        )
+
     def test_fresh_ack_capture_and_lost_response_replay_share_one_commit(self) -> None:
         first = self.call("wechat_read_messages", mode="updates", conversation_id=self.group)
         self.assertIsNotNone(first["page"]["delivery_id"], first)

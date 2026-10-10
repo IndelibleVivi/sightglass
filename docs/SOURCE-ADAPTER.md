@@ -52,6 +52,21 @@ Native context reads use the optional `ContextSourceProvider.read_context` capab
 
 Stable internal message tokens use `conversation + nonzero server_id` when available, otherwise `conversation + logical shard + nonzero local_id + create_time + type`, with row/time/sort/type/payload evidence only as the final fallback. Conflicting copies of one stable identity fail closed; `get_message` resolves the stable fields rather than trusting an old physical row location. The canonical native token builder lives in `source/message_identity.py`. A valid positive appmsg reply server ID can resolve a private target token in the same conversation; retrieval exposes only an admitted canonical target under the same hard scope, while ordinary reply projection retains its unresolved display contract. Only repository-derived opaque IDs cross the MCP boundary. In a group row, canonical member evidence exists only when the same shard's `real_sender_id` maps through `Name2Id.user_name` and the raw sender envelope is the exact `mapped_sender + ":\n"` prefix. That evidence overrides a misleading status value; mismatch or unverifiable envelope remains unresolved, while an outgoing row without a member envelope may resolve to account self. System/recall rows are always non-human events and never become self. The verified prefix is removed from visible text. Current contact remark/nickname is stored as account-scoped `current_only` label evidence; it is not retroactively projected as exact message-time `shown_as`. The native v6 descriptor (parser `sightglass.wechat-parser.v2`) declares complete per-message sender evidence, so ordinary message reads admit their returned senders directly instead of pre-scanning 200 roster messages; explicit participant discovery keeps the bounded roster scan, reuses canonical sender parsing without resolving attachments, and records the latest observed activity for every sender (including pre-seeded self/direct participants). An already-admitted native target can skip the account catalog refresh and use a conversation/message session while preserving current roster and final selected-dependency validation. Providers without that evidence flag retain the original roster-first behavior.
 
+Same-shard copies of a positive server identity are equivalent only for ordinary
+text (`local_type=1`) with exactly equal stored content, compression type, time,
+sequence, status, packed envelope and raw/mapped sender evidence. Their local IDs
+and physical rowids may differ; the smallest rowid is the one canonical timeline
+position. Recent/range, point lookup, preparation and context use that same position.
+Candidate identity metadata is batched; payload equality is proved only for selected
+duplicate identities before resource hydration. Coordinate or content conflicts,
+media copies and cross-shard conflicts retain fail-closed handling. A normal unique
+context/preparation uses its existing seek or position pass; retained text copies
+can trigger bounded position refills so they do not displace unique neighbors or
+the `has_more` sentinel. Refills remain within the same dependency lease and
+cancellation budget; they do not create indexes, read unrelated bodies or admit
+intermediate progress. Discovery still returns bounded physical candidates and
+requires canonical `get_message` validation before admission.
+
 Shared catalog SQLCipher handles have one registry-owned lifecycle: reserve before
 waiting on the handle lock, single-flight construction, post-open identity checking,
 and same-path old-identity retirement. Only zero-user handles are evicted, by a
@@ -159,6 +174,14 @@ post-commit local ticket completion permits the broker thread to send the durabl
 wire ACK. There is no transport wait in the writer or source-session close. Fresh
 source failure still rolls back reader ACK; transport loss recovery never advances
 it. Exact terminal ACKs and stream high-water remain durable after body cleanup.
+
+Remote message capture also respects `message_sender_evidence_complete`: a
+provider that supplies stable sender/current-label evidence on every returned
+message does not add an independent roster scan to a small page or exact-ID
+verification. Providers without that guarantee still capture the roster. A
+conflict encountered within the declared read continues to reject the operation;
+its finite `duplicate_message_identity_conflict` warning survives transfer without
+serializing private exception details.
 
 Cold resource read/search no longer rehydrates the owning message or opens two global snapshots. The already-authorized active canonical resource row owns one binding-authenticated source locator and a captured resolver revision. The service opens one `resource` session, reads that exact locator once through the provider's existing no-follow/link/digest/file-mutation checks, lets the session revalidate its selected auxiliary databases and returned file, and then closes the source lease. MIME sniffing, PDF/image/Office/archive processing and CAS staging happen afterward, outside both the source session and the `window.db` writer lock. A short transaction re-authorizes the row and compares the resolver revision before binding any original or derivative object; a race leaves the immutable CAS object unbound for normal cleanup. When the required source variant already has a private CAS binding, `wechat_read_resource` stays entirely local while retaining the same authorization, active-resolver, per-read object-integrity and revision checks. Ordinary long source scans, parsing, projection, receipt persistence, and processor work therefore do not monopolize the SQLite writer lock. Current-source responses select the exact stable message IDs in the admitted page; older retained observations remain auditable but are not silently presented under a newer receipt.
 

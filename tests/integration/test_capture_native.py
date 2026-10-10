@@ -104,6 +104,82 @@ class NativeCaptureBoundaryTests(unittest.TestCase):
         self.assertNotIn(str(self.fixture.root).encode(), envelope.metadata)
         self.assertEqual(set(dict(document.origin.selected_generations)), {"message/message_0.db"})
 
+    def test_complete_message_sender_evidence_avoids_unrequested_roster_scan(self) -> None:
+        # A tiny message read must not depend on older rows needed only by an
+        # independent participant-discovery operation.
+        with mock.patch.object(
+            self.provider, "list_participants", side_effect=AssertionError("unexpected roster")
+        ) as roster:
+            envelope = self.capture()
+        document = envelope.document()
+        self.assertEqual(document.receipt.terminal, "complete", document.receipt.reason)
+        self.assertEqual(len(document.evidence.messages), 2)
+        self.assertTrue(document.origin.message_sender_evidence_complete)
+        self.assertEqual(document.evidence.participants, ())
+        self.assertTrue(all(message.sender_keys for message in document.evidence.messages))
+        self.assertTrue(FrozenCaptureProvider(envelope).descriptor.message_sender_evidence_complete)
+        roster.assert_not_called()
+
+    def test_incomplete_sender_evidence_retains_roster_capture(self) -> None:
+        descriptor = replace(self.provider.descriptor, message_sender_evidence_complete=False)
+        with (
+            mock.patch.object(type(self.provider), "descriptor", new_callable=mock.PropertyMock,
+                              return_value=descriptor),
+            mock.patch.object(self.provider, "list_participants",
+                              wraps=self.provider.list_participants) as roster,
+        ):
+            document = self.capture().document()
+        self.assertEqual(document.receipt.terminal, "complete", document.receipt.reason)
+        self.assertFalse(document.origin.message_sender_evidence_complete)
+        self.assertTrue(document.evidence.participants)
+        roster.assert_called_once()
+
+    def test_selected_identity_conflict_keeps_content_free_cause_across_capture(self) -> None:
+        failure = SightglassError(
+            ErrorCode.SOURCE_INCOMPLETE,
+            details={"warning_codes": ["duplicate_message_identity_conflict"],
+                     "private_detail": "synthetic-unprojectable-detail"},
+        )
+        with mock.patch.object(self.provider, "read_recent", side_effect=failure):
+            envelope = self.capture()
+        document = envelope.document()
+        self.assertEqual(document.receipt.terminal, "rejected")
+        self.assertEqual(document.evidence.messages, ())
+        self.assertNotIn(b"synthetic-unprojectable-detail", envelope.metadata)
+        with self.assertRaises(SightglassError) as caught:
+            FrozenCaptureProvider(envelope)
+        self.assertEqual(caught.exception.code, ErrorCode.SOURCE_INCOMPLETE)
+        self.assertEqual(caught.exception.details,
+                         {"warning_codes": ["duplicate_message_identity_conflict"]})
+
+    def test_uncatalogued_source_error_details_never_cross_capture(self) -> None:
+        failure = SightglassError(
+            ErrorCode.SOURCE_INCOMPLETE,
+            details={"warning_codes": ["synthetic-unprojectable-detail"]},
+        )
+        with mock.patch.object(self.provider, "read_recent", side_effect=failure):
+            envelope = self.capture()
+        self.assertEqual(envelope.document().receipt.reason, "SOURCE_INCOMPLETE")
+        self.assertNotIn(b"synthetic-unprojectable-detail", envelope.metadata)
+        with self.assertRaises(SightglassError) as caught:
+            FrozenCaptureProvider(envelope)
+        self.assertEqual(caught.exception.details, {})
+
+    def test_malformed_warning_metadata_still_seals_generic_rejection(self) -> None:
+        for codes in (None, "duplicate_message_identity_conflict",
+                      {"duplicate_message_identity_conflict": True}):
+            with self.subTest(codes=codes):
+                failure = SightglassError(ErrorCode.SOURCE_INCOMPLETE,
+                                         details={"warning_codes": codes})
+                with mock.patch.object(self.provider, "read_recent", side_effect=failure):
+                    envelope = self.capture()
+                self.assertEqual(envelope.document().receipt.terminal, "rejected")
+                self.assertEqual(envelope.document().receipt.reason, "SOURCE_INCOMPLETE")
+                with self.assertRaises(SightglassError) as caught:
+                    FrozenCaptureProvider(envelope)
+                self.assertEqual(caught.exception.code, ErrorCode.SOURCE_INCOMPLETE)
+                self.assertEqual(caught.exception.details, {})
+
     def test_unchanged_cached_contacts_bind_session_without_rereading_metadata(self) -> None:
         self.warm_routing_catalog()
         original_open = self.provider._open_scoped_connection

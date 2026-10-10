@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 from sightglass.contracts.capture import (
+    SOURCE_IDENTITY_CONFLICT_REASON,
     CaptureCeiling,
     CaptureContextWindow,
     CaptureCoverage,
@@ -143,6 +144,13 @@ class CaptureExecutor:
         except (SightglassError, CaptureProtocolError) as exc:
             terminal = "cancelled" if cancelled is not None and cancelled.is_set() else "rejected"
             reason = exc.code.value if isinstance(exc, SightglassError) else exc.reason
+            warning_codes = (
+                exc.details.get("warning_codes") if isinstance(exc, SightglassError) else ()
+            )
+            if (isinstance(exc, SightglassError) and exc.code == ErrorCode.SOURCE_INCOMPLETE
+                    and isinstance(warning_codes, (list, tuple))
+                    and SOURCE_IDENTITY_CONFLICT_REASON in warning_codes):
+                reason = SOURCE_IDENTITY_CONFLICT_REASON
             evidence, resource, coverage = CaptureEvidence(), b"", CaptureCoverage("none")
         except Exception:
             terminal, reason = "rejected", "INTERNAL_ERROR"
@@ -272,13 +280,17 @@ class CaptureExecutor:
             if conversation is None:
                 raise SightglassError(ErrorCode.CONVERSATION_NOT_FOUND)
             conversations.append(conversation)
-            participants.extend(
-                self.provider.list_participants(
-                    request.account_id,
-                    conversation_id,
-                    snapshot,
+            # Native messages already carry stable sender/current-label evidence.
+            # Match the ordinary reader's fence: a bounded body read must not
+            # depend on an unrelated 200-message participant-discovery window.
+            if not self.provider.descriptor.message_sender_evidence_complete:
+                participants.extend(
+                    self.provider.list_participants(
+                        request.account_id,
+                        conversation_id,
+                        snapshot,
+                    )
                 )
-            )
         base = CaptureEvidence(
             accounts=accounts, conversations=tuple(conversations), participants=tuple(participants)
         )

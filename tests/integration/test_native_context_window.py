@@ -708,30 +708,27 @@ class NativeContextWindowTests(unittest.TestCase):
         self.assertTrue(page.has_more_after)
         self.assertEqual(resources.call_count, 9)
 
-    def test_within_shard_duplicate_server_rows_match_existing_conflict_contract(self) -> None:
-        # The server_id index is not unique. Same payload/time/seq rows with this
-        # ID still have distinct physical rowids, which the current canonical
-        # evidence contract treats as conflicting positions, not equal overlap.
-        for number in range(3, 15):
-            backward = number < 9
+    def test_equivalent_text_copies_keep_canonical_position_and_unique_neighbors(self) -> None:
+        # Distinct local/physical rows are transport copies of one stable server ID.
+        # Evidence equality excludes only those physical coordinates for text; the
+        # smallest rowid remains the position for point, timeline and context reads.
+        for number in range(3, 75):
+            backward = number < 39
             self.fixture._insert_message(
-                local_id=number,
-                server_id=900 if backward else 901,
-                sort_seq=100,
+                local_id=number, server_id=900 if backward else 901, sort_seq=100,
                 create_time=1725000001 if backward else 1725000003,
                 content="synthetic identical repeated server payload",
             )
         self.fixture._insert_message(
-            local_id=15,
-            server_id=902,
-            sort_seq=1,
-            create_time=1725000004,
+            local_id=75, server_id=902, sort_seq=1, create_time=1725000004,
             content="synthetic farther unique message",
         )
         table = self.fixture._table_name(self.fixture.conversation)
-        focus_id = self.provider._message_token(
-            self.fixture.conversation, {"server_id": 102}, "message/message_0.db"
-        )
+        def token(value: int) -> str:
+            return self.provider._message_token(
+                self.fixture.conversation, {"server_id": value}, "message/message_0.db"
+            )
+        expected = [token(value) for value in (101, 900, 102, 901, 902)]
         for indexed in (False, True):
             if indexed:
                 writer = self.fixture._connect_new("message/message_0.db")
@@ -742,62 +739,144 @@ class NativeContextWindowTests(unittest.TestCase):
                     writer.commit()
                 finally:
                     writer.close()
-            for direction in ("backward", "forward"):
-                with self.subTest(indexed=indexed, direction=direction):
-                    with self.provider.session(
-                        SourceScope.conversation(
-                            self.fixture.account_key, self.fixture.conversation
+            with self.subTest(indexed=indexed), self.provider.session(
+                SourceScope.conversation(self.fixture.account_key, self.fixture.conversation)
+            ) as snapshot:
+                recent = self.provider.read_recent(
+                    self.fixture.account_key, self.fixture.conversation, 30, snapshot
+                )
+                self.assertEqual([m.source_message_id for m in recent.messages], expected)
+                self.assertFalse(recent.has_more_before)
+                for message in recent.messages:
+                    canonical = self.provider.get_message(
+                        self.fixture.account_key, message.source_message_id, snapshot
+                    )
+                    assert canonical is not None
+                    self.assertEqual(canonical.sort_key, message.sort_key)
+                self.assertEqual(recent.messages[1].source_rowid, 3)
+                self.assertEqual(recent.messages[3].source_rowid, 39)
+                focus = self.provider.get_message(self.fixture.account_key, token(102), snapshot)
+                assert focus is not None
+                context = self.provider.read_context(
+                    self.fixture.account_key, self.fixture.conversation, focus=focus,
+                    before=1, after=1, snapshot=snapshot,
+                )
+                self.assertEqual(
+                    [m.source_message_id for m in context.messages], expected[1:4]
+                )
+                self.assertTrue(context.has_more_before)
+                self.assertTrue(context.has_more_after)
+                for direction in ("forward", "backward"):
+                    collected = []
+                    anchor = None
+                    for _ in range(10):
+                        page = self.provider.read_range(
+                            self.fixture.account_key, self.fixture.conversation,
+                            after=anchor if direction == "forward" else None,
+                            before=anchor if direction == "backward" else None,
+                            direction=direction, limit=2, snapshot=snapshot,
                         )
-                    ) as snapshot:
-                        focus = self.provider.get_message(
-                            self.fixture.account_key, focus_id, snapshot
-                        )
-                        assert focus is not None
-                        with self.assertRaises(SightglassError) as legacy:
-                            self.provider.read_range(
-                                self.fixture.account_key,
-                                self.fixture.conversation,
-                                after=focus.sort_key if direction == "forward" else None,
-                                before=focus.sort_key if direction == "backward" else None,
-                                direction=direction,
-                                limit=3,
-                                snapshot=snapshot,
-                            )
-                        resolver = self.provider._resource_resolver
-                        with (
-                            patch.object(
-                                resolver,
-                                "resources_for_message",
-                                wraps=resolver.resources_for_message,
-                            ) as resources,
-                            self.assertRaises(SightglassError) as fused,
-                        ):
-                            self.provider.read_context(
-                                self.fixture.account_key,
-                                self.fixture.conversation,
-                                focus=focus,
-                                before=3 if direction == "backward" else 0,
-                                after=3 if direction == "forward" else 0,
-                                snapshot=snapshot,
-                            )
-                        for caught in (legacy, fused):
-                            self.assertEqual(caught.exception.code, ErrorCode.SOURCE_INCOMPLETE)
-                            self.assertEqual(
-                                caught.exception.details["warning_codes"],
-                                ["duplicate_message_identity_conflict"],
-                            )
-                        self.assertEqual(resources.call_count, 0)
-                        duplicate_id = self.provider._message_token(
-                            self.fixture.conversation,
-                            {"server_id": 900 if direction == "backward" else 901},
-                            "message/message_0.db",
-                        )
-                        with self.assertRaises(SightglassError) as point:
-                            self.provider.get_message(
-                                self.fixture.account_key, duplicate_id, snapshot
-                            )
-                        self.assertEqual(point.exception.code, ErrorCode.SOURCE_INCOMPLETE)
+                        if not page.messages:
+                            break
+                        values = list(page.messages)
+                        collected.extend(values if direction == "forward" else reversed(values))
+                        anchor = values[-1 if direction == "forward" else 0].sort_key
+                    else:
+                        self.fail("equivalent copies prevented pagination termination")
+                    self.assertEqual(
+                        [m.source_message_id for m in collected],
+                        expected if direction == "forward" else list(reversed(expected)),
+                    )
+                prepared = list(self.provider.prepare_search_page(
+                    self.fixture.account_key, self.fixture.conversation,
+                    direction="backward", limit=30, snapshot=snapshot, batch_size=7,
+                ))[-1].page
+                assert prepared is not None
+                self.assertEqual([m.source_message_id for m in prepared.messages], expected)
 
+    def test_text_copies_with_differing_source_evidence_fail_before_resource_work(self) -> None:
+        for local_id in (3, 4):
+            self.fixture._insert_message(
+                local_id=local_id, server_id=900, sort_seq=100, create_time=1725000003,
+                content="synthetic repeated text",
+            )
+        table = self.fixture._table_name(self.fixture.conversation)
+        identity = self.provider._message_token(
+            self.fixture.conversation, {"server_id": 900}, "message/message_0.db"
+        )
+        cases = (
+            ("message_content", "synthetic different text", "synthetic repeated text"),
+            ("create_time", 1725000004, 1725000003), ("sort_seq", 101, 100),
+            ("status", 2, 0), ("local_type", 3, 1),
+            ("packed_info_data", b"synthetic different envelope", None),
+            ("WCDB_CT_message_content", 4, 0), ("real_sender_id", 999, 0),
+        )
+        for column, changed, original in cases:
+            with self.subTest(column=column):
+                writer = self.fixture._connect_new("message/message_0.db")
+                try:
+                    writer.execute(
+                        f"UPDATE [{table}] SET [{column}]=? WHERE local_id=4", (changed,)
+                    )
+                    writer.commit()
+                finally:
+                    writer.close()
+                with self.provider.session(
+                    SourceScope.conversation(self.fixture.account_key, self.fixture.conversation)
+                ) as snapshot:
+                    resolver = self.provider._resource_resolver
+                    with patch.object(resolver, "resources_for_message") as resources:
+                        for call in (
+                            lambda: self.provider.get_message(self.fixture.account_key, identity,
+                                                              snapshot),
+                            lambda: self.provider.read_recent(self.fixture.account_key,
+                                                              self.fixture.conversation, 30,
+                                                              snapshot),
+                        ):
+                            with self.assertRaises(SightglassError) as caught:
+                                call()
+                            self.assertEqual(caught.exception.code, ErrorCode.SOURCE_INCOMPLETE)
+                            self.assertEqual(caught.exception.details["warning_codes"],
+                                             ["duplicate_message_identity_conflict"])
+                        self.assertEqual(resources.call_count, 0)
+                writer = self.fixture._connect_new("message/message_0.db")
+                try:
+                    writer.execute(
+                        f"UPDATE [{table}] SET [{column}]=? WHERE local_id=4", (original,)
+                    )
+                    writer.commit()
+                finally:
+                    writer.close()
+
+    def test_text_copy_interleaved_at_same_time_sequence_does_not_shift_anchor(self) -> None:
+        for local_id, server_id in ((3, 900), (4, 901), (5, 900)):
+            self.fixture._insert_message(
+                local_id=local_id, server_id=server_id, sort_seq=100,
+                create_time=1725000003, content=f"synthetic stable text {server_id}",
+            )
+        with self.provider.session(
+            SourceScope.conversation(self.fixture.account_key, self.fixture.conversation)
+        ) as snapshot:
+            recent = self.provider.read_recent(self.fixture.account_key,
+                                               self.fixture.conversation, 1, snapshot)
+            self.assertEqual(recent.messages[0].source_rowid, 4)
+            older = self.provider.read_range(
+                self.fixture.account_key, self.fixture.conversation,
+                before=recent.messages[0].sort_key, after=None, direction="backward", limit=1,
+                snapshot=snapshot,
+            )
+            self.assertEqual(older.messages[0].source_rowid, 3)
+            forward = self.provider.read_range(
+                self.fixture.account_key, self.fixture.conversation,
+                after=older.messages[0].sort_key, before=None, direction="forward", limit=1,
+                snapshot=snapshot,
+            )
+            self.assertEqual(forward.messages[0].sort_key, recent.messages[0].sort_key)
+            context = self.provider.read_context(
+                self.fixture.account_key, self.fixture.conversation, focus=older.messages[0],
+                before=1, after=1, snapshot=snapshot,
+            )
+            self.assertEqual([m.source_rowid for m in context.messages], [2, 3, 4])
 
     def test_context_fails_closed_on_retained_neighbor_conflict_in_far_shard(self) -> None:
         # The primary fixture has server_id 101 one step before focus 102. A

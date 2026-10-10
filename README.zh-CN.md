@@ -29,7 +29,17 @@ catalog 与 cached bytes 仍从 admitted state 读取。结果明确标注 parti
 与 bounded freshness；零命中不证明 source absence。`wechat_list_resources` 只列出 owning
 message 的当前 resident bindings；正文过期或已 released 时返回 `SOURCE_INCOMPLETE`，
 不会恢复 inactive 的历史 resolver。需要有界 source 验证时，在提供该参数的 tool 上用
-`view="fresh"`。Fresh updates 的 reconciliation 独立于 ACK position，完成一轮后从起点
+`view="fresh"`。
+`view="replica"` 下 `wechat_status` 区分 transport 与确认：`read_plane.capture_transport`
+报告 capture edge 当前是否连接（仅为运输证据，不探测 source）；
+`read_plane.live_refresh_available` 表示当前能否发起 fresh 请求（transport 已连接或已有确认，
+paused 时一律不能），`read_plane.live_refresh_confirmed` 表示 current capture 是否已确认 source
+事实；`readiness.live_refresh`/`resource_acquisition` 在尚无 current capture 确认时报告
+`awaiting_confirmation`，只有 transport 断开或未观察到时才为 `degraded`。空 resident inbox
+只表示没有 resident body，并非 observed catalog 丢失：其 `next_actions` 先指向
+`wechat_find_conversations`（在调用者 account/kinds scope 内枚举已观察 catalog），再指向对
+选定 `conversation_id` 的显式有界 `wechat_read_messages` fresh 读取；指引仅是指令，不自动执行、
+不 bulk-fill 历史。Fresh updates 的 reconciliation 独立于 ACK position，完成一轮后从起点
 继续发现旧位置 arrivals/corrections；跨页不宣称同一 global change snapshot。缺失 source
 prefix 会 fail closed。当前 scope 的 `request_id` 可在 30 天内精确 replay 已完成的 update
 response，仍受当前 policy 和 pause 约束。

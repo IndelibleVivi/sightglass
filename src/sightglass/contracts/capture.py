@@ -17,6 +17,8 @@ from .messages import SourceMessage
 from .resources import SourceResource, SourceResourceVariant
 
 CAPTURE_VERSION = "sightglass.capture.v1"
+# Finite content-free rejection subtype; never serialize arbitrary exception details.
+SOURCE_IDENTITY_CONFLICT_REASON = "duplicate_message_identity_conflict"
 MAX_CAPTURE_MESSAGES = 200
 MAX_CAPTURE_METADATA_BYTES = 4 * 1024 * 1024
 MAX_CAPTURE_RESOURCE_BYTES = 32 * 1024 * 1024

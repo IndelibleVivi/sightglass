@@ -157,6 +157,52 @@ assert ReaderService is CanonicalReaderService
         inbox = self.tools.wechat_read_inbox()
         self.assertTrue(inbox["items"])
         self.assertEqual(inbox["response_profile"], BRIEF_PROFILE)
+        # A populated resident inbox carries no discovery guidance.
+        self.assertNotIn("next_actions", inbox)
+
+    def test_empty_resident_inbox_projects_discovery_and_message_read_guidance(self) -> None:
+        # The resident inbox deliberately holds no continuous history under on_demand.
+        # An empty page must not look like a missing catalog: the brief projection points
+        # at the observed conversation catalog and then an explicit bounded fresh read of
+        # one chosen conversation, without leaking unauthorized counts, IDs or labels.
+        empty = {
+            "schema": "sightglass.inbox-page.v1",
+            "account_id": "wxacct_synthetic",
+            "include_latest": "metadata",
+            "items": [],
+            "page": {"next_cursor": None, "truncated": False},
+            "coverage": {"catalog": "complete", "message_scope": "resident"},
+            "source_receipt": {
+                "served_from": "window_db",
+                "view": "replica",
+                "complete": False,
+                "freshness": {"state": "bounded_stale", "live_refresh_confirmed": False},
+            },
+        }
+        projected = project_result(
+            "wechat_read_inbox", empty,
+            {"account_id": "wxacct_synthetic", "kinds": ["group"]}, "brief",
+        )
+        actions = {action["kind"]: action for action in projected["next_actions"]}
+        self.assertEqual(actions["discover"]["tool"], "wechat_find_conversations")
+        self.assertEqual(
+            actions["discover"]["arguments"],
+            {"query": "", "account_id": "wxacct_synthetic", "kinds": ["group"]},
+        )
+        self.assertEqual(actions["message_read"]["tool"], "wechat_read_messages")
+        self.assertEqual(
+            actions["message_read"]["arguments"],
+            {"mode": "recent", "refresh": True, "view": "fresh", "voice": "off"},
+        )
+        self.assertEqual(actions["message_read"]["requires_arguments"], ["conversation_id"])
+        self.assertEqual(
+            actions["message_read"]["select_from"],
+            {"tool": "wechat_find_conversations", "field": "candidates[].conversation_id"},
+        )
+        for action in projected["next_actions"]:
+            self.assertTrue(action["tool"].startswith("wechat_"))
+        # Guidance is caller instruction only; it never widens the account filter.
+        self.assertNotIn("wxacct_other", json.dumps(projected["next_actions"]))
 
     def test_multibyte_page_budget_keeps_all_ids_reachable_and_long_detail_is_bounded(self) -> None:
         self.tools.close()

@@ -72,6 +72,11 @@ class CoreCapture:
         self.server = CaptureBrokerServer(self.broker, self.settings.socket_path)
         self._catalog_due = 0.0
         service.resource_service.remote_acquire = self.acquire_resource
+        # Canonical transport evidence for reader status: the capture owner, not the
+        # reader, owns whether the pinned edge transport is connected. This probe is
+        # content-free and performs no source/edge I/O; it only reports the broker's
+        # current connection state, which is distinct from a fresh capture confirmation.
+        service.register_capture_transport(self.transport_evidence)
 
     def start(self) -> None:
         self.server.start()
@@ -85,12 +90,21 @@ class CoreCapture:
         )
         return {
             "schema": "sightglass.capture-core-status.v1",
-            "edge_connected": bool(getattr(self.broker, "connected", False)),
+            "edge_connected": self.transport_evidence() == "edge_connected",
             "next_sequence": position.next_sequence if position else 1,
             "interpretation_epoch_preserved": (
                 self.expected.origin_epoch == self.service._projection_inventory_epoch()
             ),
         }
+
+    def transport_evidence(self) -> str:
+        """Content-free transport state; never a fresh capture confirmation."""
+
+        return (
+            "edge_connected"
+            if bool(getattr(self.broker, "connected", False))
+            else "edge_disconnected"
+        )
 
     def _authorize(self, request: CaptureRequest) -> None:
         self.service.reader.require_active()

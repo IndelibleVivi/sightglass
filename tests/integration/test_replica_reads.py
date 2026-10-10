@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sqlite3
@@ -329,6 +330,190 @@ class ReplicaReadTests(unittest.TestCase):
                 "wechat_read_messages", {"refresh": "synthetic-invalid"}
             )
         )
+
+    def test_replica_status_reports_transport_evidence_and_empty_inbox_guides_discovery(
+        self,
+    ) -> None:
+        # The catalog is observed (find_conversations still resolves it) but no body is
+        # resident. The reader must not misreport the empty resident inbox as a missing
+        # catalog, and must point at the observed-catalog and admitted-read tools.
+        self.offline()
+        with self.repository.database.transaction() as connection:
+            connection.execute("UPDATE messages SET body_available=0")
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
+            # Observed conversation catalog remains resolvable without resident bodies.
+            catalog = self.service.find_conversations("Synthetic Group")
+            self.assertEqual(catalog["candidates"][0]["conversation_id"], self.group)
+            inbox = self.service.read_inbox(account_id=self.account)
+            self.assertEqual(inbox["items"], [])
+            self.assertEqual(inbox["coverage"]["message_scope"], "resident")
+            self.assertEqual(inbox["coverage"]["catalog"], "complete")
+            self.assertEqual(inbox["coverage"]["indexed_conversations"], 0)
+            self.assertEqual(inbox["source_receipt"]["view"], "replica")
+
+        from sightglass.mcp.projection import project_result
+
+        projected = project_result(
+            "wechat_read_inbox", inbox, {"account_id": self.account}, "brief"
+        )
+        kinds = [action["kind"] for action in projected["next_actions"]]
+        self.assertIn("discover", kinds)
+        self.assertIn("message_read", kinds)
+        discover = next(a for a in projected["next_actions"] if a["kind"] == "discover")
+        self.assertEqual(discover["tool"], "wechat_find_conversations")
+        message_read = next(a for a in projected["next_actions"] if a["kind"] == "message_read")
+        self.assertEqual(message_read["tool"], "wechat_read_messages")
+        # The read is an explicit bounded fresh acquisition of one chosen conversation,
+        # never an implicit replica read that would fail on a cold conversation.
+        self.assertEqual(
+            message_read["arguments"],
+            {"mode": "recent", "refresh": True, "view": "fresh", "voice": "off"},
+        )
+        self.assertEqual(message_read["requires_arguments"], ["conversation_id"])
+        # Discovery keeps the caller's account scope and does not widen the filter.
+        self.assertEqual(discover["arguments"]["account_id"], self.account)
+        # No unauthorized identity/count/ID leakage through the guidance actions.
+        self.assertNotIn(self.group, json.dumps(projected["next_actions"]))
+
+    def test_empty_resident_inbox_guidance_completes_discover_then_fresh_read(self) -> None:
+        # A cold on_demand conversation must be recoverable by *consuming* the guidance:
+        # discover the observed catalog, select the single conversation, then perform the
+        # deliberate bounded fresh read the action names. No bulk history is filled and
+        # no action writes state on its own.
+        self.offline()
+        with self.repository.database.transaction() as connection:
+            connection.execute("UPDATE messages SET body_available=0")
+
+        from sightglass.mcp.projection import project_result
+
+        inbox = self.service.read_inbox(account_id=self.account)
+        self.assertEqual(inbox["items"], [])
+        # The guidance itself performs no source work and leaves the reader unchanged.
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
+            projected = project_result(
+                "wechat_read_inbox", inbox, {"account_id": self.account}, "brief"
+            )
+            self.assertEqual(self.service.read_inbox(account_id=self.account)["items"], [])
+        discover = next(a for a in projected["next_actions"] if a["kind"] == "discover")
+        message_read = next(a for a in projected["next_actions"] if a["kind"] == "message_read")
+
+        # Step 1: run the discover action exactly as projected (still no source work).
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
+            catalog = self.service.find_conversations(**discover["arguments"])
+        candidates = catalog["candidates"]
+        # The caller selects one observed conversation; ambiguity never auto-merges.
+        self.assertGreaterEqual(len(candidates), 1)
+        conversation_id = next(
+            item["conversation_id"] for item in candidates
+            if item["conversation_id"] == self.group
+        )
+
+        # Step 2: run the projected bounded fresh read for that one chosen conversation.
+        arguments = {"conversation_id": conversation_id, **message_read["arguments"]}
+        _plan, fresh = self.read_capture(arguments)
+        self.assertNotEqual(fresh.get("ok"), False, fresh)
+        self.assertTrue(fresh["messages"])
+        self.assertEqual(fresh["source_receipt"]["view"], "fresh")
+        # A fresh page is authored as live-validated source evidence, not a
+        # bounded-stale materialized receipt.
+        self.assertNotEqual(fresh["source_receipt"].get("served_from"), "window_db")
+
+        # The freshly admitted bodies make the conversation resident again, so the same
+        # replica inbox is no longer empty and an ordinary replica read succeeds locally.
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
+            recovered = self.service.read_inbox(account_id=self.account)
+            self.assertTrue(recovered["items"])
+            replica = self.service.read_messages(
+                mode="recent", conversation_id=conversation_id, limit=1, view="replica"
+            )
+        self.assertTrue(replica["messages"])
+        self.assertEqual(replica["source_receipt"]["view"], "replica")
+        # No implicit refresh: the replica read reports unconfirmed freshness.
+        self.assertFalse(replica["source_receipt"]["freshness"]["live_refresh_confirmed"])
+
+    def test_replica_status_reflects_capture_transport_without_live_confirmation(self) -> None:
+        self.offline()
+        self.assertEqual(self.service.capture_transport_state(), "unobserved")
+        unobserved = self.service.status()
+        self.assertEqual(unobserved["read_plane"]["capture_transport"], "unobserved")
+        self.assertEqual(unobserved["readiness"]["live_refresh"], "degraded")
+        # No capture binding: a fresh request cannot be initiated and nothing is confirmed.
+        self.assertFalse(unobserved["read_plane"]["live_refresh_available"])
+        self.assertFalse(unobserved["read_plane"]["live_refresh_confirmed"])
+        self.assertIn("replica_view_not_live", unobserved["source"]["warnings"])
+
+        # A connected capture transport is evidence, not a fresh confirmation: status
+        # reports that a fresh request can be initiated, keeps source availability
+        # unconfirmed, and never opens the provider.
+        self.service.register_capture_transport(lambda: "edge_connected")
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
+            connected = self.service.status()
+        self.assertEqual(connected["read_plane"]["capture_transport"], "edge_connected")
+        self.assertEqual(connected["readiness"]["live_refresh"], "awaiting_confirmation")
+        self.assertTrue(connected["read_plane"]["live_refresh_available"])
+        self.assertFalse(connected["read_plane"]["live_refresh_confirmed"])
+        self.assertEqual(connected["source"]["source_state"], "unknown")
+        self.assertFalse(connected["source"]["available"])
+
+        # A paused reader cannot initiate a fresh request, even with a connected
+        # transport; the paused state is not masked by transport evidence.
+        with patch.object(self.service.reader, "paused", True):
+            paused = self.service.status()
+        self.assertTrue(paused["paused"])
+        self.assertEqual(paused["read_plane"]["capture_transport"], "edge_connected")
+        self.assertFalse(paused["read_plane"]["live_refresh_available"])
+        self.assertFalse(paused["ready"])
+
+        # The mirror image: a disconnected transport cannot initiate a fresh request.
+        self.service.register_capture_transport(lambda: "edge_disconnected")
+        with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
+            disconnected = self.service.status()
+        self.assertEqual(disconnected["read_plane"]["capture_transport"], "edge_disconnected")
+        self.assertEqual(disconnected["readiness"]["live_refresh"], "degraded")
+        self.assertFalse(disconnected["read_plane"]["live_refresh_available"])
+
+        # A malformed or failing probe is treated as unobserved, never as available.
+        for bad in (
+            lambda: "synthetic_bogus", lambda: None, lambda: [], lambda: {},
+            lambda: (_ for _ in ()).throw(RuntimeError()),
+        ):
+            with self.subTest(probe=bad):
+                self.service.register_capture_transport(bad)  # pyright: ignore[reportArgumentType]
+                self.assertEqual(self.service.capture_transport_state(), "unobserved")
+                fallback = self.service.status()
+                self.assertEqual(fallback["read_plane"]["capture_transport"], "unobserved")
+                self.assertFalse(fallback["read_plane"]["live_refresh_available"])
+                self.assertEqual(fallback["readiness"]["live_refresh"], "degraded")
+
+    def test_cached_status_never_masks_disconnected_transport_with_stale_confirmation(
+        self,
+    ) -> None:
+        # A *historical* capture confirmation must not make a disconnected edge look like
+        # fresh-capable. The default_view="fresh" cached path is the relevant one: it
+        # reuses the last completed source snapshot.
+        self.service.default_view = "fresh"
+        cold = self.service._cold_status
+        warm = copy.deepcopy(cold)
+        warm["source"].update({"source_state": "complete", "available": True})
+        self.service._cached_status = warm
+        self.service.register_capture_transport(lambda: "edge_disconnected")
+        disconnected = self.service.cached_status()
+        self.assertEqual(disconnected["read_plane"]["capture_transport"], "edge_disconnected")
+        self.assertFalse(disconnected["read_plane"]["live_refresh_available"])
+        # ``live_refresh_confirmed`` records that a capture *did* confirm facts; that
+        # historical fact must not be rewritten, but it must not leak into availability
+        # or readiness while the transport is disconnected.
+        self.assertTrue(disconnected["read_plane"]["live_refresh_confirmed"])
+        self.assertEqual(disconnected["readiness"]["live_refresh"], "degraded")
+        self.assertEqual(disconnected["readiness"]["resource_acquisition"], "degraded")
+
+        # A connected transport re-enables initiating a fresh request but stays
+        # "confirmed" only because this cached snapshot already recorded complete source.
+        self.service.register_capture_transport(lambda: "edge_connected")
+        connected = self.service.cached_status()
+        self.assertTrue(connected["read_plane"]["live_refresh_available"])
+        self.assertTrue(connected["read_plane"]["live_refresh_confirmed"])
+        self.assertEqual(connected["readiness"]["live_refresh"], "ready")
 
     def test_replica_catalog_resolves_observed_alias(self) -> None:
         with self.repository.database.transaction() as connection:

@@ -238,6 +238,11 @@ class ReaderService:
         self.reader = reader
         self.token_codec = token_codec
         self.auth_token_hash = auth_token_hash
+        # Content-free transport evidence supplied by the capture owner (the daemon's
+        # ``CoreCapture`` broker). It reports only whether the pinned edge transport is
+        # currently connected; it is read-only, performs no source/edge I/O, and is
+        # distinct from a fresh capture confirmation. Absent for non-capture bindings.
+        self._capture_transport: Callable[[], str] | None = None
         self.search_preparation: Any | None = None
         self.storage = repository.database.storage
         self.voice_settings = voice_settings or VoiceReadSettings()
@@ -336,6 +341,65 @@ class ReaderService:
     def _view_scope(scope_key: str, view: str) -> str:
         return scope_key if view == "auto" else opaque_id("wxviewscope", scope_key, view)
 
+    def register_capture_transport(self, evidence: Callable[[], str]) -> None:
+        """Register the owner-supplied transport-evidence probe.
+
+        The probe must be content-free, non-blocking and side-effect free: it returns
+        only whether the pinned edge/capture transport is currently connected. It never
+        opens a provider snapshot or the edge, and it never establishes fresh capture
+        confirmation; status must not initiate source or edge I/O to discover this.
+        """
+
+        self._capture_transport = evidence
+
+    def capture_transport_state(self) -> str:
+        """Current transport evidence: ``edge_connected``/``edge_disconnected``/``unobserved``."""
+
+        probe = self._capture_transport
+        if probe is None:
+            return "unobserved"
+        try:
+            state = probe()
+        except Exception:
+            return "unobserved"
+        return (
+            state if isinstance(state, str) and state in {"edge_connected", "edge_disconnected"}
+            else "unobserved"
+        )
+
+    def _live_refresh_states(
+        self, *, confirmed: bool, supports_resources: bool = False,
+        transport: str | None = None,
+    ) -> tuple[bool, bool, str, str]:
+        """Canonical split of "can initiate fresh" from "fresh is confirmed".
+
+        Returns ``(live_refresh_available, live_refresh_confirmed, live_refresh_state,
+        resource_acquisition_state)``. A disconnected transport can never initiate a
+        fresh request and always reports ``degraded``, even when a *historical* capture
+        previously confirmed source facts — transport evidence is current, not recorded.
+        An absent/unsupported probe (``unobserved``) fabricates nothing and falls back to
+        the last confirmed fact. A paused reader cannot initiate a fresh request. No
+        branch performs source or edge I/O.
+        """
+
+        transport = transport or self.capture_transport_state()
+        paused = bool(self.reader.paused)
+        if transport == "edge_disconnected":
+            available, state = False, "degraded"
+        elif transport == "edge_connected":
+            available = not paused
+            state = "ready" if confirmed else "awaiting_confirmation"
+        else:  # unobserved: no capture binding; rely only on a real confirmation
+            available = confirmed and not paused
+            state = "ready" if confirmed else "degraded"
+        if state == "ready":
+            acquisition = "ready" if supports_resources else "degraded"
+        elif transport == "edge_connected" and supports_resources:
+            acquisition = "awaiting_confirmation"
+        else:
+            acquisition = "degraded"
+        return available, confirmed, state, acquisition
+
     def _status_payload(
         self, health: SourceHealth, accounts: list[dict[str, Any]]
     ) -> dict[str, Any]:
@@ -345,6 +409,17 @@ class ReaderService:
         )
         local_resources = self.repository.has_resource_bindings()
         usable = health.complete or local_messages or local_resources
+        transport = self.capture_transport_state()
+        # Two distinct facts: whether the reader can initiate a fresh request at all
+        # (``live_refresh_available``) and whether a current capture has actually
+        # confirmed live source facts (``live_refresh_confirmed``). A disconnected
+        # transport can never initiate a fresh request or claim readiness.
+        (
+            can_initiate, confirmed, live_refresh_state, resource_acquisition_state,
+        ) = self._live_refresh_states(
+            confirmed=bool(health.complete), supports_resources=descriptor.supports_resources,
+            transport=transport,
+        )
         result = {
             "schema": "sightglass.status.v1",
             "ready": usable and not self.reader.paused,
@@ -367,19 +442,23 @@ class ReaderService:
             # refresh fields, not this block.
             "read_plane": {
                 "schema": "sightglass.read-plane.v1",
-                "live_refresh_available": bool(health.complete),
+                # Whether a fresh request can be initiated now (connected transport or a
+                # confirmed current capture). This is not a claim that source facts are
+                # confirmed; see ``live_refresh_confirmed`` and ``source.available``.
+                "live_refresh_available": can_initiate,
+                # Whether a current capture has actually confirmed live source facts.
+                "live_refresh_confirmed": confirmed,
                 "local_cache_reads": local_resources,
                 "local_message_reads": local_messages,
+                # Transport evidence only: whether the pinned capture/edge transport is
+                # currently connected. It never claims live source confirmation.
+                "capture_transport": transport,
             },
             "readiness": {
                 "indexed_reads": "ready" if local_messages else "empty",
-                "live_refresh": "ready" if health.complete else "degraded",
+                "live_refresh": live_refresh_state,
                 "resource_cache": "ready" if local_resources else "empty",
-                "resource_acquisition": (
-                    "ready"
-                    if health.complete and descriptor.supports_resources
-                    else "degraded"
-                ),
+                "resource_acquisition": resource_acquisition_state,
                 "voice": "configured" if self.voice is not None else "disabled",
                 **self.retrieval.readiness(),
             },
@@ -632,21 +711,29 @@ class ReaderService:
                 self._projection_inventory_epoch()
             )
             local_resources = self.repository.has_resource_bindings()
+            transport = self.capture_transport_state()
+            (
+                available, confirmed, live_refresh_state, acquisition_state,
+            ) = self._live_refresh_states(
+                confirmed=True,
+                supports_resources=self.provider.descriptor.supports_resources,
+                transport=transport,
+            )
             cached["read_plane"].update(
                 {
-                    "live_refresh_available": True,
+                    "live_refresh_available": available,
+                    "live_refresh_confirmed": confirmed,
                     "local_cache_reads": local_resources,
                     "local_message_reads": local_messages,
+                    "capture_transport": transport,
                 }
             )
             cached["readiness"].update(
                 {
                     "indexed_reads": "ready" if local_messages else "empty",
-                    "live_refresh": "ready",
+                    "live_refresh": live_refresh_state,
                     "resource_cache": "ready" if local_resources else "empty",
-                    "resource_acquisition": (
-                        "ready" if self.provider.descriptor.supports_resources else "degraded"
-                    ),
+                    "resource_acquisition": acquisition_state,
                 }
             )
             self._cached_status = cached
@@ -745,13 +832,19 @@ class ReaderService:
             cached = copy.deepcopy(self._cold_status)
         cached["paused"] = self.reader.paused
         live_ready = bool(cached["source"].get("source_state") == "complete")
-        cached["read_plane"]["live_refresh_available"] = live_ready
-        cached["readiness"]["live_refresh"] = "ready" if live_ready else "degraded"
-        cached["readiness"]["resource_acquisition"] = (
-            "ready"
-            if live_ready and self.provider.descriptor.supports_resources
-            else "degraded"
+        transport = self.capture_transport_state()
+        cached["read_plane"]["capture_transport"] = transport
+        (
+            available, confirmed, live_refresh_state, acquisition_state,
+        ) = self._live_refresh_states(
+            confirmed=live_ready,
+            supports_resources=self.provider.descriptor.supports_resources,
+            transport=transport,
         )
+        cached["read_plane"]["live_refresh_confirmed"] = confirmed
+        cached["read_plane"]["live_refresh_available"] = available
+        cached["readiness"]["live_refresh"] = live_refresh_state
+        cached["readiness"]["resource_acquisition"] = acquisition_state
         cached["ready"] = bool(
             live_ready
             or cached["read_plane"].get("local_message_reads")

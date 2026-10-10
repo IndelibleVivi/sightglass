@@ -693,7 +693,7 @@ Production 使用独立、non-editable wheel environment；checkout 的 `.venv` 
 umask 077
 mkdir -p "$RELEASE_DIR/artifacts"
 git rev-parse HEAD > "$RELEASE_DIR/source-commit.txt"
-uv export --frozen --extra macos-wechat --extra voice --no-emit-project \
+uv export --frozen --no-dev --extra macos-wechat --extra voice --no-emit-project \
   --output-file "$RELEASE_DIR/requirements.txt"
 uv venv "$RELEASE_DIR/.venv"
 uv pip sync --python "$RELEASE_DIR/.venv/bin/python" "$RELEASE_DIR/requirements.txt"
@@ -726,6 +726,16 @@ procedure is [VPS migration](VPS-MIGRATION.md). Use that procedure before changi
 installation or reusing its tunnel identity. The core defaults to replica; an offline
 edge leaves admitted local reads and replica ACK available with partial coverage.
 Fresh work requires a bounded sealed capture and the final same-writer commit.
+Reader status reports the current pinned transport separately from replica
+freshness. A replica `source.available=false` is not an edge connectivity probe;
+inspect `read_plane.capture_transport` or the operator's
+`status.capture.edge_connected`, then use an explicitly bounded fresh read to
+confirm the source. Empty resident inboxes guide discovery and an explicit
+on-demand recent read; they do not schedule a full-history refill. A stored
+identity-conflict marker may clear only after successful validated source
+admission. If the requested page still conflicts, retain its exact
+`duplicate_message_identity_conflict` diagnostic; do not clear it manually or
+delete data to make health appear green.
 The [Capture protocol](CAPTURE-PROTOCOL.md) owns identity/sequence/terminal semantics;
 [Linux processing](LINUX-PROCESSING.md) owns installed helper/model and cgroup readiness.
 

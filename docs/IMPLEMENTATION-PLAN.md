@@ -155,4 +155,15 @@ service, production dependency or automatic history refill.
 
 ## Full acceptance
 
+The 2026-10-10 daily-use follow-up preserves SG-014/019/047/058: replica status
+separates current transport availability from source confirmation; empty resident
+inboxes guide catalog discovery and one explicitly fresh bounded read. Native
+message capture reuses complete sender evidence, carries the finite identity
+conflict cause across sealed transport, and canonically reconciles equivalent
+same-shard text copies without changing IDs/schema or weakening actual conflicts.
+The native fixture covers default recent pages, two-way pagination, point/context
+anchor agreement, duplicate-heavy neighbors/sentinels and raw evidence conflicts.
+Source checks, immutable candidates, activation and ordinary-host evidence are
+tracked separately in [current state](current-state.md#daily-use-reliability-follow-up).
+
 The specification is complete only when each applicable SG-001–SG-030 outcome has evidence at its owning milestone. Source tests, installation, activation, stdio, external transport and host acceptance remain distinct. Later entries harden or extend those outcomes; they do not silently remove unimplemented scope.

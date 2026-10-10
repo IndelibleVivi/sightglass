@@ -1590,6 +1590,15 @@ class MacOSWeChatSourceProvider:
             f"WHERE sender_name.rowid = {row_alias}.real_sender_id LIMIT 1)"
         )
 
+    def _raw_sender_expression(
+        self, state: _SnapshotState, relative: str, table: str,
+    ) -> str:
+        # Even an unmapped sender ID is evidence: two unknown mappings cannot
+        # prove equivalent text copies when their raw source IDs differ.
+        catalog = self._message_shard_catalog(state, relative)
+        columns = self._message_table_columns(state, relative, table, catalog)
+        return "message_row.real_sender_id" if "real_sender_id" in columns else "NULL"
+
     def _group_sender_sql_filter(
         self,
         state: _SnapshotState,
@@ -2195,7 +2204,7 @@ class MacOSWeChatSourceProvider:
                 positions = connection.execute(
                     f"""
                     SELECT rowid AS source_rowid, create_time,
-                           COALESCE(sort_seq, 0) AS sort_seq
+                           COALESCE(sort_seq, 0) AS sort_seq, server_id, local_type
                     FROM [{table}] AS message_row {where}
                     ORDER BY create_time {order}, COALESCE(sort_seq, 0) {order},
                              rowid {order}
@@ -2205,13 +2214,26 @@ class MacOSWeChatSourceProvider:
                 ).fetchall()
                 if not positions:
                     return
-            for offset in range(0, len(positions), payload_page_size):
-                position_page = positions[offset : offset + payload_page_size]
-                rowids = tuple(int(row["source_rowid"]) for row in position_page)
-                payload_by_rowid = self._message_rows_by_rowid(state, relative, table, rowids)
-                yield from (
-                    payload_by_rowid[int(position["source_rowid"])] for position in position_page
-                )
+            for position_offset in range(0, len(positions), _POSITION_PAGE_LIMIT):
+                position_batch = positions[position_offset : position_offset + _POSITION_PAGE_LIMIT]
+                with self._connect(relative) as connection:
+                    representatives = self._text_position_representatives(
+                        connection, table, position_batch
+                    )
+                selected_positions = [
+                    row for row in position_batch
+                    if self._is_representative_position(row, representatives)
+                ]
+                for offset in range(0, len(selected_positions), payload_page_size):
+                    position_page = selected_positions[offset : offset + payload_page_size]
+                    rowids = tuple(int(row["source_rowid"]) for row in position_page)
+                    payload_by_rowid = self._message_rows_by_rowid(
+                        state, relative, table, rowids, text_representatives=representatives
+                    )
+                    yield from (
+                        payload_by_rowid[int(position["source_rowid"])]
+                        for position in position_page
+                    )
             last = positions[-1]
             page_boundary = (
                 int(last["create_time"] or 0),
@@ -2221,18 +2243,141 @@ class MacOSWeChatSourceProvider:
             if len(positions) < position_limit:
                 return
 
+    @staticmethod
+    def _text_position_representatives(
+        connection: Any, table: str, positions: list[Any],
+    ) -> dict[int, tuple[int, int]]:
+        """Resolve only candidate text identities; this is not payload evidence.
+
+        Same-shard ordinary text copies may differ in local/physical IDs. Their
+        timeline position is the smallest rowid only when every copy has the same
+        time/sequence/type. Payload/sender/packed evidence is checked separately
+        before returning a selected row. Other types and coordinate conflicts are
+        never filtered here. The IN query is batched even without a server-ID index.
+        """
+
+        ids = tuple(sorted({
+            int(row["server_id"]) for row in positions
+            if int(row["server_id"] or 0) > 0 and int(row["local_type"] or 0) == 1
+        }))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _value in ids)
+        rows = connection.execute(
+            f"""SELECT server_id, MIN(rowid) AS representative, COUNT(*) AS copies,
+                       MIN(create_time) AS first_time, MAX(create_time) AS last_time,
+                       MIN(COALESCE(sort_seq, 0)) AS first_seq,
+                       MAX(COALESCE(sort_seq, 0)) AS last_seq,
+                       MIN(local_type) AS first_type, MAX(local_type) AS last_type,
+                       COUNT(create_time) AS known_times, COUNT(local_type) AS known_types
+                FROM [{table}] WHERE server_id IN ({placeholders}) GROUP BY server_id""",
+            ids,
+        ).fetchall()
+        check_operation_budget()
+        return {
+            int(row["server_id"]): (
+                int(row["representative"]) if (
+                    row["first_type"] == row["last_type"] == 1
+                    and row["first_time"] == row["last_time"]
+                    and row["first_seq"] == row["last_seq"]
+                    and row["known_times"] == row["known_types"] == row["copies"]
+                ) else 0,
+                int(row["copies"]),
+            )
+            for row in rows
+            if int(row["copies"]) > 1
+        }
+
+    @staticmethod
+    def _is_representative_position(row: Any, representatives: dict[int, tuple[int, int]]) -> bool:
+        representative = representatives.get(int(row["server_id"] or 0))
+        return (
+            representative is None or representative[0] == 0
+            or int(row["source_rowid"]) == representative[0]
+        )
+
+    @staticmethod
+    def _collapse_equivalent_text_rows(rows: list[Any]) -> list[Any]:
+        """Prove exact raw equality before ignoring local IDs of ordinary text."""
+
+        groups: dict[int, list[Any]] = {}
+        other: list[Any] = []
+        for row in rows:
+            check_operation_budget()
+            if int(row["server_id"] or 0) > 0:
+                groups.setdefault(int(row["server_id"]), []).append(row)
+            else:
+                other.append(row)
+        fields = (
+            "server_id", "local_type", "sort_seq", "create_time", "status",
+            "message_content", "content_type", "packed_info_data", "real_sender_username",
+            "real_sender_source_id",
+        )
+        for copies in groups.values():
+            check_operation_budget()
+            if len(copies) > 1 and any(int(row["local_type"] or 0) == 1 for row in copies):
+                first = copies[0]
+                if not all(
+                    int(row["local_type"] or 0) == 1
+                    and all(row[key] == first[key] for key in fields)
+                    for row in copies
+                ):
+                    raise SightglassError(
+                        ErrorCode.SOURCE_INCOMPLETE,
+                        details={"warning_codes": ["duplicate_message_identity_conflict"]},
+                    )
+                other.append(min(copies, key=lambda row: int(row["source_rowid"])))
+            else:
+                other.extend(copies)
+        return other
+
+    def _server_identity_rows(
+        self, state: _SnapshotState, relative: str, table: str, server_ids: tuple[int, ...],
+    ) -> list[Any]:
+        if not server_ids:
+            return []
+        real_sender = self._real_sender_expression(
+            state, relative, table, row_alias="message_row"
+        )
+        raw_sender = self._raw_sender_expression(state, relative, table)
+        placeholders = ",".join("?" for _value in server_ids)
+        with self._connect(relative) as connection:
+            rows = connection.execute(
+                f"""SELECT message_row.rowid AS source_rowid,
+                           message_row.local_id, message_row.server_id, message_row.local_type,
+                           COALESCE(message_row.sort_seq, 0) AS sort_seq,
+                           message_row.create_time, message_row.status, message_row.message_content,
+                           message_row.WCDB_CT_message_content AS content_type,
+                           message_row.packed_info_data, {real_sender} AS real_sender_username,
+                           {raw_sender} AS real_sender_source_id
+                    FROM [{table}] AS message_row
+                    WHERE message_row.server_id IN ({placeholders})
+                    ORDER BY message_row.rowid ASC LIMIT 20003""",
+                server_ids,
+            ).fetchall()
+        if len(rows) > 20_002:
+            raise SightglassError(
+                ErrorCode.SOURCE_INCOMPLETE,
+                details={"warning_codes": ["native_traversal_limit_reached"]},
+            )
+        check_operation_budget()
+        return self._collapse_equivalent_text_rows(rows)
+
     def _message_rows_by_rowid(
         self,
         state: _SnapshotState,
         relative: str,
         table: str,
         rowids: tuple[int, ...],
+        *, canonical: bool = True,
+        text_representatives: dict[int, tuple[int, int]] | None = None,
     ) -> dict[int, Any]:
         if not rowids:
             return {}
         real_sender = self._real_sender_expression(
             state, relative, table, row_alias="message_row"
         )
+        raw_sender = self._raw_sender_expression(state, relative, table)
         placeholders = ",".join("?" for _value in rowids)
         with self._connect(relative) as connection:
             rows = connection.execute(
@@ -2245,7 +2390,8 @@ class MacOSWeChatSourceProvider:
                        message_row.message_content,
                        message_row.WCDB_CT_message_content AS content_type,
                        message_row.packed_info_data,
-                       {real_sender} AS real_sender_username
+                       {real_sender} AS real_sender_username,
+                       {raw_sender} AS real_sender_source_id
                 FROM [{table}] AS message_row
                 WHERE message_row.rowid IN ({placeholders})
                 """,
@@ -2254,6 +2400,31 @@ class MacOSWeChatSourceProvider:
         result = {int(row["source_rowid"]): row for row in rows}
         if len(result) != len(rowids):
             raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        if canonical:
+            if text_representatives is None:
+                with self._connect(relative) as connection:
+                    text_representatives = self._text_position_representatives(
+                        connection, table, rows
+                    )
+            ids = tuple(sorted({
+                int(row["server_id"]) for row in rows
+                if int(row["server_id"] or 0) > 0 and int(row["local_type"] or 0) == 1
+                and int(row["server_id"]) in text_representatives
+            }))
+            canonical_rows = {
+                int(row["server_id"]): row
+                for row in self._server_identity_rows(state, relative, table, ids)
+            }
+            for row in rows:
+                canonical_row = canonical_rows.get(int(row["server_id"] or 0))
+                if (
+                    canonical_row is not None
+                    and row["source_rowid"] != canonical_row["source_rowid"]
+                ):
+                    raise SightglassError(
+                        ErrorCode.SOURCE_INCOMPLETE,
+                        details={"warning_codes": ["duplicate_message_identity_conflict"]},
+                    )
         return result
 
     def _message(
@@ -2703,44 +2874,64 @@ class MacOSWeChatSourceProvider:
         positions_by_shard: dict[str, list[tuple[int, int, int]]] = {}
         yield SourcePreparationStep("positions", scanned, completed, len(shards))
         for relative in shards:
-            window = _PreparationWindow(capacity, forward=direction == "forward")
-            last_rowid: int | None = None
+            representatives: dict[int, tuple[int, int]] = {}
             with self._connect(relative) as connection:
                 while True:
+                    window = _PreparationWindow(capacity, forward=direction == "forward")
+                    last_rowid: int | None = None
+                    while True:
+                        _check_preparation(check_authority)
+                        where = "WHERE rowid > ?" if last_rowid is not None else ""
+                        params = (last_rowid, batch) if last_rowid is not None else (batch,)
+                        rows = connection.execute(
+                            f"""SELECT rowid AS source_rowid, create_time,
+                                       COALESCE(sort_seq, 0) AS sort_seq, server_id, local_type
+                                FROM [{table}] {where} ORDER BY rowid LIMIT ?""",
+                            params,
+                        ).fetchall()
+                        for row in rows:
+                            if not self._is_representative_position(row, representatives):
+                                continue
+                            position = (
+                                int(row["create_time"] or 0), int(row["sort_seq"]),
+                                int(row["source_rowid"]),
+                            )
+                            if minimum_time is not None and position[0] < minimum_time:
+                                continue
+                            if maximum_time is not None and position[0] >= maximum_time:
+                                continue
+                            if after_position is not None and position < after_position:
+                                continue
+                            if before_position is not None and position > before_position:
+                                continue
+                            window.offer(position, position)
+                        scanned += len(rows)
+                        exhausted = len(rows) < batch
+                        if rows:
+                            last_rowid = int(rows[-1]["source_rowid"])
+                        _check_preparation(check_authority)
+                        if exhausted:
+                            break
+                        yield SourcePreparationStep("positions", scanned, completed, len(shards))
+                    selected_positions = window.selected()
+                    metadata = self._position_metadata(connection, table, tuple(selected_positions))
+                    resolved = self._text_position_representatives(connection, table, metadata)
                     _check_preparation(check_authority)
-                    where = "WHERE rowid > ?" if last_rowid is not None else ""
-                    params = (last_rowid, batch) if last_rowid is not None else (batch,)
-                    rows = connection.execute(
-                        f"""SELECT rowid AS source_rowid, create_time,
-                                   COALESCE(sort_seq, 0) AS sort_seq
-                            FROM [{table}] {where} ORDER BY rowid LIMIT ?""",
-                        params,
-                    ).fetchall()
-                    for row in rows:
-                        position = (
-                            int(row["create_time"] or 0), int(row["sort_seq"]),
-                            int(row["source_rowid"]),
-                        )
-                        if minimum_time is not None and position[0] < minimum_time:
-                            continue
-                        if maximum_time is not None and position[0] >= maximum_time:
-                            continue
-                        if after_position is not None and position < after_position:
-                            continue
-                        if before_position is not None and position > before_position:
-                            continue
-                        window.offer(position, position)
-                    scanned += len(rows)
-                    exhausted = len(rows) < batch
-                    if exhausted:
+                    if all(self._is_representative_position(row, resolved) for row in metadata):
                         completed += 1
-                    elif rows:
-                        last_rowid = int(rows[-1]["source_rowid"])
-                    _check_preparation(check_authority)
-                    yield SourcePreparationStep("positions", scanned, completed, len(shards))
-                    if exhausted:
+                        yield SourcePreparationStep("positions", scanned, completed, len(shards))
+                        positions_by_shard[relative] = selected_positions
                         break
-            positions_by_shard[relative] = window.selected()
+                    # Candidate copies consumed the window: restart this shard's
+                    # bounded position scan with just these exact identities filtered.
+                    # No payload or progress is admitted until this lease completes.
+                    representatives.update(resolved)
+                    if len(representatives) > 20_002:
+                        raise SightglassError(
+                            ErrorCode.SOURCE_INCOMPLETE,
+                            details={"warning_codes": ["native_traversal_limit_reached"]},
+                        )
+                    yield SourcePreparationStep("positions", scanned, completed, len(shards))
 
         rows_by_shard: dict[str, dict[int, Any]] = {}
         messages_by_shard: dict[str, list[SourceMessage]] = {}
@@ -2983,7 +3174,7 @@ class MacOSWeChatSourceProvider:
         for relative in dict.fromkeys(shard for shard, _rowid in selected):
             check_operation_budget()
             rowids = tuple(rowid for shard, rowid in selected if shard == relative)
-            fetched = self._message_rows_by_rowid(state, relative, table, rowids)
+            fetched = self._message_rows_by_rowid(state, relative, table, rowids, canonical=False)
             for rowid in rowids:
                 payloads[(relative, rowid)] = fetched[rowid]
 
@@ -3017,6 +3208,135 @@ class MacOSWeChatSourceProvider:
             has_more=has_more,
             scanned_rows=inspected,
         )
+
+    def _context_positions(
+        self, connection: Any, table: str, boundary: tuple[int, int, int],
+        before: int, after: int,
+    ) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
+        # Unique timelines use the existing seek/one unordered position pass. Only
+        # retained duplicate text identities trigger a refill; each refill excludes
+        # their nonrepresentative rows before the bounded neighbor windows fill.
+        representatives: dict[int, tuple[int, int]] = {}
+        while True:
+            check_operation_budget()
+            left: list[tuple[int, int, int]] = []
+            right: list[tuple[int, int, int]] = []
+            ties: list[tuple[int, int, int]] = []
+            overscan = sum(count - 1 for _rowid, count in representatives.values())
+            seeks: list[tuple[str, tuple[int, ...]] | None] = []
+            indexed = True
+            for direction, radius in (("backward", before), ("forward", after)):
+                if not radius:
+                    seeks.append(None)
+                    continue
+                clause, values = self._keyset_clause(
+                    boundary, direction=direction, inclusive=True
+                )
+                guard = "<=" if direction == "backward" else ">="
+                order = "DESC" if direction == "backward" else "ASC"
+                sql = f"""
+                    SELECT rowid AS source_rowid, create_time,
+                           COALESCE(sort_seq, 0) AS sort_seq, server_id, local_type
+                    FROM [{table}]
+                    WHERE create_time {guard} ? AND {clause}
+                    ORDER BY create_time {order}, COALESCE(sort_seq, 0) {order},
+                             rowid {order}
+                    LIMIT ?
+                    """
+                # The prefix-equal row is inclusive. Keep radius+1 neighbors
+                # plus that possible full-ID tie; it cannot displace a sentinel.
+                params = (boundary[0], *values, min(20_003, radius + 2 + overscan))
+                seeks.append((sql, params))
+                if indexed:
+                    plan = connection.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()
+                    details = [str(row[3]) for row in plan]
+                    indexed = any(
+                        detail.startswith("SEARCH ") for detail in details
+                    ) and not any(
+                        detail == "USE TEMP B-TREE FOR ORDER BY" for detail in details
+                    )
+            if indexed:
+                position_sides: list[list[tuple[int, int, int]]] = []
+                for seek in seeks:
+                    rows = connection.execute(*seek).fetchall() if seek is not None else ()
+                    position_sides.append(
+                        [
+                            (
+                                int(row["create_time"] or 0),
+                                int(row["sort_seq"] or 0),
+                                int(row["source_rowid"]),
+                            )
+                            for row in rows
+                            if self._is_representative_position(row, representatives)
+                        ]
+                    )
+                left_positions, right_positions = (
+                    side[:radius + 2] for side, radius in zip(position_sides, (before, after))
+                )
+            else:
+                cursor = connection.execute(
+                    f"""
+                    SELECT rowid AS source_rowid, create_time,
+                           COALESCE(sort_seq, 0) AS sort_seq, server_id, local_type
+                    FROM [{table}]
+                    """
+                )
+                while batch := cursor.fetchmany(1024):
+                    check_operation_budget()
+                    for row in batch:
+                        if not self._is_representative_position(row, representatives):
+                            continue
+                        position = (
+                            int(row["create_time"] or 0),
+                            int(row["sort_seq"] or 0),
+                            int(row["source_rowid"]),
+                        )
+                        if position == boundary:
+                            # rowid is unique within a shard, but another shard may
+                            # share all three fields. Its full source ID breaks ties.
+                            ties.append(position)
+                        elif position < boundary and before:
+                            if len(left) < before + 1:
+                                heapq.heappush(left, position)
+                            elif position > left[0]:
+                                heapq.heapreplace(left, position)
+                        elif position > boundary and after:
+                            inverse = (-position[0], -position[1], -position[2])
+                            if len(right) < after + 1:
+                                heapq.heappush(right, inverse)
+                            elif inverse > right[0]:
+                                heapq.heapreplace(right, inverse)
+                left_positions = sorted((*left, *ties), reverse=True) if before else []
+                right_positions = (
+                    sorted((*((-item[0], -item[1], -item[2]) for item in right), *ties))
+                    if after
+                    else []
+                )
+            selected = (*left_positions, *right_positions)
+            metadata = self._position_metadata(connection, table, selected)
+            resolved = self._text_position_representatives(connection, table, metadata)
+            if all(self._is_representative_position(row, resolved) for row in metadata):
+                return left_positions, right_positions
+            representatives.update(resolved)
+            if len(representatives) > 20_002 or overscan >= 20_002:
+                raise SightglassError(
+                    ErrorCode.SOURCE_INCOMPLETE,
+                    details={"warning_codes": ["native_traversal_limit_reached"]},
+                )
+
+    @staticmethod
+    def _position_metadata(
+        connection: Any, table: str, positions: tuple[tuple[int, int, int], ...],
+    ) -> list[Any]:
+        rowids = tuple(sorted({position[2] for position in positions}))
+        if not rowids:
+            return []
+        placeholders = ",".join("?" for _value in rowids)
+        return connection.execute(
+            f"""SELECT rowid AS source_rowid, server_id, local_type, create_time,
+                       COALESCE(sort_seq, 0) AS sort_seq
+                FROM [{table}] WHERE rowid IN ({placeholders})""", rowids,
+        ).fetchall()
 
     def read_context(
         self,
@@ -3064,94 +3384,10 @@ class MacOSWeChatSourceProvider:
         ] = {}
         rows_by_shard: dict[str, dict[int, Any]] = {}
         for relative in shards:
-            left: list[tuple[int, int, int]] = []
-            right: list[tuple[int, int, int]] = []
-            ties: list[tuple[int, int, int]] = []
             with self._connect(relative) as connection:
-                seeks: list[tuple[str, tuple[int, ...]] | None] = []
-                indexed = True
-                for direction, radius in (("backward", before), ("forward", after)):
-                    if not radius:
-                        seeks.append(None)
-                        continue
-                    clause, values = self._keyset_clause(
-                        boundary, direction=direction, inclusive=True
-                    )
-                    guard = "<=" if direction == "backward" else ">="
-                    order = "DESC" if direction == "backward" else "ASC"
-                    sql = f"""
-                        SELECT rowid AS source_rowid, create_time,
-                               COALESCE(sort_seq, 0) AS sort_seq
-                        FROM [{table}]
-                        WHERE create_time {guard} ? AND {clause}
-                        ORDER BY create_time {order}, COALESCE(sort_seq, 0) {order},
-                                 rowid {order}
-                        LIMIT ?
-                        """
-                    # The prefix-equal row is inclusive. Keep radius+1 neighbors
-                    # plus that possible full-ID tie; it cannot displace a sentinel.
-                    params = (boundary[0], *values, radius + 2)
-                    seeks.append((sql, params))
-                    if indexed:
-                        plan = connection.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()
-                        details = [str(row[3]) for row in plan]
-                        indexed = any(
-                            detail.startswith("SEARCH ") for detail in details
-                        ) and not any(
-                            detail == "USE TEMP B-TREE FOR ORDER BY" for detail in details
-                        )
-                if indexed:
-                    position_sides: list[list[tuple[int, int, int]]] = []
-                    for seek in seeks:
-                        rows = connection.execute(*seek).fetchall() if seek is not None else ()
-                        position_sides.append(
-                            [
-                                (
-                                    int(row["create_time"] or 0),
-                                    int(row["sort_seq"] or 0),
-                                    int(row["source_rowid"]),
-                                )
-                                for row in rows
-                            ]
-                        )
-                    left_positions, right_positions = position_sides
-                else:
-                    cursor = connection.execute(
-                        f"""
-                        SELECT rowid AS source_rowid, create_time,
-                               COALESCE(sort_seq, 0) AS sort_seq
-                        FROM [{table}]
-                        """
-                    )
-                    while batch := cursor.fetchmany(1024):
-                        check_operation_budget()
-                        for row in batch:
-                            position = (
-                                int(row["create_time"] or 0),
-                                int(row["sort_seq"] or 0),
-                                int(row["source_rowid"]),
-                            )
-                            if position == boundary:
-                                # rowid is unique within a shard, but another shard may
-                                # share all three fields. Its full source ID breaks ties.
-                                ties.append(position)
-                            elif position < boundary and before:
-                                if len(left) < before + 1:
-                                    heapq.heappush(left, position)
-                                elif position > left[0]:
-                                    heapq.heapreplace(left, position)
-                            elif position > boundary and after:
-                                inverse = (-position[0], -position[1], -position[2])
-                                if len(right) < after + 1:
-                                    heapq.heappush(right, inverse)
-                                elif inverse > right[0]:
-                                    heapq.heapreplace(right, inverse)
-                    left_positions = sorted((*left, *ties), reverse=True) if before else []
-                    right_positions = (
-                        sorted((*((-item[0], -item[1], -item[2]) for item in right), *ties))
-                        if after
-                        else []
-                    )
+                left_positions, right_positions = self._context_positions(
+                    connection, table, boundary, before, after
+                )
             positions_by_shard[relative] = (left_positions, right_positions)
             rowids = tuple(
                 sorted(
@@ -3288,36 +3524,9 @@ class MacOSWeChatSourceProvider:
         if not expected:
             return
         ordered = tuple(sorted(server_ids))
-        placeholders = ",".join("?" for _ in ordered)
         for relative in self._message_shards(state, table):
             check_operation_budget()
-            real_sender = self._real_sender_expression(
-                state, relative, table, row_alias="message_row"
-            )
-            with self._connect(relative) as connection:
-                rows = connection.execute(
-                    f"""
-                    SELECT message_row.rowid AS source_rowid,
-                           message_row.local_id, message_row.server_id,
-                           message_row.local_type,
-                           COALESCE(message_row.sort_seq, 0) AS sort_seq,
-                           message_row.create_time, message_row.status,
-                           message_row.message_content,
-                           message_row.WCDB_CT_message_content AS content_type,
-                           message_row.packed_info_data,
-                           {real_sender} AS real_sender_username
-                    FROM [{table}] AS message_row
-                    WHERE message_row.server_id IN ({placeholders})
-                    ORDER BY message_row.rowid ASC
-                    LIMIT 20003
-                    """,
-                    ordered,
-                ).fetchall()
-            if len(rows) > 20_002:
-                raise SightglassError(
-                    ErrorCode.SOURCE_INCOMPLETE,
-                    details={"warning_codes": ["native_traversal_limit_reached"]},
-                )
+            rows = self._server_identity_rows(state, relative, table, ordered)
             for row in rows:
                 check_operation_budget()
                 message = self._message(
@@ -3372,6 +3581,7 @@ class MacOSWeChatSourceProvider:
             where = "rowid = ? AND create_time = ? AND COALESCE(sort_seq, 0) = ? AND local_type = ?"
             params = (rowid, create_time, sort_seq, local_type)
         matches: list[SourceMessage] = []
+        rows_by_position: dict[tuple[str, int], Any] = {}
         for relative in selected_relatives:
             real_sender = self._real_sender_expression(
                 state,
@@ -3379,6 +3589,7 @@ class MacOSWeChatSourceProvider:
                 table,
                 row_alias="message_row",
             )
+            raw_sender = self._raw_sender_expression(state, relative, table)
             with self._connect(relative) as connection:
                 rows = connection.execute(
                     f"""
@@ -3390,7 +3601,8 @@ class MacOSWeChatSourceProvider:
                            message_row.message_content,
                            message_row.WCDB_CT_message_content AS content_type,
                            message_row.packed_info_data,
-                           {real_sender} AS real_sender_username
+                           {real_sender} AS real_sender_username,
+                           {raw_sender} AS real_sender_source_id
                     FROM [{table}] AS message_row
                     WHERE {where}
                     ORDER BY message_row.rowid ASC
@@ -3403,9 +3615,13 @@ class MacOSWeChatSourceProvider:
                     ErrorCode.SOURCE_INCOMPLETE,
                     details={"warning_codes": ["native_traversal_limit_reached"]},
                 )
-            matches.extend(
-                self._message(state, conversation, row, relative, snapshot) for row in rows
-            )
+            if kind == "server":
+                rows = self._collapse_equivalent_text_rows(rows)
+            for row in rows:
+                rows_by_position[(relative, int(row["source_rowid"]))] = row
+                matches.append(self._message(
+                    state, conversation, row, relative, snapshot, include_resources=False
+                ))
             if len(matches) > 20_002:
                 raise SightglassError(
                     ErrorCode.SOURCE_INCOMPLETE,
@@ -3420,7 +3636,12 @@ class MacOSWeChatSourceProvider:
                 ErrorCode.SOURCE_INCOMPLETE,
                 details={"warning_codes": ["duplicate_message_identity_conflict"]},
             )
-        return min(matches, key=lambda message: message.sort_key.as_tuple())
+        selected = min(matches, key=lambda message: message.sort_key.as_tuple())
+        return self._message(
+            state, conversation,
+            rows_by_position[(selected.logical_shard_key, selected.source_rowid)],
+            selected.logical_shard_key, snapshot,
+        )
 
     def capture_resource_binding(
         self, request: CaptureRequest, snapshot: SourceSnapshot,
