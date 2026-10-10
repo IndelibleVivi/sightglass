@@ -40,14 +40,22 @@ on public main `7a01036`.
 
 The `10bb2fe` noneditable Linux core and Mac edge candidates passed 206 and 64
 installed tests respectively, with exact package/source and frozen-runtime parity.
-The authorized core installation is active and its original tunnel is healthy.
 A follow-up Linux core wheel from commit `20964ac` also passed 206 installed
-tests with exact package/source and frozen-runtime parity. It remains a candidate.
+tests with exact package/source and frozen-runtime parity. That follow-up is now
+active under the existing authorization, with schema, configuration, ownership
+grants and the latest database retained. Its installed stdio exposes thirteen tools;
+the original tunnel passed health, ready and control-plane-poll checks.
 The verified Mac edge runtime is selected in its supervisor, while activation and
 native acceptance remain blocked by local macOS authentication. The earlier edge
-runtime and private state are retained. The original MCP connection still serves
-resident reads during that actual disconnect.
-Current ordinary-host acceptance and unattended edge restart are not established.
+runtime and private state are retained. The original MCP connection verified
+empty-resident discovery guidance and bounded catalog discovery against that active
+core. Its explicit fresh request fails with `SERVICE_UNAVAILABLE` during the actual
+disconnect, while resident reads remain available with `bounded_stale` freshness.
+The original ChatGPT conversation exercised the offline path with ordinary GPT-6
+at the selected reasoning intensity: resident reads, explicit fresh failure and
+the brief empty-inbox guidance passed. Its explicit profile comparison confirmed
+that diagnostic responses retain the domain response without brief guidance.
+Native fresh acceptance and unattended edge restart are not established.
 Optional semantic remains disabled without separate exact-scope
 authorization; it is not implied by these local reliability changes. The preceding
 installation and hosted evidence below belongs to the earlier source versions.
