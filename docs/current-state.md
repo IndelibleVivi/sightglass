@@ -63,9 +63,14 @@ The time-window follow-up preserves fractional datetime bounds when querying
 native integer-second timestamps: lower bounds are inclusive and upper bounds
 exclusive. Its encrypted fixture reproduces the previous fractional-bound failure
 in both directions and retains exact-second controls. The affected native/capture
-suite passed 171 tests, plus full Pyright and Ruff/compileall. This source follow-up is
-not yet selected in the installation. Ordinary-host native fresh acceptance and
-unattended edge restart are not yet established.
+suite passed 171 tests, plus full Pyright and Ruff/compileall. Commit `4224374`
+passed its [hosted portable and full macOS gates](https://github.com/IndelibleVivi/sightglass/actions/runs/38063371431).
+Its noneditable Mac wheel passed the installed edge suite and the added boundary
+regression, with exact module/license and frozen-runtime parity. It is selected in
+the existing supervisor; the Linux core remains on the compatible `20964ac` source.
+The replacement Mac process is waiting at file access while the screen is locked,
+so its activation, live time-window check, ordinary-host native fresh acceptance
+and unattended edge restart are not yet established.
 Optional semantic remains disabled without separate exact-scope
 authorization; it is not implied by these local reliability changes. The preceding
 installation and hosted evidence below belongs to the earlier source versions.

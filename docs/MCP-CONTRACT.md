@@ -46,8 +46,9 @@ validated source windows，不跨未验证的 gaps 拼接相邻消息。
 分开报告 observed `catalog` 与 resident `message_scope`，其 brief `next_actions` 给出
 `wechat_find_conversations`（枚举已观察 catalog，不要求 resident 正文，保留调用者 account/kinds
 scope、不扩大 account filter）再 `wechat_read_messages`：后者是显式、有界的源读取
-（`mode="recent"`、`refresh=true`、`view="fresh"`、`voice="off"`），要求调用者从 discover
-结果选定一个 `conversation_id`；两者都只是调用指引、不自动执行、不 bulk-fill 历史，也不泄漏
+（`mode="recent"`、`refresh=true`、`voice="off"`；refresh 选择 fresh，不要求重复传 view），
+要求调用者从 discover 结果选定一个 `conversation_id`；两者都只是调用指引、不自动执行、
+不 bulk-fill 历史，也不泄漏
 未授权 conversation 数、IDs 或 labels。`readiness.live_refresh`/`resource_acquisition`
 在 transport 已连接但尚无 fresh capture 确认时为 `awaiting_confirmation`，仅在 transport
 断开或未观察到时为 `degraded`，正常 replica 视角不再被误报为源断线。
@@ -170,6 +171,10 @@ existing job's original limit when omitted, including tokens minted under the ol
 Query, scope, time and sender inputs remain bound and are supplied again in memory;
 no query text is persisted. Existing result cursors retain their existing semantics,
 including allowing a different result-page limit.
+
+Message time filters use an inclusive `time_after` and exclusive `time_before`.
+Fractional datetime bounds retain that meaning when the native source stores
+integer-second timestamps; exact-second bounds keep the same semantics.
 
 Brief compact/search pages reuse the reader's existing body allocator and signed
 pagination. The soft UTF-8 JSON targets are 8 KiB for search/link results and 16 KiB
