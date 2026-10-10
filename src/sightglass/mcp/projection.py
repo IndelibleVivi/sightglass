@@ -127,15 +127,15 @@ def next_actions(
                         "arguments": discover_arguments})
         # The caller must pick one conversation_id from the discover result; the read
         # is a deliberate bounded source acquisition (never an implicit auto-refresh),
-        # so it names mode/refresh/view explicitly and leaves voice off.
+        # so refresh=True selects fresh even when the default is replica. Avoid a
+        # redundant view argument: existing host catalogs may expose refresh alone.
         actions.append({
             "kind": "message_read",
             "tool": "wechat_read_messages",
             "requires_arguments": ["conversation_id"],
             "select_from": {"tool": "wechat_find_conversations",
                             "field": "candidates[].conversation_id"},
-            "arguments": {"mode": "recent", "refresh": True, "view": "fresh",
-                          "voice": "off"},
+            "arguments": {"mode": "recent", "refresh": True, "voice": "off"},
         })
     if name == "wechat_read_transcripts" and not value.get("processing_complete") and not value.get(
         "has_more_results_now"

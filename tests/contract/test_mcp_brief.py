@@ -192,7 +192,7 @@ assert ReaderService is CanonicalReaderService
         self.assertEqual(actions["message_read"]["tool"], "wechat_read_messages")
         self.assertEqual(
             actions["message_read"]["arguments"],
-            {"mode": "recent", "refresh": True, "view": "fresh", "voice": "off"},
+            {"mode": "recent", "refresh": True, "voice": "off"},
         )
         self.assertEqual(actions["message_read"]["requires_arguments"], ["conversation_id"])
         self.assertEqual(

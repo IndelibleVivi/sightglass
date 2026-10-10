@@ -367,7 +367,7 @@ class ReplicaReadTests(unittest.TestCase):
         # never an implicit replica read that would fail on a cold conversation.
         self.assertEqual(
             message_read["arguments"],
-            {"mode": "recent", "refresh": True, "view": "fresh", "voice": "off"},
+            {"mode": "recent", "refresh": True, "voice": "off"},
         )
         self.assertEqual(message_read["requires_arguments"], ["conversation_id"])
         # Discovery keeps the caller's account scope and does not widen the filter.
@@ -408,7 +408,8 @@ class ReplicaReadTests(unittest.TestCase):
             if item["conversation_id"] == self.group
         )
 
-        # Step 2: run the projected bounded fresh read for that one chosen conversation.
+        # Step 2: consume the action with the existing host catalog's refresh argument.
+        # No redundant view argument is required to escape the replica default.
         arguments = {"conversation_id": conversation_id, **message_read["arguments"]}
         _plan, fresh = self.read_capture(arguments)
         self.assertNotEqual(fresh.get("ok"), False, fresh)

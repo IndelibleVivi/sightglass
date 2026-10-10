@@ -28,10 +28,20 @@ required; real conflicts and media ambiguity still fail closed. Duplicate-heavy
 windows refill their positions within the same lease instead of losing neighbors.
 Schema v10, native v6 and stable message-token formats remain unchanged.
 
-Local source verification passed 1,431 tests, full Pyright, Ruff/compileall and
-diff checks; focused native/capture/replica checks also passed after the final
-cancellation hardening. Immutable candidate preparation, activation and current
-ordinary-host acceptance have not yet been established for this source.
+The reliability implementation in `10bb2fe` passed 1,431 local tests, full Pyright,
+Ruff/compileall and diff checks, plus focused native/capture/replica checks after
+the final cancellation hardening. Its hosted portable and full macOS gates also
+passed. A subsequent guidance compatibility check passed 63 contract/replica tests:
+the cold conversation action selects fresh through `refresh=true`, without requiring
+the redundant `view` argument missing from an existing host catalog.
+
+The `10bb2fe` noneditable Linux core and Mac edge candidates passed 206 and 64
+installed tests respectively, with exact package/source and frozen-runtime parity.
+The authorized core installation is active and its original tunnel is healthy.
+Mac edge activation and native acceptance remain blocked by local macOS
+authentication; the earlier edge runtime and private state are retained. The
+original MCP connection still serves resident reads during that actual disconnect.
+Current ordinary-host acceptance and unattended edge restart are not established.
 Optional semantic remains disabled without separate exact-scope
 authorization; it is not implied by these local reliability changes. The preceding
 installation and hosted evidence below belongs to the earlier source versions.

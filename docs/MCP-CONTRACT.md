@@ -200,10 +200,11 @@ carries non-token `discover`/`message_read` guidance so a bounded-stale page is 
 mistaken for a missing catalog; those actions name a tool and explicit arguments and
 never leak unauthorized identities. `discover` preserves the caller's account/kind
 scope and never widens the account filter; `message_read` is an explicit bounded fresh
-source read (`mode="recent"`, `refresh=true`, `view="fresh"`, `voice="off"`) that
+source read (`mode="recent"`, `refresh=true`, `voice="off"`) that
 `requires_arguments: ["conversation_id"]` and `select_from` the discover candidates —
 the caller chooses one conversation, and the guidance itself never executes or fills
-bulk history.
+bulk history. `refresh=true` selects the fresh plane without a redundant `view`
+argument, including for existing host catalogs that expose only `refresh`.
 
 | Action | Token path / parameter | Effect |
 | --- | --- | --- |
