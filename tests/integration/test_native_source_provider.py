@@ -2431,6 +2431,28 @@ class NativeSourceProviderTests(unittest.TestCase):
 
         self.assertEqual(seen, [10, 20, 30, 40, 50, 60])
 
+    def test_range_respects_fractional_and_exact_second_time_bounds(self) -> None:
+        cases = (
+            ("2024-08-30T06:40:01.000001+00:00", None, {1_725_000_002}),
+            (None, "2024-08-30T06:40:02.000001+00:00", {1_725_000_001, 1_725_000_002}),
+            ("2024-08-30T06:40:02+00:00", None, {1_725_000_002}),
+            (None, "2024-08-30T06:40:02+00:00", {1_725_000_001}),
+        )
+        for direction in ("forward", "backward"):
+            for after, before, expected in cases:
+                with self.subTest(direction=direction, after=after, before=before):
+                    with self.provider.session(
+                        SourceScope.conversation(self.account_key, self.conversation)
+                    ) as snapshot:
+                        page = self.provider.read_range(
+                            self.account_key, self.conversation,
+                            after=None, before=None, direction=direction, limit=2,
+                            snapshot=snapshot, time_after_utc=after, time_before_utc=before,
+                        )
+                    self.assertEqual(
+                        {int(message.source_time_raw) for message in page.messages}, expected
+                    )
+
     def test_signed_timeline_cursor_survives_an_ordinary_append(self) -> None:
         tools = self._reader_tools()
         external_account = opaque_id("wxacct", self.account_key)

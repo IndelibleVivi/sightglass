@@ -45,17 +45,27 @@ tests with exact package/source and frozen-runtime parity. That follow-up is now
 active under the existing authorization, with schema, configuration, ownership
 grants and the latest database retained. Its installed stdio exposes thirteen tools;
 the original tunnel passed health, ready and control-plane-poll checks.
-The verified Mac edge runtime is selected in its supervisor, while activation and
-native acceptance remain blocked by local macOS authentication. The earlier edge
-runtime and private state are retained. The original MCP connection verified
+The verified Mac edge runtime is selected in its supervisor. After the operator
+restored local macOS credential access, it connected and the remaining identity
+conflict cleared through validated fresh admission. Controlled default recent,
+point, context and backward-page reads succeeded; canonical IDs did not repeat
+across pages. The earlier edge runtime and private state are retained.
+The original MCP connection verified
 empty-resident discovery guidance and bounded catalog discovery against that active
-core. Its explicit fresh request fails with `SERVICE_UNAVAILABLE` during the actual
-disconnect, while resident reads remain available with `bounded_stale` freshness.
+core. During the measured disconnect, its explicit fresh request failed with
+`SERVICE_UNAVAILABLE`, while resident reads remained available with `bounded_stale`
+freshness.
 The original ChatGPT conversation exercised the offline path with ordinary GPT-6
 at the selected reasoning intensity: resident reads, explicit fresh failure and
 the brief empty-inbox guidance passed. Its explicit profile comparison confirmed
 that diagnostic responses retain the domain response without brief guidance.
-Native fresh acceptance and unattended edge restart are not established.
+The time-window follow-up preserves fractional datetime bounds when querying
+native integer-second timestamps: lower bounds are inclusive and upper bounds
+exclusive. Its encrypted fixture reproduces the previous fractional-bound failure
+in both directions and retains exact-second controls. The affected native/capture
+suite passed 171 tests, plus full Pyright and Ruff/compileall. This source follow-up is
+not yet selected in the installation. Ordinary-host native fresh acceptance and
+unattended edge restart are not yet established.
 Optional semantic remains disabled without separate exact-scope
 authorization; it is not implied by these local reliability changes. The preceding
 installation and hosted evidence below belongs to the earlier source versions.

@@ -6,6 +6,7 @@ import hashlib
 import heapq
 import importlib
 import json
+import math
 import os
 import re
 import secrets
@@ -2142,12 +2143,14 @@ class MacOSWeChatSourceProvider:
         while True:
             clauses: list[str] = []
             params: list[Any] = []
+            # Native create_time is an integer second. Both inclusive lower and
+            # exclusive upper datetime bounds need ceil to preserve fractions.
             if time_after_utc is not None:
                 clauses.append("create_time >= ?")
-                params.append(int(parse_aware_datetime(time_after_utc).timestamp()))
+                params.append(math.ceil(parse_aware_datetime(time_after_utc).timestamp()))
             if time_before_utc is not None:
                 clauses.append("create_time < ?")
-                params.append(int(parse_aware_datetime(time_before_utc).timestamp()))
+                params.append(math.ceil(parse_aware_datetime(time_before_utc).timestamp()))
             # Keep the exact timestamp/sequence/rowid predicates, but expose their
             # inclusive timestamp bounds separately. An existing create_time index
             # can then seek in timeline order instead of sorting the whole OR union.
