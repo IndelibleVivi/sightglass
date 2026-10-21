@@ -385,6 +385,29 @@ class CaptureBroker:
             self._inflight = None
             self._condition.notify_all()
 
+    def _wait_for_finalization(self, ticket: PreparedRemoteCapture) -> CaptureAck | None:
+        deadline = time.monotonic() + self.finalization_timeout
+        while True:
+            ack = ticket.durable_ack
+            if ack is not None:
+                return ack
+            with self._condition:
+                work = self._by_request.get(ticket.request.request_id)
+                abandoned = work is not None and work.ticket is ticket and work.detached
+            if abandoned:
+                assert work is not None
+                # This transport owner is outside the cancelled caller's budget.
+                # One exact recovery attempt may commit a terminal; an unfinished
+                # attempt still retries only through the existing pending replay.
+                self._recover_work(work)
+                return ticket.durable_ack
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining == 0:
+                return None
+            ack = ticket.wait_for_ack(min(0.05, remaining))
+            if ack is not None:
+                return ack
+
     def serve_connection(self, channel: FramedStream) -> None:
         if not self._session_lock.acquire(blocking=False):
             raise CaptureProtocolError("edge_stream_already_connected")
@@ -448,7 +471,7 @@ class CaptureBroker:
                     ack = (
                         received
                         if isinstance(received, CaptureAck)
-                        else received.wait_for_ack(self.finalization_timeout)
+                        else self._wait_for_finalization(received)
                     )
                     if ack is None:
                         assert isinstance(received, PreparedRemoteCapture)

@@ -377,7 +377,11 @@ cancelled caller or reissues the source read. A submit timeout detaches the wait
 retains the exact authorized work. A late capture enters the configured recovery
 hook even when its request is already known. If a returned ticket has no durable
 ACK when its finalization wait expires, or its caller cannot commit rejection,
-the broker marks that exact work abandoned. Its next identical pending replay
+the broker marks that exact work abandoned. An explicitly abandoned returned
+ticket wakes terminal recovery on the transport owner's existing wait, without
+waiting out the active caller's full finalization timeout. That owner makes one
+exact attempt; an unfinished attempt still requires pending replay. Its next
+identical pending replay
 uses the same authorized recovery hook; a still-active ticket is not recovered
 before that deadline. Recovery runs outside the broker lock with one attempt per
 work item at a time. A failed or unfinished attempt clears that in-flight marker

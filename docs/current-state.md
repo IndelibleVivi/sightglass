@@ -63,9 +63,12 @@ access remains unverified.
 The follow-up source makes broker waits honor the existing caller cancellation
 and deadline, so cancelled background waits release foreground priority promptly.
 The exact in-flight request stays detached for terminal rejection when its capture
-arrives; it is neither reissued nor acknowledged early. Two regressions fail on
-the previous blocking wait. The updated capture/core/source-worker/host suite
-passed 55 tests, full Pyright, Ruff and compileall. This core-only hardening awaits
+arrives; it is neither reissued nor acknowledged early. A caller-abandoned returned
+ticket also receives one prompt exact recovery attempt on the transport owner,
+outside the cancelled caller's context, while ordinary active finalization and
+failed-recovery replay retain their existing rules. Three regressions fail on
+the previous blocking waits. The updated capture/core/source-worker/host suite
+passed 56 tests, full Pyright, Ruff and compileall. This core-only hardening awaits
 artifact verification and activation; the retained Mac edge needs no restart.
 The previously activated core/edge evidence below belongs to its stated earlier
 versions and does not establish current 4.1.15 runtime readiness.

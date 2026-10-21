@@ -118,6 +118,56 @@ class CaptureEdgeRelayTests(unittest.TestCase):
             finally:
                 broker.close()
 
+    def test_abandoned_returned_ticket_recovers_before_finalization_timeout(self) -> None:
+        journal = fixtures.FixtureReceiveJournal(self.root / "abandoned-receive.sqlite")
+        receiver = CaptureReceiver(journal, self.expected, stream_epoch="fixture-stream")
+
+        def recover(ticket):
+            ack = receiver.admit(
+                receiver.prepare(ticket.envelope), None,
+                receipt_id="synthetic-abandoned-reject", reject=True,
+            )
+            ticket.complete(ack)
+
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=receiver.lookup_terminal, recover=recover,
+            finalization_timeout=2,
+        )
+        request = self.request()
+        envelope = self.capture(request)
+        channel, outgoing = self._pending_session(envelope, poll=True)
+
+        def serve():
+            with self.assertRaises(RelayDisconnected):
+                broker.serve_connection(channel)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            waiter = pool.submit(broker.submit, request, timeout=2)
+            try:
+                with broker._condition:
+                    self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+                server = pool.submit(serve)
+                ticket = waiter.result(timeout=1)
+                broker.abandon(ticket)
+                server.result(timeout=.5)
+                ack = ticket.durable_ack
+                assert ack is not None
+                self.assertEqual(ack.terminal, "rejected")
+                self.assertEqual(receiver.lookup_terminal(envelope), ack)
+                responses = FramedStream(io.BytesIO(outgoing.getvalue()), io.BytesIO())
+                ready = responses.receive()
+                assert isinstance(ready, dict)
+                self.assertEqual(ready["kind"], "ready")
+                frame = responses.receive()
+                assert isinstance(frame, dict)
+                self.assertEqual(frame["kind"], "work")
+                self.assertEqual(responses.receive(), {
+                    "schema": CAPTURE_VERSION, "kind": "ack", "ack": json_value(ack),
+                })
+            finally:
+                broker.close()
+
     def _pending_session(
         self, envelope: SealedCapture, *, poll: bool = False
     ) -> tuple[FramedStream, io.BytesIO]:
