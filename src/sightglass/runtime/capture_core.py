@@ -119,13 +119,18 @@ class CoreCapture:
                 self.service.repository.conversation_id_for(account_id, source_id)
             )
 
-    def _record_request(self, request: CaptureRequest) -> None:
+    def _record_request(
+        self, request: CaptureRequest, *,
+        attempted_catalog: tuple[str, str, str | None, str] | None = None,
+    ) -> None:
         self._authorize(request)
         now = utc_now().isoformat()
         metadata = canonical_json(
             {"generation": self.config.activation_generation, "request": json_value(request)}
         ).decode()
         with self.database.transaction() as connection:
+            require_core_activation(self.config)
+            self._authorize(request)
             connection.execute(
                 "INSERT INTO access_receipts(receipt_id,reader_id,tool_name,conversation_id,"
                 "scope_kind,scope_digest,message_count,resource_count,bytes_returned,started_at,"
@@ -140,6 +145,15 @@ class CoreCapture:
                     metadata,
                 ),
             )
+            if attempted_catalog is not None:
+                account_id, successor, expected_cursor, expected_updated = attempted_catalog
+                if account_id != self.service.repository.account_id_for(request.account_id):
+                    raise CaptureProtocolError("catalog_attempt_account_mismatch")
+                self.service.repository.record_source_catalog_attempt(
+                    account_id=account_id, next_cursor_token=successor,
+                    expected_cursor_token=expected_cursor, expected_updated_at=expected_updated,
+                    attempted_at=now,
+                )
 
     def _claim_request(self, request: CaptureRequest, outcome: str) -> None:
         # The hook runs in the reader's outer writer. If timeout/recovery won,
@@ -188,7 +202,12 @@ class CoreCapture:
             # still enters reject recovery; diagnostics cannot mask its caller error.
             pass
 
-    def _submit(self, values: dict[str, Any]) -> PreparedRemoteCapture:
+    def _submit(
+        self,
+        values: dict[str, Any],
+        *,
+        attempted_catalog: tuple[str, str, str | None, str] | None = None,
+    ) -> PreparedRemoteCapture:
         values = {
             **values,
             "request_id": "sgreq_" + uuid.uuid4().hex,
@@ -205,7 +224,9 @@ class CoreCapture:
             raise SightglassError(
                 ErrorCode.SERVICE_UNAVAILABLE, retryable=True, details={"reason": "edge_offline"}
             )
-        self._record_request(request)
+        # Registration and scheduling commit together before the source wait,
+        # under the original budget and the existing WindowDB writer.
+        self._record_request(request, attempted_catalog=attempted_catalog)
         remaining = operation_remaining_seconds()
         timeout = (
             min(CAPTURE_WAIT_SECONDS, remaining) if remaining is not None else CAPTURE_WAIT_SECONDS
@@ -481,7 +502,21 @@ class CoreCapture:
         }
         if not initial:
             values["after"] = json_value(frontier)
-        ticket = self._submit(values)
+        successor_token = self.service._encode_catalog_cursor(
+            account_id,
+            str(successor["conversation_id"]),
+        )
+        attempted_catalog = (
+            account_id,
+            successor_token,
+            (
+                str(catalog_state["next_cursor_token"])
+                if catalog_state["next_cursor_token"] is not None
+                else None
+            ),
+            str(catalog_state["updated_at"]),
+        )
+        ticket = self._submit(values, attempted_catalog=attempted_catalog)
         try:
             before, after = self._hooks(ticket)
             with self.service.captured_provider(
@@ -521,16 +556,6 @@ class CoreCapture:
                             plan,
                             snapshot,
                             inventory_epoch=self.expected.origin_epoch,
-                        )
-                        self.service.repository.record_source_catalog_state(
-                            account_id=account_id,
-                            inventory_epoch=str(catalog_state["source_inventory_epoch"]),
-                            coverage_state=str(catalog_state["coverage_state"]),
-                            observed_at=str(catalog_state["last_observed_at"]),
-                            next_cursor_token=self.service._encode_catalog_cursor(
-                                account_id,
-                                str(successor["conversation_id"]),
-                            ),
                         )
             result.update(
                 conversation_count=1, message_count=count, pending_conversation_count=int(pending)

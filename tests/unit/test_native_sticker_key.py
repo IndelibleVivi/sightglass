@@ -133,6 +133,19 @@ class NativeStickerKeyTests(unittest.TestCase):
             expected,
         )
 
+    def test_new_exact_profile_without_verified_offset_degrades_locally(self) -> None:
+        self._write_binary()
+        self._write_mmkv()
+        settings = MacOSWeChatSettings(
+            **{
+                **self.settings.__dict__,
+                "version": "4.1.15",
+                "build": "270115",
+                "profile_id": "wechat-macos-4.1.15-270115-arm64-v1",
+            }
+        )
+        self.assertIsNone(load_sticker_decoder_key(settings, app_path=self.app_path))
+
     def test_corrupt_mmkv_snapshot_fails_closed(self) -> None:
         self._write_binary()
         self._write_mmkv(valid_crc=False)

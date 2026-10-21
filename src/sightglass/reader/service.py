@@ -4669,8 +4669,6 @@ class ReaderService:
         ):
             raise SightglassError(ErrorCode.QUERY_INVALID)
         voice_policy = self._voice_policy(voice)
-        if resolved_view == "replica" and voice_policy == "auto":
-            voice_policy = "cached"
         if not strict:
             raise SightglassError(
                 ErrorCode.QUERY_INVALID,
@@ -4756,13 +4754,20 @@ class ReaderService:
             time_before if mode in {"range", "speaker"} else None,
             system_policy,
         )
-        if resolved_view == "auto" and view is None and cursor:
+        if view is None and isinstance(cursor, str) and cursor:
             payload = self.token_codec.decode(cursor)
-            # Legacy local callers continue a refreshed source page by passing
-            # only its signed cursor. Preserve that default-auto call shape while
-            # explicit views and the replica default retain strict view binding.
+            # The signed timeline retains its explicit fresh view for hosts that
+            # expose refresh but no view argument. Explicit views still have to
+            # match the token; unsigned or legacy auto tokens retain their default.
             if payload.get("kind") == "timeline" and payload.get("view") == "fresh":
                 resolved_view = "fresh"
+        if resolved_view == "fresh" and cursor:
+            self.replica.validate_fresh_timeline_cursor(
+                cursor, conversation_id=conversation_id, mode=mode, direction=direction,
+                scope_kind=scope_kind, scope_key=scope_key,
+            )
+        if resolved_view == "replica" and voice_policy == "auto":
+            voice_policy = "cached"
         return {
             "projection": projection, "include_resources": include_resources,
             "query": query, "time_after": time_after, "time_before": time_before,

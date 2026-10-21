@@ -1122,6 +1122,59 @@ class ReplicaReadTests(unittest.TestCase):
             self.fail("bounded fresh timeline continuation failed to terminate")
         self.assertEqual(received & expected, expected)
 
+    def test_sustained_fresh_paging_keeps_bounded_progress_and_usable_results(self) -> None:
+        expected = self.append_source(900, prefix="synthetic-sustained")
+        self.offline()
+        cursor = None
+        received_ids: list[str] = []
+        seen_sources: set[str] = set()
+        page_sizes: list[int] = []
+        previous_page_minimum: Any | None = None
+        for _ in range(8):
+            arguments = {
+                "mode": "recent",
+                "conversation_id": self.group,
+                "limit": 500,
+                "projection": "compact",
+                "view": "fresh",
+                "cursor": cursor,
+            }
+            plan, frozen = self.capture(arguments)
+            self.assertLessEqual(plan.limit, 200)
+            with self.service.captured_provider(frozen):
+                page = self.service.read_messages(**arguments)
+            self.assertNotEqual(page.get("ok"), False, page)
+            rows = self.repository.frozen_message_rows(
+                tuple(row[0] for row in page["messages"])
+            )
+            source_ids = [str(row["source_message_id"]) for row in rows]
+            self.assertLessEqual(len(page["messages"]), 500)
+            self.assertLessEqual(len(source_ids), 200)
+            self.assertEqual(len(source_ids), len(set(source_ids)))
+            self.assertFalse(seen_sources.intersection(source_ids))
+            ordered = [self.service._row_sort_key(row) for row in rows]
+            if previous_page_minimum is not None:
+                self.assertLess(ordered[-1].as_tuple(), previous_page_minimum.as_tuple())
+            previous_page_minimum = ordered[0]
+            page_sizes.append(len(page["messages"]))
+            received_ids.extend(source_ids)
+            seen_sources.update(source_ids)
+            cursor = page["page"]["next_cursor"]
+            if not cursor:
+                break
+        else:
+            self.fail("sustained fresh paging did not terminate within its bound")
+        self.assertGreater(len(page_sizes), 1)
+        self.assertTrue(all(size > 0 for size in page_sizes))
+        self.assertLessEqual(expected, seen_sources)
+        self.assertEqual(len(received_ids), len(set(received_ids)))
+
+        follow_up = self.service.read_messages(
+            mode="recent", conversation_id=self.group, limit=2, projection="compact"
+        )
+        self.assertNotEqual(follow_up.get("ok"), False, follow_up)
+        self.assertGreater(len(follow_up["messages"]), 0)
+
     def test_actual_fresh_correction_cannot_ack_across_unverified_observations(self) -> None:
         expected = self.append_source(201, prefix="synthetic-correction")
         self.service.sync_source_once(batch_limit=500, conversation_limit=100)
@@ -2318,8 +2371,10 @@ class ReplicaReadTests(unittest.TestCase):
             legacy_page = self.service.read_messages(**{**arguments, "cursor": legacy_cursor})
             self.assertEqual(legacy_page["messages"], next_page["messages"])
         self.service.default_view = "replica"
-        self.assertTrue(self.service.local_only_tool_call("wechat_read_messages", continuation))
-        self.assert_error(ErrorCode.CURSOR_INVALID, self.service.read_messages, **continuation)
+        self.assertFalse(self.service.local_only_tool_call("wechat_read_messages", continuation))
+        replica_default_page = self.service.read_messages(**continuation)
+        self.assertEqual(replica_default_page["messages"], next_page["messages"])
+        self.assertEqual(replica_default_page["source_receipt"]["view"], "fresh")
 
     def test_fresh_local_errors_are_classified_before_source_ownership(self) -> None:
         self.offline()

@@ -82,11 +82,13 @@ def next_actions(
     receipt = value.get("source_receipt", {})
     selected_view = receipt.get("view") or arguments.get("view")
     view_arguments = {"view": selected_view} if selected_view in {"replica", "fresh"} else {}
-    if view_arguments:
-        for action in actions:
+    for action in actions:
+        if view_arguments and name != "wechat_read_messages":
             action["arguments"] = dict(view_arguments)
-            if name == "wechat_read_messages" and arguments.get("refresh"):
-                action["clear_arguments"].append("refresh")
+        if name == "wechat_read_messages" and arguments.get("refresh"):
+            # A signed message cursor carries its view, including on existing
+            # hosts that expose refresh without a separate view parameter.
+            action["clear_arguments"].append("refresh")
     continuation = receipt.get("source_continuation", {}).get("reading_token")
     if continuation:
         actions.append({"kind": "source_scan", "tool": name,
@@ -146,6 +148,7 @@ def next_actions(
                         "token_path": "next_cursor" if has_cursor else "reading_token",
                         "reuse_arguments": True, "arguments": {"wait_ms": 8000},
                         "wait_ms": value.get("wait", {}).get("retry_after_ms", 1000)})
+    message_view_arguments = {"refresh": True} if selected_view == "fresh" else view_arguments
     # Compact bodies have an explicit bounded recovery entry, without exposing a source path.
     for rows_key in ("messages", "hits"):
         for index in value.get("markers", {}).get("body_truncated", {}):
@@ -153,13 +156,15 @@ def next_actions(
             if int(index) < len(rows):
                 actions.append({"kind": "message_detail", "tool": "wechat_read_messages",
                                 "arguments": {"mode": "message", "message_id": rows[int(index)][0],
-                                              "response_profile": "diagnostic", **view_arguments}})
+                                              "response_profile": "diagnostic",
+                                              **message_view_arguments}})
                 break
     for row in value.get("messages", []):
         if isinstance(row, dict) and row.get("body_truncated"):
             actions.append({"kind": "message_detail", "tool": "wechat_read_messages",
                             "arguments": {"mode": "message", "message_id": row["message_id"],
-                                          "response_profile": "diagnostic", **view_arguments}})
+                                          "response_profile": "diagnostic",
+                                          **message_view_arguments}})
             break
     if name == "wechat_read_messages" and arguments.get("mode", "recent") == "context":
         rows = value.get("messages", [])
@@ -169,7 +174,7 @@ def next_actions(
                 identity = row[0] if isinstance(row, list) else row["message_id"]
                 actions.append({"kind": "context_edge", "tool": name,
                                 "arguments": {"mode": "context", "message_id": identity,
-                                              **view_arguments},
+                                              **message_view_arguments},
                                 "reuse_arguments": True, "clear_arguments": ["anchor", "cursor"]})
     return actions
 

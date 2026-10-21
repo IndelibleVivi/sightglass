@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .common import SourceSortKey, parse_aware_datetime
+from .errors import ErrorCode
 from .identity import SourceAccount, SourceConversation, SourceParticipant, SourceParticipantFilter
 from .messages import SourceMessage
 from .resources import SourceResource, SourceResourceVariant
@@ -19,6 +20,102 @@ from .resources import SourceResource, SourceResourceVariant
 CAPTURE_VERSION = "sightglass.capture.v1"
 # Finite content-free rejection subtype; never serialize arbitrary exception details.
 SOURCE_IDENTITY_CONFLICT_REASON = "duplicate_message_identity_conflict"
+# Repository-owned, content-free source diagnostics. They may cross the sealed
+# capture boundary so an operator can distinguish binding/key/schema failures
+# from bounded traversal or query failures. Other provider details stay local.
+SOURCE_DIAGNOSTIC_REASONS = frozenset(
+    {
+        "account_self_identity_conflict",
+        SOURCE_IDENTITY_CONFLICT_REASON,
+        "native_traversal_limit_reached",
+        "source_build_binding_changed",
+        "source_conversation_ambiguous",
+        "source_database_unreadable",
+        "source_inventory_unreadable",
+        "source_key_missing_or_invalid",
+        "source_message_inventory_unreadable",
+        "source_message_shards_unavailable",
+        "source_query_failed",
+        "source_schema_invalid",
+        "source_wal_unreadable",
+    }
+)
+# All domain codes, including legacy INTERNAL_ERROR, remain exact replay values.
+CAPTURE_FINITE_REASONS = frozenset(
+    {
+        "resource_binding_mismatch",
+        "resource_binding_not_captured",
+        "resource_binding_evidence_required",
+        "resource_locator_scope_mismatch",
+        "resource_revision_changed",
+        "resource_revision_fields_mismatch",
+        "resource_revision_mismatch",
+        "resource_resolver_inactive",
+        "resource_resolver_invalid",
+        "resource_size_invalid",
+        "resource_unavailable",
+        "boundary_conversation_mismatch",
+        "boundary_identity_conflict",
+        "capture_account_mismatch",
+        "capture_conversation_mismatch",
+        "capture_digest_mismatch",
+        "capture_egress_ceiling_mismatch",
+        "capture_expectation_mismatch",
+        "capture_fields_mismatch",
+        "capture_header_incomplete",
+        "capture_literal_mismatch",
+        "capture_message_scope_mismatch",
+        "capture_metadata_not_canonical",
+        "capture_nesting_limit",
+        "capture_participant_scope_mismatch",
+        "capture_request_mismatch",
+        "capture_requires_immutable_bytes",
+        "capture_size_invalid",
+        "capture_tuple_size",
+        "capture_type_mismatch",
+        "capture_type_unsupported",
+        "capture_value_invalid",
+        "capture_version_mismatch",
+        "context_identity_conflict",
+        "context_operation_not_captured",
+        "context_window_position_mismatch",
+        "context_window_scope_mismatch",
+        "coverage_scope_mismatch",
+        "discovery_conversation_mismatch",
+        "discovery_operation_not_captured",
+        "discovery_position_mismatch",
+        "discovery_terminal_mismatch",
+        "duplicate_canonical_message",
+        "duplicate_json_key",
+        "egress_account_denied",
+        "egress_conversation_denied",
+        "fresh_receipt_expired",
+        "invalid_capture_json",
+        "invalid_json_value",
+        "message_batch_limit",
+        "message_not_captured",
+        "message_not_in_replay_session",
+        "metadata_size_invalid",
+        "nonfinite_json_value",
+        "range_message_scope_mismatch",
+        "range_operation_not_captured",
+        "recent_operation_not_captured",
+        "replay_page_limit_exceeded",
+        "resource_binding_validator_required",
+        "roster_not_captured",
+        "selected_generation_changed",
+        "selected_generation_evidence_missing",
+        "target_claims_catalog_coverage",
+        "terminal_error_carries_evidence",
+        "unexpected_context_windows",
+        "unexpected_missing_message_targets",
+        "unexpected_resource_payload",
+        "unsealed_capture",
+        "unsupported_operation",
+        "verification_conversation_mismatch",
+        "verification_scope_mismatch",
+    }
+) | frozenset(code.value for code in ErrorCode) | SOURCE_DIAGNOSTIC_REASONS
 MAX_CAPTURE_MESSAGES = 200
 MAX_CAPTURE_METADATA_BYTES = 4 * 1024 * 1024
 MAX_CAPTURE_RESOURCE_BYTES = 32 * 1024 * 1024
@@ -303,6 +400,10 @@ class CaptureReceipt:
             raise CaptureProtocolError("invalid_terminal_state")
         if self.terminal != "complete" and self.coverage != CaptureCoverage("none"):
             raise CaptureProtocolError("terminal_error_claims_coverage")
+        if self.reason is not None and (
+            not isinstance(self.reason, str) or self.reason not in CAPTURE_FINITE_REASONS
+        ):
+            raise CaptureProtocolError("invalid_receipt_reason")
         for timestamp in (self.sealed_at, self.fresh_until):
             try:
                 parse_aware_datetime(timestamp)

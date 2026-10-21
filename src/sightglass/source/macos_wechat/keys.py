@@ -134,6 +134,8 @@ def verify_key_map(source_root: Path, value: dict[str, Any]) -> dict[str, dict[s
             source_root, relative, candidate
         ):
             verified[relative] = {"enc_key": candidate}
+    if _source_databases(source_root) != expected:
+        raise RuntimeError("source database inventory changed during key verification")
     return verified
 
 

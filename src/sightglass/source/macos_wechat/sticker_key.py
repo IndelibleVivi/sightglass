@@ -44,6 +44,8 @@ _TARGET_KEYS = frozenset(
 # WeChat build is the authority for the bytes; Sightglass never persists them.
 _PROFILE_MMKV_KEY_OFFSETS = {
     "wechat-macos-4.1.13-269602-arm64-v1": 0x84C6830,
+    # The 4.1.15 profile is intentionally absent until independently verified.
+    # Missing profile support degrades only optional sticker decoding.
 }
 
 

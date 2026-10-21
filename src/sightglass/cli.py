@@ -115,6 +115,12 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("edge-enroll", "edge-run"):
         edge = commands.add_parser(name, help="explicit thin source edge; never opens WindowDB")
         edge.add_argument("--settings", type=Path, required=True)
+    edge_rebind = commands.add_parser(
+        "edge-rebind",
+        help="stopped-only same-account thin-edge app/profile rebind",
+    )
+    edge_rebind.add_argument("--settings", type=Path, required=True)
+    edge_rebind.add_argument("--same-account", action="store_true", required=True)
 
     edge_inspect = commands.add_parser(
         "edge-recovery-inspect", help="private cached loss identity; stopped edge only"
@@ -1138,6 +1144,11 @@ def main(argv: list[str] | None = None) -> None:
                 _print(enroll_edge(settings))
             else:
                 run_edge(settings)
+            return
+        if args.command == "edge-rebind":
+            from sightglass.runtime.edge_runtime import rebind_edge
+
+            _print(rebind_edge(args.settings, same_account=args.same_account))
             return
         if args.command in {"edge-recovery-inspect", "edge-recover"}:
             from sightglass.runtime.capture_recovery import (

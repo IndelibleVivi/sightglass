@@ -21,7 +21,7 @@ uv run sightglassctl doctor
 
 ## Activate native macOS WeChat
 
-Preconditions: WeChat `4.1.13 / 269602 / arm64` 正常运行，source 可读，并已有与当前数据库匹配的 verified-key map。切换 source 前 daemon 必须停止。
+Preconditions: 精确支持的 WeChat `4.1.13 / 269602 / arm64` 或 `4.1.15 / 270115 / arm64` 正常运行，source 可读，并已有与当前数据库匹配的 verified-key map。切换 source 前 daemon 必须停止。
 
 ```bash
 uv run sightglassctl source providers
@@ -91,7 +91,30 @@ print(operations)
 
 Native provider v6 更新 context identity admission：升级后的旧 v5 materialized projection/cursor 不再作为 current-epoch evidence；正常有界 source 重观察／tail repair 恢复可读性，不在启动时批量重写或 refill history。Pending immutable update deliveries 保留自己的 replay bytes。
 
-遇到 source-required call 的 `SOURCE_INCOMPLETE` 或 `source_build_binding_changed` 时，不要绕过 profile/key verification。常见原因是微信升级、key rotation 或新 message shard；停止 daemon，用新版本支持与完整 verified-key map 重新执行初始化。修复前，current-epoch materialized pages、native inbox 与通过当前 policy/resolver 检查的 warm CAS object 可以继续读取，但 receipt 会明确 bounded-stale/local-cache，且不能用于推断 live source 当前状态。Sightglass 不会重签、注入或修改 WeChat。
+遇到 source-required call 的 `SOURCE_INCOMPLETE` 时，检查 `details.warning_codes` 和 operator `source_worker.last_error_reason`（MCP diagnostic 中位于 `runtime.source_worker`）。`source_build_binding_changed` 表示当前 app/profile 与绑定不同；`source_key_missing_or_invalid`、`source_schema_invalid`、database/WAL unreadability 分别保留自己的有限诊断。Connected transport 不证明 source 可读。已支持 build 的同账号 edge 升级使用下面的 rebind；未知 build、key rotation 或缺少新 required shard key 仍需明确的 profile/verified-key enrollment，不能猜 key 或绕过验证。修复前，current-epoch materialized pages、native inbox 与通过当前 policy/resolver 检查的 warm CAS object 可以继续读取，receipt 仍明确 bounded-stale/local-cache。Sightglass 不会重签、注入或修改 WeChat。
+
+## Verified same-account edge rebind
+
+适用于已授权的同一 configured account，app 升至当前 release 已支持的精确 build，且原 Keychain map 仍能通过每个 required database 的 page-1 proof。它只更改 native settings v2 的 `candidate_binding`，保留 account/instance IDs、source root、image/key credential references、edge config、origin/stream epochs、pending spool 和 core policy。数据库 key 不被当成 account identity；operator 必须以 `--same-account` 明确确认范围仍是原账号。4.1.15 没有经过验证的 sticker MMKV offset，该可选解密保持 unavailable，不借用旧 offset。
+
+先按生产 promotion 流程验证 immutable candidate，并准备同一 release 的 supervisor。以下变量从原 private installation record 取得：`EDGE_LABEL` 是原 launchd service target，`EDGE_PLIST` 是原 plist，`EDGE_SETTINGS` 是原 edge JSON，`EDGE_PYTHON` 是已验证 noneditable candidate 的 interpreter。保留 native settings/plist 的 private before-images 和旧 runtime；不要在 public repo 保存这些材料。
+
+```bash
+launchctl bootout "$EDGE_LABEL"
+```
+
+确认原 service 已从 launchd 注销，且原 edge PID 已退出，再执行下面两步。`bootout` 返回不等于进程已退出；命令会用现有 spool exclusive lock 拒绝仍在运行的 owner，不允许复制或重建 spool 来绕过。
+
+```bash
+"$EDGE_PYTHON" -m sightglass.cli edge-rebind --settings "$EDGE_SETTINGS" --same-account
+launchctl bootstrap "gui/$(id -u)" "$EDGE_PLIST"
+```
+
+Rebind 只探测配置中的 source root，不枚举其他账号；使用原 Keychain credential 在内存中重验完整 required inventory，并在写入前复验 profile、ownership、edge config 和 native file before-image。它不创建 Mac WindowDB、不写 secret、不启动进程，返回 `activated=false`。Validation failure 保留原 native settings；出现 concurrent file/config/ownership change 时停止并检查实际状态。Missing/invalid key 或未知 build 是停止条件：需要 operator 提供相应 profile/完整 verified-key enrollment 后才能继续，重复调用不能代替该材料。不要运行 `edge-enroll`、重置 stream 或初始化第二个 WindowDB。
+
+启动后核对实际 selected interpreter、唯一 edge owner、core transport，以及同一授权会话的 bounded `read_messages(refresh=true)` fresh receipt。继续读取时只传返回的 cursor、保留 scope 并清除 `refresh`；signed cursor 保留 fresh view，适用于既有 host 缺少 view 参数的情况。连续分页后再做一次小 fresh read，确认没有遗留 operation/spool 阻塞。macOS 若要求新进程的 App Data 确认，必须由 owner 亲手处理并重新验 fresh；本次允许不证明 unattended restart permission。Rebind 与启动成功、source 确认和普通 ChatGPT 验收是不同事实。
+
+如果需要 rollback，先停止新 edge，并在原 namespace 和 ownership 下检查 private before-image；保留最新 authoritative core DB/ACK 状态，不恢复旧数据库或删除 pending capture。旧 runtime 能否读取当前 app build 仍由其 exact profile 支持决定，不能以旧 process running 作为恢复证明。
 
 ## Lifecycle and policy
 

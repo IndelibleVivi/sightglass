@@ -10,7 +10,7 @@ Sightglass 是一个采用 macOS native source 与 portable core 的实验性 re
 
 它适合需要查看原始对话、聚焦一个成员、打开消息里的文件，或从已确认的阅读位置继续往下看的 reader。微信数据库与 key 留在 Mac。Local 模式的 admitted state 与 processing 也留在本机；明确配置 Linux core 后，已授权的 Sightglass state 与有界 captured pages/resources 会进入 core。Tool 内容交给连接的客户端，并受该客户端的数据处理规则约束。
 
-> **开发预览 · `0.1.0.dev1`。** Native source 当前只支持微信 **4.1.13 / build 269602 / arm64**，需要 operator 自行提供并验证数据库 key。Sightglass 不提取这些 key。配置真实账号前，先运行 synthetic 示例。公开与许可状态见 [Current state](docs/current-state.md) 和 [Notices](NOTICE.md)。
+> **开发预览 · `0.1.0.dev1`。** Native source 支持精确的微信 **4.1.13 / build 269602 / arm64** 和 **4.1.15 / build 270115 / arm64** profiles，需要 operator 自行提供并验证数据库 key。Sightglass 不提取这些 key。4.1.15 尚无经过验证的 sticker 解密 offset，这类本地贴纸明确报告 unavailable，普通消息仍可读取。配置真实账号前，先运行 synthetic 示例。公开与许可状态见 [Current state](docs/current-state.md) 和 [Notices](NOTICE.md)。
 
 ## 可选 Mac edge 与 Linux core
 
@@ -30,6 +30,12 @@ catalog 与 cached bytes 仍从 admitted state 读取。结果明确标注 parti
 message 的当前 resident bindings；正文过期或已 released 时返回 `SOURCE_INCOMPLETE`，
 不会恢复 inactive 的历史 resolver。需要有界 source 验证时，在提供该参数的 tool 上用
 `view="fresh"`。
+读取最新消息时使用 `wechat_read_messages(mode="recent", refresh=true)`。长段读取按返回的
+cursor 和 `next_actions` 继续，并在 continuation 中清除 `refresh`。Signed source cursor
+会保留 fresh view，也适用于只暴露 `refresh`、未暴露 `view` 的 host；每页独立验证。
+已支持 build 的升级使用 stopped、verified 的
+[`edge-rebind` 同账号流程](docs/OPERATIONS.md#verified-same-account-edge-rebind)，保留既有
+keys、identities 和 stream state。
 `view="replica"` 下 `wechat_status` 区分 transport 与确认：`read_plane.capture_transport`
 报告 capture edge 当前是否连接（仅为运输证据，不探测 source）；
 `read_plane.live_refresh_available` 表示当前能否发起 fresh 请求（transport 已连接或已有确认，

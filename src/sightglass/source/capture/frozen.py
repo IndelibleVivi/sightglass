@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import Any
 
 from sightglass.contracts.capture import (
-    SOURCE_IDENTITY_CONFLICT_REASON,
+    SOURCE_DIAGNOSTIC_REASONS,
     CaptureProtocolError,
     CaptureRequest,
     ResourceCaptureBinding,
@@ -41,10 +41,11 @@ class FrozenCaptureProvider:
     def __init__(self, envelope: SealedCapture) -> None:
         document = envelope.document()
         if document.receipt.terminal != "complete":
-            if document.receipt.reason == SOURCE_IDENTITY_CONFLICT_REASON:
+            diagnostic = document.receipt.reason
+            if diagnostic in SOURCE_DIAGNOSTIC_REASONS:
                 raise SightglassError(
                     ErrorCode.SOURCE_INCOMPLETE, retryable=True,
-                    details={"warning_codes": [SOURCE_IDENTITY_CONFLICT_REASON]},
+                    details={"warning_codes": [diagnostic]},
                 )
             try:
                 code = ErrorCode(document.receipt.reason or "SOURCE_SNAPSHOT_FAILED")

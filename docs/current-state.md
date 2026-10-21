@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-10. This page owns current source, candidate and publication status.
+Updated: 2026-10-21. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -8,9 +8,36 @@ history belong in private operator records outside Git.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
-- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and native provider `sightglass.macos-wechat.sqlcipher.v6`. Native access supports only WeChat **4.1.13 / build 269602 / arm64** on macOS; one exact account and verified keys require explicit operator authorization.
+- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and native provider `sightglass.macos-wechat.sqlcipher.v6`. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
+
+## Current reliability candidate
+
+The current source adds an exact 4.1.15 profile and a stopped-only verified
+same-account edge rebind, retaining native settings v2 and the existing
+account/instance, credential and stream bindings. Its new profile intentionally
+has no unverified sticker-key offset. Source diagnostics cross sealed replay
+only through a finite content-free reason set; legacy finite error receipts
+remain recoverable. A round-robin scheduling attempt commits with durable
+request registration before the source wait, independently of tail, coverage,
+reader ACK or later admission.
+
+Fresh source cursors now retain their signed view when the caller omits `view`,
+including on replica-default cores and existing hosts that expose only
+`refresh`. Brief pagination clears `refresh`; context/detail hints select fresh
+through that existing argument. Explicit mismatched views, altered signatures,
+wrong scopes and locally invalid positions remain rejected before source work.
+
+The old public source reproduces failed-target starvation, deadline starvation
+and refresh-only host pagination failures. The corresponding new focused checks
+pass. Generated sustained paging and the refresh-only host path verify bounded
+progress and unique identities. Direct native preflight on the new exact app
+profile passed complete installed-key verification and bounded recent reads;
+this establishes provider behavior, not activation or ordinary host acceptance.
+The full source gate passed 1,458 tests, full Pyright, Ruff, compileall and whitespace checks. The affected documentation passed 117 local links and 43 shell-block syntax checks. Installed artifact, hosted CI and live promotion gates remain pending.
+The previously activated core/edge evidence below belongs to its stated earlier
+versions and does not establish current 4.1.15 runtime readiness.
 
 ## Daily-use reliability follow-up
 

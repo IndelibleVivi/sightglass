@@ -2538,6 +2538,47 @@ class WindowRepository:
                 (account_id,),
             ).fetchone()
 
+    def record_source_catalog_attempt(
+        self,
+        *,
+        account_id: str,
+        next_cursor_token: str,
+        expected_cursor_token: str | None,
+        expected_updated_at: str,
+        attempted_at: str,
+    ) -> None:
+        """Advance bounded live rotation without claiming catalog coverage."""
+
+        with self.database.transaction(maintenance=True) as connection:
+            if expected_cursor_token is None:
+                changed = connection.execute(
+                    """
+                    UPDATE source_catalog_state
+                    SET next_cursor_token = ?, updated_at = ?
+                    WHERE account_id = ? AND next_cursor_token IS NULL
+                      AND updated_at = ?
+                    """,
+                    (next_cursor_token, attempted_at, account_id, expected_updated_at),
+                )
+            else:
+                changed = connection.execute(
+                    """
+                    UPDATE source_catalog_state
+                    SET next_cursor_token = ?, updated_at = ?
+                    WHERE account_id = ? AND next_cursor_token = ?
+                      AND updated_at = ?
+                    """,
+                    (
+                        next_cursor_token,
+                        attempted_at,
+                        account_id,
+                        expected_cursor_token,
+                        expected_updated_at,
+                    ),
+                )
+            if changed.rowcount not in {0, 1}:
+                raise RuntimeError("source catalog attempt update was ambiguous")
+
     def indexed_conversation_ids(
         self,
         account_id: str,

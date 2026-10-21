@@ -258,11 +258,12 @@ class ReaderTools:
         request_id: str | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
-        """Read message pages; updates require ACK. Use refresh for a bounded source reread.
+        """Read message pages; updates require ACK. Use refresh for latest source messages.
 
         view=replica reads admitted resident bodies offline; fresh requires current source evidence.
         Updates request_id gives bounded durable replay after a committed response is lost.
         Compact columns use fields/people; next_actions gives each continuation slot.
+        A signed timeline cursor retains fresh view; clear refresh when continuing it.
         Default recent limit is 30. diagnostic preserves full receipts; updates replay exactly.
         """
 

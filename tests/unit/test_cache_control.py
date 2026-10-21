@@ -27,6 +27,85 @@ from tests.unit.test_schema_v3_migration import insert_batch, insert_job, seed_v
 
 
 class CacheControlTests(unittest.TestCase):
+    def test_source_catalog_attempt_advances_only_rotation_metadata(self) -> None:
+        repository = WindowRepository(self.database)
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO accounts(account_id,source_namespace,identity_confidence,"
+                "reader_timezone,current_display_name,first_seen_at,last_seen_at) "
+                "VALUES('synthetic-catalog-account','synthetic-catalog-namespace','exact',"
+                "'UTC','Synthetic','2000-01-01T00:00:00+00:00',"
+                "'2000-01-01T00:00:00+00:00')"
+            )
+        repository.record_source_catalog_state(
+            account_id="synthetic-catalog-account",
+            inventory_epoch="synthetic-inventory-v1",
+            coverage_state="complete",
+            observed_at="2000-01-01T00:00:00+00:00",
+            next_cursor_token="synthetic-cursor-v1",
+        )
+        before = repository.source_catalog_state("synthetic-catalog-account")
+        assert before is not None
+        repository.record_source_catalog_attempt(
+            account_id="synthetic-catalog-account",
+            next_cursor_token="synthetic-cursor-v2",
+            expected_cursor_token="synthetic-cursor-v1",
+            expected_updated_at="2000-01-01T00:00:00+00:00",
+            attempted_at="2000-01-02T00:00:00+00:00",
+        )
+        after = repository.source_catalog_state("synthetic-catalog-account")
+        assert after is not None
+        self.assertEqual(after["next_cursor_token"], "synthetic-cursor-v2")
+        self.assertEqual(after["updated_at"], "2000-01-02T00:00:00+00:00")
+        for field in (
+            "source_inventory_epoch",
+            "coverage_state",
+            "scan_started_at",
+            "scan_completed_at",
+            "last_observed_at",
+            "last_error_code",
+        ):
+            self.assertEqual(after[field], before[field])
+
+    def test_source_catalog_attempt_does_not_overwrite_a_refreshed_row(self) -> None:
+        repository = WindowRepository(self.database)
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO accounts(account_id,source_namespace,identity_confidence,"
+                "reader_timezone,current_display_name,first_seen_at,last_seen_at) "
+                "VALUES('synthetic-catalog-cas','synthetic-catalog-cas-namespace','exact',"
+                "'UTC','Synthetic','2000-01-01T00:00:00+00:00',"
+                "'2000-01-01T00:00:00+00:00')"
+            )
+        repository.record_source_catalog_state(
+            account_id="synthetic-catalog-cas",
+            inventory_epoch="synthetic-inventory-v1",
+            coverage_state="complete",
+            observed_at="2000-01-01T00:00:00+00:00",
+            next_cursor_token="synthetic-cursor-v1",
+        )
+        refreshed = repository.source_catalog_state("synthetic-catalog-cas")
+        assert refreshed is not None
+        repository.record_source_catalog_state(
+            account_id="synthetic-catalog-cas",
+            inventory_epoch="synthetic-inventory-v2",
+            coverage_state="partial",
+            observed_at="2000-01-03T00:00:00+00:00",
+            next_cursor_token="synthetic-cursor-refreshed",
+        )
+        before = repository.source_catalog_state("synthetic-catalog-cas")
+        assert before is not None
+        repository.record_source_catalog_attempt(
+            account_id="synthetic-catalog-cas",
+            next_cursor_token="synthetic-stale-successor",
+            expected_cursor_token=str(refreshed["next_cursor_token"]),
+            expected_updated_at=str(refreshed["updated_at"]),
+            attempted_at="2000-01-04T00:00:00+00:00",
+        )
+        after = repository.source_catalog_state("synthetic-catalog-cas")
+        assert after is not None
+        self.assertEqual(dict(after), dict(before))
+
     def test_volume_encryption_is_explicitly_unknown_outside_macos(self) -> None:
         with (
             patch("sightglass.runtime.control.sys.platform", "linux"),

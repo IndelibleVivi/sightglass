@@ -165,6 +165,65 @@ class NativeCaptureBoundaryTests(unittest.TestCase):
             FrozenCaptureProvider(envelope)
         self.assertEqual(caught.exception.details, {})
 
+    def test_allowlisted_source_diagnostic_survives_without_hostile_details(self) -> None:
+        failure = SightglassError(
+            ErrorCode.SOURCE_INCOMPLETE,
+            details={
+                "warning_codes": [
+                    "source_build_binding_changed",
+                    "synthetic-private-account",
+                ],
+                "private_detail": "Synthetic private source content",
+            },
+        )
+        with mock.patch.object(self.provider, "read_recent", side_effect=failure):
+            envelope = self.capture()
+        document = envelope.document()
+        self.assertEqual(document.receipt.reason, "source_build_binding_changed")
+        self.assertNotIn(b"synthetic-private-account", envelope.metadata)
+        self.assertNotIn(b"Synthetic private source content", envelope.metadata)
+        with self.assertRaises(SightglassError) as caught:
+            FrozenCaptureProvider(envelope)
+        self.assertEqual(caught.exception.code, ErrorCode.SOURCE_INCOMPLETE)
+        self.assertEqual(
+            caught.exception.details,
+            {"warning_codes": ["source_build_binding_changed"]},
+        )
+
+    def test_account_self_conflict_diagnostic_survives_sealed_replay(self) -> None:
+        failure = SightglassError(
+            ErrorCode.SOURCE_INCOMPLETE,
+            details={
+                "warning_codes": [
+                    "account_self_identity_conflict",
+                    "synthetic-private-account",
+                ]
+            },
+        )
+        with mock.patch.object(self.provider, "read_recent", side_effect=failure):
+            envelope = self.capture()
+        self.assertEqual(
+            envelope.document().receipt.reason,
+            "account_self_identity_conflict",
+        )
+        self.assertNotIn(b"synthetic-private-account", envelope.metadata)
+        with self.assertRaises(SightglassError) as caught:
+            FrozenCaptureProvider(envelope)
+        self.assertEqual(
+            caught.exception.details,
+            {"warning_codes": ["account_self_identity_conflict"]},
+        )
+
+    def test_hostile_resource_prefixed_receipt_reason_is_rejected(self) -> None:
+        from sightglass.contracts.capture import CaptureProtocolError, CaptureReceipt
+
+        with self.assertRaisesRegex(CaptureProtocolError, "invalid_receipt_reason"):
+            CaptureReceipt(
+                terminal="rejected",
+                sealed_at="2030-01-01T00:00:00+00:00",
+                fresh_until="2030-01-01T00:01:00+00:00",
+                reason="resource_private-account-wxid",
+            )
     def test_malformed_warning_metadata_still_seals_generic_rejection(self) -> None:
         for codes in (None, "duplicate_message_identity_conflict",
                       {"duplicate_message_identity_conflict": True}):
@@ -420,7 +479,7 @@ class NativeCaptureBoundaryTests(unittest.TestCase):
 
         with mock.patch.object(self.provider, "read_recent", capture_then_add_unenrolled_candidate):
             document = self.capture().document()
-        self.assert_source_rejected(document, "SOURCE_INCOMPLETE")
+        self.assert_source_rejected(document, "source_key_missing_or_invalid")
 
     def test_moved_negative_candidate_rejects_cached_absence(self) -> None:
         unrelated = self.fixture._add_probe_message_shard("1")

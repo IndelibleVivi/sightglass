@@ -9,7 +9,12 @@ from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.runtime.derived_worker import DerivedIndexWorker
 from sightglass.runtime.semantic_worker import SemanticWorker
 from sightglass.runtime.source_worker import SourceWorker
-from sightglass.runtime.worker_diagnostics import clear_error, error_fields, record_error
+from sightglass.runtime.worker_diagnostics import (
+    clear_error,
+    error_fields,
+    public_error_reason,
+    record_error,
+)
 
 
 def wait_until(test: unittest.TestCase, predicate, timeout: float = 1.0) -> None:
@@ -223,3 +228,26 @@ class WorkerSchedulingTests(unittest.TestCase):
             self.assertNotIn("synthetic-account", str(worker.status()))
         finally:
             worker.stop()
+
+    def test_source_diagnostic_allowlist_projects_only_repository_codes(self) -> None:
+        allowed = SightglassError(
+            ErrorCode.SOURCE_INCOMPLETE,
+            details={
+                "warning_codes": [
+                    "source_wal_unreadable",
+                    "synthetic-account-wxid",
+                    "/private/synthetic/path",
+                ]
+            },
+        )
+        self.assertEqual(public_error_reason(allowed), "source_wal_unreadable")
+        hostile_reason = SightglassError(
+            ErrorCode.SOURCE_INCOMPLETE,
+            details={"reason": "synthetic-account-wxid-at-/private/path"},
+        )
+        self.assertIsNone(public_error_reason(hostile_reason))
+        hostile_only = SightglassError(
+            ErrorCode.SOURCE_INCOMPLETE,
+            details={"warning_codes": ["synthetic-account-wxid", "/private/path"]},
+        )
+        self.assertIsNone(public_error_reason(hostile_only))

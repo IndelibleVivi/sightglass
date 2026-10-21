@@ -12,7 +12,7 @@ import os
 import signal
 import stat
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -248,4 +248,89 @@ def run_edge(
     finally:
         for number, handler in previous_handlers.items():
             signal.signal(number, handler)
+        spool.close()
+
+def rebind_edge(
+    settings_path: Path,
+    *,
+    same_account: bool,
+    secret_store: SecretStore | None = None,
+) -> dict[str, Any]:
+    """Explicitly move one existing thin edge to a verified supported app profile."""
+
+    if not same_account:
+        raise RuntimeError("edge rebind requires --same-account")
+    settings = EdgeSettings.load(settings_path)
+    if settings.source_kind != "macos-wechat":
+        raise RuntimeError("edge rebind requires a macos-wechat edge")
+    settings.require_active()
+    from ..source.macos_wechat.config import MacOSWeChatSettings, read_settings_bytes
+    from ..source.macos_wechat.discovery import discover_configured_candidate
+    from ..source.macos_wechat.keys import (
+        decode_key_map,
+        read_keychain_secret,
+        verify_key_map,
+    )
+
+    previous = read_settings_bytes(settings.source_settings_path)
+    existing = MacOSWeChatSettings.from_dict(json.loads(previous))
+    if (
+        existing.instance_id != settings.source_instance_id
+        or existing.source_account_key != settings.account_id
+    ):
+        raise RuntimeError("edge native settings do not match the edge binding")
+
+    # Taking the existing spool lock proves the managed edge is stopped. The
+    # rebind never creates, initializes, or opens a WindowDB.
+    spool = EdgeSpool(
+        settings.spool_directory,
+        source_instance_id=settings.source_instance_id,
+        account_id=settings.account_id,
+        origin_epoch=settings.origin_epoch,
+    )
+    try:
+        if spool.stream_epoch != settings.stream_epoch:
+            raise CaptureProtocolError("edge_stream_epoch_binding_changed")
+        candidate = discover_configured_candidate(existing.source_root)
+        if candidate is None or not candidate.running or candidate.profile_id is None:
+            raise RuntimeError("no exact supported running candidate for the configured source")
+        if (
+            candidate.source_root != existing.source_root
+            or candidate.bundle_id != existing.bundle_id
+            or candidate.architecture != existing.architecture
+        ):
+            raise RuntimeError("edge rebind source identity changed")
+        secret = (
+            secret_store.get(existing.keychain_account)
+            if secret_store is not None else read_keychain_secret(existing.keychain_account)
+        )
+        secret_text = secret.decode("utf-8") if isinstance(secret, bytes) else secret
+        keys = verify_key_map(candidate.source_root, decode_key_map(secret_text))
+        rebound = replace(
+            existing,
+            bundle_id=candidate.bundle_id,
+            version=candidate.version,
+            build=candidate.build,
+            architecture=candidate.architecture,
+            profile_id=str(candidate.profile_id),
+        )
+        if discover_configured_candidate(existing.source_root) != candidate:
+            raise RuntimeError("running source candidate changed during rebind")
+        settings.require_active()
+        if EdgeSettings.load(settings_path) != settings:
+            raise RuntimeError("edge configuration changed during rebind")
+        rebound.save_profile_binding(settings.source_settings_path, expected=previous)
+        return {
+            "schema": "sightglass.edge-rebind.v1",
+            "rebound": True,
+            "version": rebound.version,
+            "build": rebound.build,
+            "profile_id": rebound.profile_id,
+            "architecture": rebound.architecture,
+            "verified_database_count": len(keys),
+            "verified_required": True,
+            "same_account_attested": True,
+            "activated": False,
+        }
+    finally:
         spool.close()

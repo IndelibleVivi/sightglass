@@ -12,7 +12,10 @@ from sightglass.source.macos_wechat.config import (
     SETTINGS_SCHEMA,
     MacOSWeChatSettings,
 )
-from sightglass.source.macos_wechat.discovery import discover_configured_candidate
+from sightglass.source.macos_wechat.discovery import (
+    SUPPORTED_PROFILES,
+    discover_configured_candidate,
+)
 from sightglass.source.macos_wechat.keys import (
     image_decoder_keychain_account,
     import_verified_key_file,
@@ -24,6 +27,18 @@ from sightglass.source.macos_wechat.keys import (
 
 
 class NativeSourceConfigTests(unittest.TestCase):
+    def test_exact_supported_and_unsupported_app_tuples(self) -> None:
+        self.assertEqual(
+            SUPPORTED_PROFILES[("4.1.13", "269602", "arm64")],
+            "wechat-macos-4.1.13-269602-arm64-v1",
+        )
+        self.assertEqual(
+            SUPPORTED_PROFILES[("4.1.15", "270115", "arm64")],
+            "wechat-macos-4.1.15-270115-arm64-v1",
+        )
+        self.assertNotIn(("4.1.15", "270115", "x86_64"), SUPPORTED_PROFILES)
+        self.assertNotIn(("4.1.15", "270116", "arm64"), SUPPORTED_PROFILES)
+
     def test_configured_candidate_probe_validates_only_the_enrolled_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_root = Path(temporary) / "xwechat_files"

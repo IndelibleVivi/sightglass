@@ -10,6 +10,8 @@ from dataclasses import replace
 from datetime import timedelta
 
 from sightglass.contracts.capture import (
+    CAPTURE_FINITE_REASONS,
+    SOURCE_DIAGNOSTIC_REASONS,
     SOURCE_IDENTITY_CONFLICT_REASON,
     CaptureCeiling,
     CaptureContextWindow,
@@ -144,16 +146,32 @@ class CaptureExecutor:
         except (SightglassError, CaptureProtocolError) as exc:
             terminal = "cancelled" if cancelled is not None and cancelled.is_set() else "rejected"
             reason = exc.code.value if isinstance(exc, SightglassError) else exc.reason
+            if not isinstance(reason, str) or reason not in CAPTURE_FINITE_REASONS:
+                reason = ErrorCode.SOURCE_SNAPSHOT_FAILED.value
             warning_codes = (
                 exc.details.get("warning_codes") if isinstance(exc, SightglassError) else ()
             )
-            if (isinstance(exc, SightglassError) and exc.code == ErrorCode.SOURCE_INCOMPLETE
-                    and isinstance(warning_codes, (list, tuple))
-                    and SOURCE_IDENTITY_CONFLICT_REASON in warning_codes):
-                reason = SOURCE_IDENTITY_CONFLICT_REASON
+            if (
+                isinstance(exc, SightglassError)
+                and exc.code == ErrorCode.SOURCE_INCOMPLETE
+                and isinstance(warning_codes, (list, tuple))
+            ):
+                diagnostics = tuple(
+                    value
+                    for value in warning_codes
+                    if isinstance(value, str) and value in SOURCE_DIAGNOSTIC_REASONS
+                )
+                if SOURCE_IDENTITY_CONFLICT_REASON in diagnostics:
+                    reason = SOURCE_IDENTITY_CONFLICT_REASON
+                elif diagnostics:
+                    # Provider warning order is deterministic and content-free.
+                    # Preserve one exact cause rather than an ambiguous corpus.
+                    reason = diagnostics[0]
             evidence, resource, coverage = CaptureEvidence(), b"", CaptureCoverage("none")
         except Exception:
-            terminal, reason = "rejected", "INTERNAL_ERROR"
+            # The receipt accepts only finite protocol/source reasons. Unexpected
+            # implementation details never cross the sealed boundary.
+            terminal, reason = "rejected", ErrorCode.SOURCE_SNAPSHOT_FAILED.value
             evidence, resource, coverage = CaptureEvidence(), b"", CaptureCoverage("none")
         sealed_at = utc_now()
         descriptor = self.provider.descriptor

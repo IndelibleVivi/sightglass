@@ -12,7 +12,10 @@ from typing import Any
 
 WECHAT_BUNDLE_ID = "com.tencent.xinWeChat"
 DEFAULT_WECHAT_APP = Path("/Applications/WeChat.app")
-SUPPORTED_PROFILES = {("4.1.13", "269602", "arm64"): "wechat-macos-4.1.13-269602-arm64-v1"}
+SUPPORTED_PROFILES = {
+    ("4.1.13", "269602", "arm64"): "wechat-macos-4.1.13-269602-arm64-v1",
+    ("4.1.15", "270115", "arm64"): "wechat-macos-4.1.15-270115-arm64-v1",
+}
 
 
 @dataclass(frozen=True)

@@ -8,21 +8,24 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from inspect import signature
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from sightglass.contracts.capture import CaptureCeiling, CaptureProtocolError, CaptureRequest
 from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.mcp.tools import ReaderTools
+from sightglass.operations import operation_budget
 from sightglass.reader.service import ReaderService
 from sightglass.runtime.activation import write_activation
 from sightglass.runtime.capture_core import CoreCapture
 from sightglass.runtime.config import SightglassConfig
 from sightglass.runtime.edge import EdgeSpool
 from sightglass.runtime.edge_relay import (
+    CaptureWaitTimeout,
     EdgeSession,
     FramedStream,
     PreparedRemoteCapture,
@@ -468,6 +471,194 @@ class CoreCaptureTests(unittest.TestCase):
         )
         assert position is not None
         self.assertEqual(position.next_sequence, 5)
+
+    def test_failed_round_robin_conversation_advances_only_the_attempt_cursor(self) -> None:
+        self.start_edge()
+        self.core.sync_once()
+        account_id = self.repository.account_id_for(self.settings.account_id)
+        catalog_state = self.repository.source_catalog_state(account_id)
+        assert catalog_state is not None
+        entries = [
+            row
+            for row in self.repository.account_conversations(account_id)
+            if self.service.reader.policy.permits(str(row["conversation_id"]))
+            and self.service._residency_decision(str(row["conversation_id"])).collect_bodies
+            and str(row["source_conversation_id"]) in self.settings.conversations
+        ]
+        ordered = sorted(entries, key=lambda row: str(row["conversation_id"]))
+        self.assertGreaterEqual(len(ordered), 2)
+        chosen = ordered[0]
+        successor = ordered[1]
+        conversation_id = str(chosen["conversation_id"])
+        with self.repository.database.transaction() as connection:
+            connection.execute(
+                "UPDATE source_catalog_state SET next_cursor_token=? WHERE account_id=?",
+                (
+                    self.service._encode_catalog_cursor(
+                        account_id, str(chosen["conversation_id"])
+                    ),
+                    account_id,
+                ),
+            )
+        before_failed = self.repository.source_conversation_state(conversation_id)
+        before_successor = self.repository.source_conversation_state(
+            str(successor["conversation_id"])
+        )
+
+        original = self.provider.session
+        failed = False
+
+        @contextmanager
+        def fail_selected_once(
+            scope: Any,
+        ) -> Any:
+            nonlocal failed
+            if scope.conversation_source_id == str(chosen["source_conversation_id"]):
+                failed = True
+                raise SightglassError(
+                    ErrorCode.SOURCE_INCOMPLETE,
+                    retryable=True,
+                    details={"warning_codes": ["source_build_binding_changed"]},
+                )
+            with original(scope) as snapshot:
+                yield snapshot
+
+        with mock.patch.object(self.provider, "session", side_effect=fail_selected_once):
+            with self.assertRaises(SightglassError):
+                self.core.sync_once()
+
+        self.assertTrue(failed)
+        self.assertEqual(
+            self.repository.source_conversation_state(conversation_id),
+            before_failed,
+        )
+        self.assertEqual(
+            self.repository.source_conversation_state(str(successor["conversation_id"])),
+            before_successor,
+        )
+        advanced = self.repository.source_catalog_state(account_id)
+        assert advanced is not None
+        self.assertEqual(
+            self.service._decode_catalog_cursor(
+                advanced["next_cursor_token"], account_id=account_id
+            ),
+            str(successor["conversation_id"]),
+        )
+
+        with mock.patch.object(self.provider, "session", wraps=original) as captured:
+            result = self.core.sync_once()
+        self.assertEqual(result["conversation_count"], 1)
+        attempted = [call.args[0].conversation_source_id for call in captured.call_args_list]
+        self.assertEqual(attempted, [str(successor["source_conversation_id"])])
+
+    def test_capture_wait_timeout_advances_rotation_before_source_work(self) -> None:
+        self.start_edge()
+        self.core.sync_once()
+        account_id = self.repository.account_id_for(self.settings.account_id)
+        entries = [
+            row
+            for row in self.repository.account_conversations(account_id)
+            if self.service.reader.policy.permits(str(row["conversation_id"]))
+            and self.service._residency_decision(str(row["conversation_id"])).collect_bodies
+            and str(row["source_conversation_id"]) in self.settings.conversations
+        ]
+        ordered = sorted(entries, key=lambda row: str(row["conversation_id"]))
+        self.assertGreaterEqual(len(ordered), 2)
+        chosen, successor = ordered[0], ordered[1]
+        with self.repository.database.transaction() as connection:
+            connection.execute(
+                "UPDATE source_catalog_state SET next_cursor_token=? WHERE account_id=?",
+                (
+                    self.service._encode_catalog_cursor(
+                        account_id, str(chosen["conversation_id"])
+                    ),
+                    account_id,
+                ),
+            )
+        failed_id = str(chosen["conversation_id"])
+        successor_id = str(successor["conversation_id"])
+        before_failed = self.repository.source_conversation_state(failed_id)
+        before_successor = self.repository.source_conversation_state(successor_id)
+        before_sequence = self.core.journal.stream_position(
+            self.settings.source_instance_id,
+            self.settings.account_id,
+        )
+
+        def submit_after_budget_expires(*_args: Any, **_kwargs: Any) -> Any:
+            time.sleep(2.05)
+            raise CaptureWaitTimeout("synthetic capture wait timeout")
+
+        with mock.patch.object(
+            self.core.broker,
+            "submit",
+            side_effect=submit_after_budget_expires,
+        ):
+            with self.assertRaises(SightglassError) as caught:
+                with operation_budget(2.0):
+                    self.core.sync_once()
+        self.assertEqual(caught.exception.code, ErrorCode.SERVICE_UNAVAILABLE)
+        self.assertEqual(
+            self.repository.source_conversation_state(failed_id),
+            before_failed,
+        )
+        self.assertEqual(
+            self.repository.source_conversation_state(successor_id),
+            before_successor,
+        )
+        self.assertEqual(
+            self.core.journal.stream_position(
+                self.settings.source_instance_id,
+                self.settings.account_id,
+            ),
+            before_sequence,
+        )
+        advanced = self.repository.source_catalog_state(account_id)
+        assert advanced is not None
+        self.assertEqual(
+            self.service._decode_catalog_cursor(
+                advanced["next_cursor_token"], account_id=account_id
+            ),
+            successor_id,
+        )
+
+        original = self.provider.session
+        with mock.patch.object(self.provider, "session", wraps=original) as captured:
+            result = self.core.sync_once()
+        self.assertEqual(result["conversation_count"], 1)
+        self.assertEqual(
+            captured.call_args.args[0].conversation_source_id,
+            str(successor["source_conversation_id"]),
+        )
+
+    def test_failed_attempt_registration_rolls_back_request_and_cursor_together(self) -> None:
+        from sightglass.runtime.capture_journal import CAPTURE_REQUEST_TOOL
+
+        self.start_edge()
+        self.core.sync_once()
+        account_id = self.repository.account_id_for(self.settings.account_id)
+        before = self.repository.source_catalog_state(account_id)
+        with self.repository.database.connection() as connection:
+            before_requests = connection.execute(
+                "SELECT COUNT(*) FROM access_receipts WHERE tool_name=?",
+                (CAPTURE_REQUEST_TOOL,),
+            ).fetchone()[0]
+        with (
+            mock.patch.object(
+                self.repository, "record_source_catalog_attempt",
+                side_effect=SightglassError(ErrorCode.SERVICE_TIMEOUT),
+            ),
+            mock.patch.object(self.core.broker, "submit") as capture_wait,
+        ):
+            with self.assertRaises(SightglassError) as caught:
+                self.core.sync_once()
+        self.assertEqual(caught.exception.code, ErrorCode.SERVICE_TIMEOUT)
+        capture_wait.assert_not_called()
+        self.assertEqual(self.repository.source_catalog_state(account_id), before)
+        with self.repository.database.connection() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM access_receipts WHERE tool_name=?",
+                (CAPTURE_REQUEST_TOOL,),
+            ).fetchone()[0], before_requests)
 
     def test_fresh_current_pending_with_new_request_never_requests_extra_capture(self) -> None:
         first = self.call("wechat_read_messages", mode="updates", conversation_id=self.group)

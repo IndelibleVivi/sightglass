@@ -10,7 +10,7 @@ Sightglass is an experimental, read-only WeChat reading service with a native ma
 
 Use it when a reader needs to inspect the original conversation, follow one participant, open a referenced file, or continue from an acknowledged reading position. The WeChat database and its keys remain on your Mac. In local mode, admitted state and processing remain there too. An explicitly configured Linux core receives the approved Sightglass state and bounded captured pages/resources; returned tool content reaches the connected client and is subject to that client's data handling.
 
-> **Development preview · `0.1.0.dev1`.** Native access currently supports only WeChat **4.1.13 / build 269602 / arm64** and requires operator-supplied, verified database keys. Sightglass does not extract those keys. Try the synthetic example before configuring an account. Publication and licensing status is recorded in [Current state](docs/current-state.md) and [Notices](NOTICE.md).
+> **Development preview · `0.1.0.dev1`.** Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles and requires operator-supplied, verified database keys. Sightglass does not extract those keys. The 4.1.15 profile has no verified sticker-decryption offset; those local stickers report unavailable while ordinary messages remain readable. Try the synthetic example before configuring an account. Publication and licensing status is recorded in [Current state](docs/current-state.md) and [Notices](NOTICE.md).
 
 ## Optional Mac edge and Linux core
 
@@ -34,6 +34,13 @@ cannot prove source absence. `wechat_list_resources` lists the owning message's 
 resident bindings; an expired or released body returns `SOURCE_INCOMPLETE`, and an
 inactive historical resolver is never restored. Use `view="fresh"` on tools that expose
 it for bounded source verification.
+For the latest messages, use `wechat_read_messages(mode="recent", refresh=true)`.
+Read longer spans through the returned cursor and `next_actions`; clear `refresh`
+on continuation. A signed source cursor retains its fresh view even on hosts that
+expose `refresh` without `view`. Each page is independently validated. Exact
+supported app upgrades use the stopped, verified same-account
+[`edge-rebind` procedure](docs/OPERATIONS.md#verified-same-account-edge-rebind);
+the existing keys, identities and stream state remain in place.
 `wechat_status` distinguishes transport from confirmation in `view="replica"`:
 `read_plane.capture_transport` reports whether the capture edge is currently connected
 (transport evidence only, without probing the source); `read_plane.live_refresh_available`

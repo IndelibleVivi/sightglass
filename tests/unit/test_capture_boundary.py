@@ -554,6 +554,27 @@ class CaptureBoundaryTests(unittest.TestCase):
         self.assertEqual(document.receipt.terminal, "cancelled")
         self.assertEqual(document.receipt.coverage, CaptureCoverage("none"))
 
+    def test_all_finite_domain_codes_survive_rejected_capture(self) -> None:
+        for code in ErrorCode:
+            with self.subTest(code=code):
+                failure = SightglassError(
+                    code, "Synthetic private failure text",
+                    details={"private": "synthetic-account-path"},
+                )
+                with mock.patch.object(self.provider, "read_recent", side_effect=failure):
+                    envelope = self.capture()
+                self.assertEqual(envelope.document().receipt.reason, code.value)
+                self.assertNotIn(b"Synthetic private failure text", envelope.metadata)
+                self.assertNotIn(b"synthetic-account-path", envelope.metadata)
+
+    def test_unrecognized_protocol_reason_seals_a_safe_generic_rejection(self) -> None:
+        failure = CaptureProtocolError("resource_synthetic-private-account-path")
+        with mock.patch.object(self.provider, "read_recent", side_effect=failure):
+            envelope = self.capture()
+        self.assertEqual(envelope.document().receipt.reason, "SOURCE_SNAPSHOT_FAILED")
+        self.assertEqual(envelope.document().receipt.coverage, CaptureCoverage("none"))
+        self.assertNotIn(b"synthetic-private-account-path", envelope.metadata)
+
     def test_terminal_recovery_preserves_cancelled_receipt_and_releases_no_coverage(self) -> None:
         cancelled = threading.Event()
         cancelled.set()

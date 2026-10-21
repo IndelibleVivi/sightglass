@@ -279,6 +279,31 @@ class ReplicaReader:
             if speaker_view == "with_context" else budget if query else bounded)
         return before, after, bounded, fetch
 
+    def validate_fresh_timeline_cursor(
+        self, cursor: str, *, conversation_id: str | None, mode: str,
+        direction: str, scope_kind: str, scope_key: str,
+    ) -> tuple[SourceSortKey, dict[str, Any]]:
+        """Validate a fresh continuation locally before any source ownership."""
+        self.service.reader.require_active()
+        if not conversation_id:
+            raise SightglassError(ErrorCode.QUERY_INVALID)
+        context = self.service._conversation_context(conversation_id)
+        payload = self.service.timeline_cursors.verify(
+            cursor, reader_id=self.service.reader.reader_id,
+            account_id=str(context["account_id"]), conversation_id=conversation_id,
+            mode=mode, direction=direction, scope_kind=scope_kind,
+            scope_key=scope_key, view="fresh",
+        )
+        row = self.repository.message_position_row(payload["position"]["message_id"])
+        if (row is None or row["conversation_id"] != conversation_id
+                or payload["position"]["sort"] != [row["sort_primary"], row["sort_seq"],
+                                                   row["sort_tie"]]):
+            raise SightglassError(ErrorCode.CURSOR_STALE)
+        if (payload["source"].get("projection_epoch")
+                != self.service._projection_inventory_epoch()):
+            raise SightglassError(ErrorCode.CURSOR_STALE)
+        return self.service._row_sort_key(row), payload["source"]
+
     def prepare_fresh_message_capture(self, arguments: dict[str, Any]) -> MessageCapturePlan:
         """Pure, authorized capture plan using the canonical request/cursor validation."""
         selected = {key: value for key, value in arguments.items() if key != "response_profile"}
@@ -322,22 +347,10 @@ class ReplicaReader:
         binding = None
         cursor = selected.get("cursor")
         if cursor:
-            payload = self.service.timeline_cursors.verify(
-                cursor, reader_id=self.service.reader.reader_id,
-                account_id=str(context["account_id"]), conversation_id=conversation_id,
-                mode=mode, direction=direction, scope_kind=settings["scope_kind"],
-                scope_key=settings["scope_key"], view="fresh",
+            boundary, binding = self.validate_fresh_timeline_cursor(
+                cursor, conversation_id=conversation_id, mode=mode, direction=direction,
+                scope_kind=settings["scope_kind"], scope_key=settings["scope_key"],
             )
-            row = self.repository.message_position_row(payload["position"]["message_id"])
-            if (row is None or row["conversation_id"] != conversation_id
-                    or payload["position"]["sort"] != [row["sort_primary"], row["sort_seq"],
-                                                       row["sort_tie"]]):
-                raise SightglassError(ErrorCode.CURSOR_STALE)
-            if (payload["source"].get("projection_epoch")
-                    != self.service._projection_inventory_epoch()):
-                raise SightglassError(ErrorCode.CURSOR_STALE)
-            boundary = self.service._row_sort_key(row)
-            binding = payload["source"]
         operation = "recent" if mode == "recent" and cursor is None else "range"
         focus_id = str(target_row["source_message_id"]) if target_row is not None else None
         message_ids = (boundary.source_message_id,) if boundary else ()

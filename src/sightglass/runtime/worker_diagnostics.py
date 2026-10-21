@@ -10,20 +10,24 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from sightglass.contracts.capture import SOURCE_DIAGNOSTIC_REASONS
+
 _PUBLIC_MODULE = re.compile(r"sightglass(?:\.[A-Za-z_][A-Za-z_0-9]*)+\Z")
 _FUNCTION = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\Z")
+_WORKER_REASONS = frozenset({"operation_cancelled", "operation_deadline"})
 
 
 def public_error_reason(exc: Exception) -> str | None:
-    # These are the worker's own cooperative budget classifications. Provider or
-    # row-specific detail strings remain private even if supplied as a "reason".
     details = getattr(exc, "details", {})
     reason = details.get("reason") if isinstance(details, dict) else None
-    return (
-        reason
-        if isinstance(reason, str) and reason in {"operation_cancelled", "operation_deadline"}
-        else None
-    )
+    if isinstance(reason, str) and reason in _WORKER_REASONS:
+        return reason
+    warnings = details.get("warning_codes") if isinstance(details, dict) else None
+    if isinstance(warnings, (list, tuple)):
+        for value in warnings:
+            if isinstance(value, str) and value in SOURCE_DIAGNOSTIC_REASONS:
+                return value
+    return None
 
 
 @dataclass(frozen=True)

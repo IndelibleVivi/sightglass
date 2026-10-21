@@ -149,6 +149,8 @@ resource bytes. The document binds:
 - A terminal receipt with seal time, bounded fresh-until time, operation coverage
   and a content-free error reason when rejected.
 
+Rejected captures use only the finite reason set declared by `contracts/capture.py`, including whitelisted source diagnostics for app/profile drift, missing/invalid keys, schema or database/WAL availability. The frozen provider returns `SOURCE_INCOMPLETE` with the same diagnostic warning code, and worker status may project that finite reason. Previously emitted finite reasons, including `INTERNAL_ERROR`, remain accepted for exact pending replay. Arbitrary prefixes such as `resource_...` do not admit new reason strings.
+
 An identity-conflict rejection uses the finite
 `duplicate_message_identity_conflict` reason. The frozen provider projects it as
 `SOURCE_INCOMPLETE` with the same warning code, allowing the core to preserve
