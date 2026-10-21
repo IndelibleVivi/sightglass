@@ -32,48 +32,58 @@ including on replica-default cores and existing hosts that expose only
 through that existing argument. Explicit mismatched views, altered signatures,
 wrong scopes and locally invalid positions remain rejected before source work.
 
-The old public source reproduces failed-target starvation, deadline starvation
-and refresh-only host pagination failures. The corresponding new focused checks
-pass. Generated sustained paging and the refresh-only host path verify bounded
-progress and unique identities. Direct native preflight on the new exact app
-profile passed complete installed-key verification and bounded recent reads;
-this establishes provider behavior, not activation or ordinary host acceptance.
-The initial reliability implementation in `4aa8d23` passed 67 affected local tests, full Pyright,
-Ruff, compileall and whitespace checks after the initial 1,458-test source pass.
-Its [hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/39622375662)
-passed 1,462 full macOS tests and 812 portable tests, plus full Pyright and Ruff.
-The affected documentation passed 117 local links and 43 shell-block syntax
-checks. Exact noneditable artifacts passed 241 installed Linux tests (three
-platform skips) and 105 installed Mac tests, with frozen-runtime and package
-provenance verified.
-
-Those same-schema core and edge artifacts are installed and selected. The
-current database, configuration, authorization, stream and interpretation epochs
-are retained, alongside the previous runtimes. Installed stdio exposes thirteen
-tools and the original tunnel passed health, ready and control-plane-poll checks.
-The stopped same-account rebind passed complete installed-key verification and
-changed only the native profile binding. Managed native acceptance remains
-pending for the ordinary host. After the operator resolved macOS App Data access
-for the retained edge process, controlled fresh recent reads, ten-page native
-traversal with unique identities, a further small fresh read and resident access
-succeeded. MCP cursor-only continuation and context also succeeded, but an earlier
-intermittent capture timeout remains part of the evidence. Unattended App Data
-access remains unverified.
-
-The follow-up source makes broker waits honor the existing caller cancellation
+The broker waits honor the existing caller cancellation
 and deadline, so cancelled background waits release foreground priority promptly.
 The exact in-flight request stays detached for terminal rejection when its capture
 arrives; it is neither reissued nor acknowledged early. A caller-abandoned returned
 ticket also receives one prompt exact recovery attempt on the transport owner,
 outside the cancelled caller's context, while ordinary active finalization and
-failed-recovery replay retain their existing rules. Three regressions fail on
-the previous blocking waits. The updated capture/core/source-worker/host suite
-passed 56 tests, full Pyright, Ruff and compileall. This core-only hardening awaits
-artifact verification and activation; the retained Mac edge needs no restart.
-The previously activated core/edge evidence below belongs to its stated earlier
-versions and does not establish current 4.1.15 runtime readiness.
+failed-recovery replay retain their existing rules. This closes the foreground
+handoff and ordered-stream stalls found during native MCP acceptance; it does
+not extend timeouts or change the durable terminal-ACK requirement.
+
+The old source reproduces failed-target starvation, deadline starvation and
+refresh-only host pagination failures. Three further regressions fail on the
+previous blocking broker waits. Generated sustained paging verifies bounded
+progress and unique identities. The final source `a5a70cb` passed 56 affected
+capture/core/source-worker/host tests, full Pyright, Ruff and compileall. Its
+[hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/39659370107)
+completed 1,465 full macOS tests (four skips) and 815 portable tests (two skips)
+successfully, plus full Pyright and Ruff. The noneditable Linux artifact completed
+244 installed tests with three platform skips; the retained `4aa8d23` Mac artifact
+passed 105 installed tests. Exact module/license payload and frozen-runtime
+provenance were verified for both.
+
+The `a5a70cb` core and compatible `4aa8d23` edge are installed and active. The
+core-only broker hardening retained the already-authorized Mac edge process.
+The current database, configuration, authorization, stream and interpretation
+epochs are retained, alongside the previous runtimes. Installed stdio exposes
+thirteen tools and the original tunnel passed health, ready and control-plane-poll
+checks. The stopped same-account rebind passed complete installed-key verification
+and changed only the native profile binding. After the operator resolved macOS
+App Data access for the retained edge process, the final core passed ten-page
+native traversal with unique identities, a further small fresh read, and original
+MCP fresh recent, cursor-only continuation and same-anchor context reads. The MCP
+sequence also passed immediately after bulk traversal; resident reads retained
+their explicit replica/bounded-stale freshness. An earlier pre-hardening capture
+timeout remains part of the evidence.
+
+The original ChatGPT conversation with ordinary GPT-6 at the selected reasoning
+intensity passed a complete same-conversation run: discovery, three bounded fresh
+pages, same-anchor fresh context, a further small fresh read and a resident read.
+There were no tool errors, timeouts or retries. Content-free daemon receipts
+independently confirm successful reads in one conversation; fresh receipts stayed
+complete and resident freshness stayed bounded-stale. The earlier host run lost
+its selected scope between steps and is retained as partial evidence only. These
+bounded probes do not establish full-history coverage, one atomic source snapshot
+or a long-term latency guarantee. Unattended macOS App Data access after a new
+edge process remains unverified. Earlier installation evidence below belongs to
+its stated source versions.
 
 ## Daily-use reliability follow-up
+
+This section retains the earlier 2026-10-10–11 acceptance. Its runtime selections
+were superseded by the current repair above.
 
 The current source separates replica freshness from capture transport evidence:
 a connected edge permits an explicit fresh request while source confirmation stays
@@ -102,8 +112,8 @@ on public main `7a01036`.
 The `10bb2fe` noneditable Linux core and Mac edge candidates passed 206 and 64
 installed tests respectively, with exact package/source and frozen-runtime parity.
 A follow-up Linux core wheel from commit `20964ac` also passed 206 installed
-tests with exact package/source and frozen-runtime parity. That follow-up is now
-active under the existing authorization, with schema, configuration, ownership
+tests with exact package/source and frozen-runtime parity. That follow-up was
+activated under the existing authorization, with schema, configuration, ownership
 grants and the latest database retained. Its installed stdio exposes thirteen tools;
 the original tunnel passed health, ready and control-plane-poll checks.
 The verified Mac edge runtime is selected in its supervisor. After the operator
@@ -127,8 +137,8 @@ in both directions and retains exact-second controls. The affected native/captur
 suite passed 171 tests, plus full Pyright and Ruff/compileall. Commit `4224374`
 passed its [hosted portable and full macOS gates](https://github.com/IndelibleVivi/sightglass/actions/runs/38063371431).
 Its noneditable Mac wheel passed the installed edge suite and the added boundary
-regression, with exact module/license and frozen-runtime parity. It is activated in
-the existing supervisor; the Linux core remains on the compatible `20964ac` source.
+regression, with exact module/license and frozen-runtime parity. It was activated in
+the existing supervisor; the Linux core then retained the compatible `20964ac` source.
 After the operator accepted the replacement process's macOS App Data prompt, the
 edge connected. Bounded fresh recent, point, context, backward pagination and the
 fractional-bound forward time window passed with consistent canonical identities.

@@ -166,4 +166,13 @@ anchor agreement, duplicate-heavy neighbors/sentinels and raw evidence conflicts
 Source checks, immutable candidates, activation and ordinary-host evidence are
 tracked separately in [current state](current-state.md#daily-use-reliability-follow-up).
 
+The 2026-10-21–22 repair extends the same reading guarantees with an exact native
+app profile and stopped same-account rebind, signed fresh-view continuation for
+refresh-only hosts, attempt-ordered background scheduling, and finite sealed
+source diagnostics. Core capture waits honor foreground cancellation and promptly
+recover explicitly abandoned returned tickets without releasing the edge spool
+before durable terminal commit. Old-source regressions, generated sustained
+paging, installed artifacts and bounded native/MCP/ordinary-host evidence remain
+distinct in [current state](current-state.md#current-reliability-repair).
+
 The specification is complete only when each applicable SG-001–SG-030 outcome has evidence at its owning milestone. Source tests, installation, activation, stdio, external transport and host acceptance remain distinct. Later entries harden or extend those outcomes; they do not silently remove unimplemented scope.
