@@ -369,7 +369,11 @@ and ACK sending. Revocation fails closed even on an already connected session;
 it cannot silently release an old pending batch. These guards do not replace the
 edge egress ceiling, ReaderPolicy or independent edge capability.
 
-The broker bounds pending requests. A submit timeout detaches the waiter and
+The broker bounds pending requests. Waiting checks the caller's existing
+cancellation/deadline cooperatively, including a background source worker's
+foreground-yield signal. Cancellation releases the waiter and detaches its exact
+request; a later receipt still requires terminal recovery and never resumes the
+cancelled caller or reissues the source read. A submit timeout detaches the waiter and
 retains the exact authorized work. A late capture enters the configured recovery
 hook even when its request is already known. If a returned ticket has no durable
 ACK when its finalization wait expires, or its caller cannot commit rejection,

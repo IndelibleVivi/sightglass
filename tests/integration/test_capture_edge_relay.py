@@ -17,6 +17,8 @@ from sightglass.contracts.capture import (
     CaptureExpectation,
     CaptureProtocolError,
 )
+from sightglass.contracts.errors import ErrorCode, SightglassError
+from sightglass.operations import operation_budget
 from sightglass.runtime.edge import EdgeSpool
 from sightglass.runtime.edge_relay import (
     CaptureBroker,
@@ -43,6 +45,78 @@ class CaptureEdgeRelayTests(unittest.TestCase):
     setUp = fixtures.CaptureBoundaryTests.setUp
     request = fixtures.CaptureBoundaryTests.request
     capture = fixtures.CaptureBoundaryTests.capture
+
+    def test_cancelled_waiter_yields_and_late_capture_is_rejected_exactly(self) -> None:
+        journal = fixtures.FixtureReceiveJournal(self.root / "cancelled-receive.sqlite")
+        receiver = CaptureReceiver(journal, self.expected, stream_epoch="fixture-stream")
+
+        def recover(ticket):
+            ack = receiver.admit(
+                receiver.prepare(ticket.envelope), None,
+                receipt_id="synthetic-cancel-reject", reject=True,
+            )
+            ticket.complete(ack)
+
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=receiver.lookup_terminal, recover=recover,
+        )
+        cancelled = threading.Event()
+        request = self.request()
+
+        def wait():
+            with operation_budget(5, cancelled=cancelled):
+                return broker.submit(request, timeout=3)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(wait)
+            try:
+                with broker._condition:
+                    self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+                work = broker._next_work()
+                assert work is not None
+                cancelled.set()
+                with self.assertRaises(SightglassError) as caught:
+                    future.result(timeout=.5)
+                self.assertEqual(caught.exception.code, ErrorCode.SERVICE_TIMEOUT)
+                self.assertEqual(caught.exception.details["reason"], "operation_cancelled")
+                self.assertEqual(work.waiters, 0)
+                self.assertTrue(work.detached)
+                self.assertIs(broker._inflight, work)
+                envelope = self.capture(request)
+                ticket = broker._receive_capture(envelope)
+                assert isinstance(ticket, PreparedRemoteCapture)
+                ack = ticket.durable_ack
+                assert ack is not None
+                self.assertEqual(ack.terminal, "rejected")
+                self.assertEqual(receiver.lookup_terminal(envelope), ack)
+                self.assertEqual(ticket.envelope.to_bytes(), envelope.to_bytes())
+            finally:
+                broker.close()
+
+    def test_operation_deadline_detaches_waiter_before_broker_timeout(self) -> None:
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=lambda _capture: None,
+        )
+
+        def wait():
+            with operation_budget(.05):
+                return broker.submit(self.request(), timeout=3)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(wait)
+            try:
+                with broker._condition:
+                    self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+                    work = broker._queue[0]
+                with self.assertRaises(SightglassError) as caught:
+                    future.result(timeout=.5)
+                self.assertEqual(caught.exception.code, ErrorCode.SERVICE_TIMEOUT)
+                self.assertEqual(work.waiters, 0)
+                self.assertTrue(work.detached)
+            finally:
+                broker.close()
 
     def _pending_session(
         self, envelope: SealedCapture, *, poll: bool = False

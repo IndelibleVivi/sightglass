@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-21. This page owns current source, candidate and publication status.
+Updated: 2026-10-22. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -21,8 +21,8 @@ has no unverified sticker-key offset. Source diagnostics cross sealed replay
 only through a finite content-free reason set; legacy finite error receipts
 remain recoverable. A round-robin scheduling attempt commits with durable
 request registration before the source wait, independently of tail, coverage,
-reader ACK or later admission. A deadline exhausted immediately after registration
-marks the request failed even when it never reaches the broker. Rebind page-1
+reader ACK or later admission. Registration retains the exact request binding
+for failure cleanup and late receipt rejection. Rebind page-1
 proofs retain descriptor/path identity and generation through the complete
 verification pass, rejecting same-name replacement and in-place mutation.
 
@@ -38,7 +38,7 @@ pass. Generated sustained paging and the refresh-only host path verify bounded
 progress and unique identities. Direct native preflight on the new exact app
 profile passed complete installed-key verification and bounded recent reads;
 this establishes provider behavior, not activation or ordinary host acceptance.
-The final implementation in `4aa8d23` passed 67 affected local tests, full Pyright,
+The initial reliability implementation in `4aa8d23` passed 67 affected local tests, full Pyright,
 Ruff, compileall and whitespace checks after the initial 1,458-test source pass.
 Its [hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/39622375662)
 passed 1,462 full macOS tests and 812 portable tests, plus full Pyright and Ruff.
@@ -53,10 +53,20 @@ are retained, alongside the previous runtimes. Installed stdio exposes thirteen
 tools and the original tunnel passed health, ready and control-plane-poll checks.
 The stopped same-account rebind passed complete installed-key verification and
 changed only the native profile binding. Managed native acceptance remains
-pending behind an operator-only macOS App Data permission gate for the replacement
-process. A connected transport did not establish source readiness: controlled
-fresh reads timed out, and no successful bulk or ordinary-host acceptance is
-claimed. Unattended App Data access remains unverified.
+pending for the ordinary host. After the operator resolved macOS App Data access
+for the retained edge process, controlled fresh recent reads, ten-page native
+traversal with unique identities, a further small fresh read and resident access
+succeeded. MCP cursor-only continuation and context also succeeded, but an earlier
+intermittent capture timeout remains part of the evidence. Unattended App Data
+access remains unverified.
+
+The follow-up source makes broker waits honor the existing caller cancellation
+and deadline, so cancelled background waits release foreground priority promptly.
+The exact in-flight request stays detached for terminal rejection when its capture
+arrives; it is neither reissued nor acknowledged early. Two regressions fail on
+the previous blocking wait. The updated capture/core/source-worker/host suite
+passed 55 tests, full Pyright, Ruff and compileall. This core-only hardening awaits
+artifact verification and activation; the retained Mac edge needs no restart.
 The previously activated core/edge evidence below belongs to its stated earlier
 versions and does not establish current 4.1.15 runtime readiness.
 

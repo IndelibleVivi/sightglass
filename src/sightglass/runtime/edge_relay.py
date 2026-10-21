@@ -13,6 +13,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -29,6 +30,7 @@ from sightglass.contracts.capture import (
     CaptureProtocolError,
     CaptureRequest,
 )
+from sightglass.operations import check_operation_budget
 from sightglass.source.capture.codec import (
     SealedCapture,
     canonical_json,
@@ -232,11 +234,23 @@ class CaptureBroker:
                 raise CaptureProtocolError("request_identity_conflict")
             work.waiters += 1
             work.detached = False
-        completed = work.captured.wait(timeout)
-        with self._condition:
-            work.waiters -= 1
-            if not completed and work.waiters == 0:
-                work.detached = True
+        completed = False
+        deadline = time.monotonic() + max(0.0, timeout)
+        try:
+            while True:
+                check_operation_budget()
+                remaining = max(0.0, deadline - time.monotonic())
+                completed = work.captured.wait(min(0.05, remaining))
+                if completed or remaining == 0:
+                    break
+        finally:
+            with self._condition:
+                work.waiters -= 1
+                if not completed and work.waiters == 0:
+                    # A cancelled caller releases foreground ownership promptly.
+                    # Receipt arrival/replay retains exact terminal recovery; it
+                    # must not reissue the source read or fabricate an ACK.
+                    work.detached = True
         if not completed:
             self._recover_work(work)
             # Do not fabricate a terminal ACK or release an in-flight source read.
