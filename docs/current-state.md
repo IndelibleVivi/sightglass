@@ -12,7 +12,7 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Current reliability candidate
+## Current reliability repair
 
 The current source adds an exact 4.1.15 profile and a stopped-only verified
 same-account edge rebind, retaining native settings v2 and the existing
@@ -38,13 +38,25 @@ pass. Generated sustained paging and the refresh-only host path verify bounded
 progress and unique identities. Direct native preflight on the new exact app
 profile passed complete installed-key verification and bounded recent reads;
 this establishes provider behavior, not activation or ordinary host acceptance.
-The initial source gate passed 1,458 tests, full Pyright, Ruff, compileall and
-whitespace checks. The affected documentation passed 117 local links and 43
-shell-block syntax checks. Initial frozen candidates passed 237 Linux tests
-(three platform skips) and 102 Mac tests; their hosted portable and macOS gates
-passed. The final file-proof and deadline hardening passed 67 affected tests,
-full Pyright, Ruff and compileall; replacement artifacts and live promotion
-remain pending.
+The final implementation in `4aa8d23` passed 67 affected local tests, full Pyright,
+Ruff, compileall and whitespace checks after the initial 1,458-test source pass.
+Its [hosted gates](https://github.com/IndelibleVivi/sightglass/actions/runs/39622375662)
+passed 1,462 full macOS tests and 812 portable tests, plus full Pyright and Ruff.
+The affected documentation passed 117 local links and 43 shell-block syntax
+checks. Exact noneditable artifacts passed 241 installed Linux tests (three
+platform skips) and 105 installed Mac tests, with frozen-runtime and package
+provenance verified.
+
+Those same-schema core and edge artifacts are installed and selected. The
+current database, configuration, authorization, stream and interpretation epochs
+are retained, alongside the previous runtimes. Installed stdio exposes thirteen
+tools and the original tunnel passed health, ready and control-plane-poll checks.
+The stopped same-account rebind passed complete installed-key verification and
+changed only the native profile binding. Managed native acceptance remains
+pending behind an operator-only macOS App Data permission gate for the replacement
+process. A connected transport did not establish source readiness: controlled
+fresh reads timed out, and no successful bulk or ordinary-host acceptance is
+claimed. Unattended App Data access remains unverified.
 The previously activated core/edge evidence below belongs to its stated earlier
 versions and does not establish current 4.1.15 runtime readiness.
 
