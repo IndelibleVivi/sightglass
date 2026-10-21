@@ -280,17 +280,95 @@ class EdgeRebindTests(unittest.TestCase):
         for relative in self.keys:
             (source_root / relative).touch()
 
-        def page1_matches(_root, relative, _key):
-            if relative == "message/message_0.db":
+        checked = 0
+
+        def page1_matches(_key, _page):
+            nonlocal checked
+            checked += 1
+            if checked == len(self.keys):
                 (source_root / "message/message_1.db").touch()
             return True
 
         with (
-            mock.patch("sightglass.source.macos_wechat.keys._page1_matches",
+            mock.patch("sightglass.source.macos_wechat.keys.verify_page1",
                        side_effect=page1_matches),
             self.assertRaisesRegex(RuntimeError, "inventory changed"),
         ):
             verify_key_map(source_root, self.verified_keys)
+
+    def test_key_proof_rejects_same_name_replacement_and_late_mutation(self) -> None:
+        from sightglass.source.macos_wechat.keys import verify_key_map
+
+        source_root = self.native_settings.source_root
+        first = source_root / "contact/contact.db"
+        for replace_inode in (True, False):
+            with self.subTest(replace_inode=replace_inode):
+                for relative in self.keys:
+                    (source_root / relative).write_bytes(b"a" * 4096)
+                checked = 0
+
+                def verify(_key, _page):
+                    nonlocal checked
+                    checked += 1
+                    if checked == 2:
+                        if replace_inode:
+                            replacement = first.with_suffix(".replacement")
+                            replacement.write_bytes(b"b" * 4096)
+                            replacement.replace(first)
+                        else:
+                            first.write_bytes(b"b" * 4096)
+                    return True
+
+                with (
+                    mock.patch("sightglass.source.macos_wechat.keys.verify_page1",
+                               side_effect=verify),
+                    self.assertRaisesRegex(RuntimeError, "changed during key verification"),
+                ):
+                    verify_key_map(source_root, self.verified_keys)
+
+    def test_key_proof_rejects_replacement_during_the_open_page_check(self) -> None:
+        from sightglass.source.macos_wechat.keys import verify_key_map
+
+        source_root = self.native_settings.source_root
+        first = source_root / "contact/contact.db"
+        for relative in self.keys:
+            (source_root / relative).write_bytes(b"a" * 4096)
+
+        def verify(_key, _page):
+            replacement = first.with_suffix(".replacement")
+            replacement.write_bytes(b"b" * 4096)
+            replacement.replace(first)
+            return True
+
+        with (
+            mock.patch("sightglass.source.macos_wechat.keys.verify_page1", side_effect=verify),
+            self.assertRaises(RuntimeError),
+        ):
+            verify_key_map(source_root, self.verified_keys)
+
+    def test_rebind_verifies_current_pages_after_its_candidate_recheck(self) -> None:
+        before = self.source_settings_path.read_bytes()
+        source_root = self.native_settings.source_root
+        for relative in self.keys:
+            (source_root / relative).write_bytes(b"a" * 4096)
+        discoveries = 0
+
+        def discover(_root):
+            nonlocal discoveries
+            discoveries += 1
+            if discoveries == 2:
+                (source_root / "contact/contact.db").write_bytes(b"b" * 4096)
+            return self.candidate
+
+        with (
+            mock.patch("sightglass.source.macos_wechat.discovery.discover_configured_candidate",
+                       side_effect=discover),
+            mock.patch("sightglass.source.macos_wechat.keys.verify_page1",
+                       side_effect=lambda _key, page: page == b"a" * 4096),
+            self.assertRaisesRegex(RuntimeError, "key set is incomplete"),
+        ):
+            rebind_edge(self.edge_settings_path, same_account=True, secret_store=self.secrets)
+        self.assertEqual(self.source_settings_path.read_bytes(), before)
 
     def test_native_settings_reject_symlinks_and_shared_inodes(self) -> None:
         alias = self.private / "synthetic-alias.json"

@@ -630,6 +630,33 @@ class CoreCaptureTests(unittest.TestCase):
             str(successor["source_conversation_id"]),
         )
 
+    def test_deadline_after_registration_leaves_no_pending_request(self) -> None:
+        from sightglass.runtime.capture_journal import CAPTURE_REQUEST_TOOL
+
+        self.start_edge()
+        self.core.sync_once()
+        with self.repository.database.connection() as connection:
+            before = connection.execute(
+                "SELECT COUNT(*) FROM access_receipts WHERE tool_name=? AND outcome='failed'",
+                (CAPTURE_REQUEST_TOOL,),
+            ).fetchone()[0]
+        with (
+            mock.patch("sightglass.runtime.capture_core.operation_remaining_seconds",
+                       side_effect=SightglassError(ErrorCode.SERVICE_TIMEOUT)),
+            mock.patch.object(self.core.broker, "submit") as capture_wait,
+            self.assertRaises(SightglassError) as caught,
+        ):
+            self.core.sync_once()
+        self.assertEqual(caught.exception.code, ErrorCode.SERVICE_TIMEOUT)
+        capture_wait.assert_not_called()
+        with self.repository.database.connection() as connection:
+            counts = dict(connection.execute(
+                "SELECT outcome,COUNT(*) FROM access_receipts WHERE tool_name=? GROUP BY outcome",
+                (CAPTURE_REQUEST_TOOL,),
+            ).fetchall())
+        self.assertEqual(counts.get("pending", 0), 0)
+        self.assertEqual(counts["failed"], before + 1)
+
     def test_failed_attempt_registration_rolls_back_request_and_cursor_together(self) -> None:
         from sightglass.runtime.capture_journal import CAPTURE_REQUEST_TOOL
 

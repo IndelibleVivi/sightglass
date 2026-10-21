@@ -110,7 +110,7 @@ launchctl bootout "$EDGE_LABEL"
 launchctl bootstrap "gui/$(id -u)" "$EDGE_PLIST"
 ```
 
-Rebind 只探测配置中的 source root，不枚举其他账号；使用原 Keychain credential 在内存中重验完整 required inventory，并在写入前复验 profile、ownership、edge config 和 native file before-image。它不创建 Mac WindowDB、不写 secret、不启动进程，返回 `activated=false`。Validation failure 保留原 native settings；出现 concurrent file/config/ownership change 时停止并检查实际状态。Missing/invalid key 或未知 build 是停止条件：需要 operator 提供相应 profile/完整 verified-key enrollment 后才能继续，重复调用不能代替该材料。不要运行 `edge-enroll`、重置 stream 或初始化第二个 WindowDB。
+Rebind 只探测配置中的 source root，不枚举其他账号；使用原 Keychain credential 在内存中重验完整 required inventory。Page-1 proof 绑定打开文件的 identity/generation，读前、读后和全库验证结束时复查，拒绝同名替换或原地修改；profile 复查后才执行这次完整证明，写入前再检查 ownership、edge config 和 native file before-image。它不创建 Mac WindowDB、不写 secret、不启动进程，返回 `activated=false`。Validation failure 保留原 native settings；出现 concurrent file/config/ownership change 时停止并检查实际状态。Missing/invalid key 或未知 build 是停止条件：需要 operator 提供相应 profile/完整 verified-key enrollment 后才能继续，重复调用不能代替该材料。不要运行 `edge-enroll`、重置 stream 或初始化第二个 WindowDB。
 
 启动后核对实际 selected interpreter、唯一 edge owner、core transport，以及同一授权会话的 bounded `read_messages(refresh=true)` fresh receipt。继续读取时只传返回的 cursor、保留 scope 并清除 `refresh`；signed cursor 保留 fresh view，适用于既有 host 缺少 view 参数的情况。连续分页后再做一次小 fresh read，确认没有遗留 operation/spool 阻塞。macOS 若要求新进程的 App Data 确认，必须由 owner 亲手处理并重新验 fresh；本次允许不证明 unattended restart permission。Rebind 与启动成功、source 确认和普通 ChatGPT 验收是不同事实。
 

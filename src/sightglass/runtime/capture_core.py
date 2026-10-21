@@ -227,12 +227,16 @@ class CoreCapture:
         # Registration and scheduling commit together before the source wait,
         # under the original budget and the existing WindowDB writer.
         self._record_request(request, attempted_catalog=attempted_catalog)
-        remaining = operation_remaining_seconds()
-        timeout = (
-            min(CAPTURE_WAIT_SECONDS, remaining) if remaining is not None else CAPTURE_WAIT_SECONDS
-        )
         try:
+            remaining = operation_remaining_seconds()
+            timeout = (
+                min(CAPTURE_WAIT_SECONDS, remaining)
+                if remaining is not None else CAPTURE_WAIT_SECONDS
+            )
             return self.broker.submit(request, timeout=max(0.1, timeout))
+        except SightglassError:
+            self._failed_request(request, "failed")
+            raise
         except (CaptureWaitTimeout, RelayDisconnected) as exc:
             self._failed_request(
                 request, "detached" if isinstance(exc, CaptureWaitTimeout) else "disconnected"

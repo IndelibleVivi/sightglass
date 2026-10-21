@@ -305,7 +305,6 @@ def rebind_edge(
             if secret_store is not None else read_keychain_secret(existing.keychain_account)
         )
         secret_text = secret.decode("utf-8") if isinstance(secret, bytes) else secret
-        keys = verify_key_map(candidate.source_root, decode_key_map(secret_text))
         rebound = replace(
             existing,
             bundle_id=candidate.bundle_id,
@@ -316,6 +315,7 @@ def rebind_edge(
         )
         if discover_configured_candidate(existing.source_root) != candidate:
             raise RuntimeError("running source candidate changed during rebind")
+        keys = verify_key_map(candidate.source_root, decode_key_map(secret_text))
         settings.require_active()
         if EdgeSettings.load(settings_path) != settings:
             raise RuntimeError("edge configuration changed during rebind")

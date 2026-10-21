@@ -91,19 +91,39 @@ def _read_key_file(key_file: Path) -> bytes:
     return data
 
 
-def _page1_matches(source_root: Path, relative: str, key: str) -> bool:
+def _database_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def _page1_identity(
+    source_root: Path, relative: str, key: str,
+) -> tuple[int, int, int, int, int] | None:
     path = source_root / relative
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
-        return False
+        return None
     try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            return None
         page = os.read(descriptor, PAGE_SIZE)
+        if not verify_page1(bytes.fromhex(key), page):
+            return None
+        after = os.fstat(descriptor)
+        path_after = path.lstat()
+        if (
+            _database_identity(before) != _database_identity(after)
+            or _database_identity(after) != _database_identity(path_after)
+            or not stat.S_ISREG(path_after.st_mode)
+            or path_after.st_nlink != 1
+        ):
+            return None
+        return _database_identity(after)
     except OSError:
-        return False
+        return None
     finally:
         os.close(descriptor)
-    return verify_page1(bytes.fromhex(key), page)
 
 
 def verify_key_map(source_root: Path, value: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -121,21 +141,36 @@ def verify_key_map(source_root: Path, value: dict[str, Any]) -> dict[str, dict[s
     if not expected:
         raise RuntimeError("no supported WeChat databases were discovered")
     verified: dict[str, dict[str, str]] = {}
+    identities: dict[str, tuple[int, int, int, int, int]] = {}
     for relative in expected:
         candidate = candidates.get(relative)
         if candidate is None:
             continue
-        if _page1_matches(source_root, relative, candidate):
+        identity = _page1_identity(source_root, relative, candidate)
+        if identity is not None:
+            identities[relative] = identity
             verified[relative] = {"enc_key": candidate}
     if set(verified) != set(expected):
         raise RuntimeError("verified WeChat key set is incomplete")
     for relative, candidate in sorted(candidates.items()):
-        if AUXILIARY_DATABASE.fullmatch(relative) and _page1_matches(
-            source_root, relative, candidate
-        ):
-            verified[relative] = {"enc_key": candidate}
+        if AUXILIARY_DATABASE.fullmatch(relative):
+            identity = _page1_identity(source_root, relative, candidate)
+            if identity is not None:
+                identities[relative] = identity
+                verified[relative] = {"enc_key": candidate}
     if _source_databases(source_root) != expected:
         raise RuntimeError("source database inventory changed during key verification")
+    for relative, identity in identities.items():
+        try:
+            current = (source_root / relative).lstat()
+        except OSError as exc:
+            raise RuntimeError("source database changed during key verification") from exc
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or current.st_nlink != 1
+            or _database_identity(current) != identity
+        ):
+            raise RuntimeError("source database changed during key verification")
     return verified
 
 

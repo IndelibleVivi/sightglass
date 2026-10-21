@@ -21,7 +21,10 @@ has no unverified sticker-key offset. Source diagnostics cross sealed replay
 only through a finite content-free reason set; legacy finite error receipts
 remain recoverable. A round-robin scheduling attempt commits with durable
 request registration before the source wait, independently of tail, coverage,
-reader ACK or later admission.
+reader ACK or later admission. A deadline exhausted immediately after registration
+marks the request failed even when it never reaches the broker. Rebind page-1
+proofs retain descriptor/path identity and generation through the complete
+verification pass, rejecting same-name replacement and in-place mutation.
 
 Fresh source cursors now retain their signed view when the caller omits `view`,
 including on replica-default cores and existing hosts that expose only
@@ -35,7 +38,13 @@ pass. Generated sustained paging and the refresh-only host path verify bounded
 progress and unique identities. Direct native preflight on the new exact app
 profile passed complete installed-key verification and bounded recent reads;
 this establishes provider behavior, not activation or ordinary host acceptance.
-The full source gate passed 1,458 tests, full Pyright, Ruff, compileall and whitespace checks. The affected documentation passed 117 local links and 43 shell-block syntax checks. Installed artifact, hosted CI and live promotion gates remain pending.
+The initial source gate passed 1,458 tests, full Pyright, Ruff, compileall and
+whitespace checks. The affected documentation passed 117 local links and 43
+shell-block syntax checks. Initial frozen candidates passed 237 Linux tests
+(three platform skips) and 102 Mac tests; their hosted portable and macOS gates
+passed. The final file-proof and deadline hardening passed 67 affected tests,
+full Pyright, Ruff and compileall; replacement artifacts and live promotion
+remain pending.
 The previously activated core/edge evidence below belongs to its stated earlier
 versions and does not establish current 4.1.15 runtime readiness.
 
