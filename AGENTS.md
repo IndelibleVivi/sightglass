@@ -90,7 +90,8 @@ to save minutes. The canonical gate definitions remain in
 the full macOS suite runs on main pushes, PRs, and manual dispatch. Portable Linux voice uses Python 3.12 and the functional frozen cp312 SILK wheel; native WeChat coverage remains macOS-only.
 Feature-branch pushes run portable checks until a PR or manual macOS run.
 The portable job includes generated residency, offline compact, paired-runtime
-and released-observation regressions; it does not open a native account.
+and released-observation regressions, plus same-account rebind and refresh-only
+host paging; it does not open a native account.
 Documentation-only pushes/PRs skip both jobs. Manual dispatch can select a ref
 once this workflow is registered on the default branch; until then use a PR
 for hosted native coverage. Do not promote product source merely to enable dispatch.
