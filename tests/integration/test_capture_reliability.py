@@ -222,21 +222,31 @@ class CaptureReliabilityTests(unittest.TestCase):
 
                     sender = threading.Thread(target=trickle, daemon=True)
                     sender.start()
-                    timer = threading.Timer(.08, stop.set) if cancelled else None
-                    if timer:
-                        timer.start()
+                    read = os.read
+
+                    def read_partial_and_cancel(descriptor, amount):
+                        chunk = read(descriptor, amount)
+                        if cancelled and descriptor == reader.fileno() and amount > 4:
+                            # Cancel after the real partial payload read. A timer
+                            # racing a 150ms deadline also measures CI scheduling,
+                            # and can legitimately lose to that deadline.
+                            stop.set()
+                        return chunk
+
                     started = time.monotonic()
                     try:
-                        with self.assertRaisesRegex(RelayDisconnected,
-                                                    "cancelled" if cancelled else "timeout"):
-                            FramedStream(reader, writer, stop=stop).receive(timeout=.15)
+                        with (
+                            patch("sightglass.runtime.edge_relay.os.read",
+                                  side_effect=read_partial_and_cancel),
+                            self.assertRaisesRegex(RelayDisconnected,
+                                                   "cancelled" if cancelled else "timeout"),
+                        ):
+                            FramedStream(reader, writer, stop=stop).receive(
+                                timeout=5 if cancelled else .15)
                         self.assertLess(time.monotonic() - started, .5)
                     finally:
                         sender_stop.set()
                         sender.join(1)
-                        if timer:
-                            timer.cancel()
-                            timer.join(1)
 
     def test_backpressured_pipe_and_socket_send_observe_stop(self):
         for transport, cancel_channel in (
