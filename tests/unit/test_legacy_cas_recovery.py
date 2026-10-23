@@ -84,13 +84,18 @@ class LegacyCASRecoveryTests(unittest.TestCase):
 
     def test_replaced_inode_or_changed_binding_after_preview_is_rejected(self):
         row = self.preview()
-        self.temporary.unlink()
-        self.object.unlink()
-        self.temporary.write_bytes(self.data)
-        self.temporary.chmod(0o600)
-        os.link(self.temporary, self.object)
-        with self.assertRaises(RuntimeError):
-            self.store.legacy_links(self.binding, digest=self.digest, expect=row["expect"])
+        # Keep the unlinked inode alive: immediate same-path reconstruction can
+        # otherwise reuse every stat fact represented by the preview token.
+        with self.object.open("rb") as previous:
+            old_inode = os.fstat(previous.fileno()).st_ino
+            self.temporary.unlink()
+            self.object.unlink()
+            self.temporary.write_bytes(self.data)
+            self.temporary.chmod(0o600)
+            os.link(self.temporary, self.object)
+            self.assertNotEqual(self.object.stat().st_ino, old_inode)
+            with self.assertRaises(RuntimeError):
+                self.store.legacy_links(self.binding, digest=self.digest, expect=row["expect"])
         with self.assertRaises(RuntimeError):
             self.store.legacy_links(
                 lambda _: None, digest=self.digest, expect=self.preview()["expect"]

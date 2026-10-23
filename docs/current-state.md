@@ -49,6 +49,18 @@ SSH or real-account acceptance. The full suite also caught and corrected an
 availability-revision regression: ordinary appends must preserve existing inbox
 and materialized timeline cursors while semantic coverage becomes partial.
 
+Implementation `0bd0759` passed both jobs in hosted CI
+[39975664045](https://github.com/IndelibleVivi/sightglass/actions/runs/39975664045):
+1,600 full macOS tests, 949 portable tests, typing/lint/build and both isolated
+installed-wheel gates. Its separately frozen Mac edge candidate passed 175
+installed fixture tests without opening a configured source. The Linux installed
+suite ran 564 tests with 18 platform skips and found one CAS fixture failure:
+immediate unlink/recreation reused the inode and all stat facts on that filesystem,
+so the test had not guaranteed its intended different-inode trigger. The fixture
+now pins the old inode with an open descriptor and asserts a genuinely different
+replacement before checking stale-token rejection. Production code is unchanged;
+the Linux corrected-fixture acceptance and activation remain separate gates.
+
 ## Earlier reliability and retrieval repair
 
 The `91e0a16` implementation addresses the reliability review across broker restart and
