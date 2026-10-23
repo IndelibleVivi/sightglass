@@ -407,6 +407,27 @@ class SemanticServiceTests(unittest.TestCase):
         self.assertEqual(service.coverage(), "complete")
         self.assertGreater(service.status()["indexed_scope"], 0)
 
+    def test_old_epoch_same_episode_invalidates_empty_resident_coverage(self) -> None:
+        service = self._service(backend=FakeBackend())
+        self.addCleanup(service.close)
+        # Existing nonempty stock is absent from the current semantic epoch.
+        with self.repository.database.transaction() as connection:
+            connection.execute("UPDATE messages SET projection_epoch=?", ("synthetic-old-epoch",))
+        self._index_until_ready(service)
+        self.assertEqual(service.coverage(), "complete")
+        self.assertEqual(service.status()["indexed_scope"], 0)
+        watermark = self._watermark()
+        page = self.service.read_messages(
+            conversation_id=self.group_id, mode="recent", refresh=True,
+            limit=100, voice="off", include_resources="none",
+        )
+        self.assertTrue(page["messages"])
+        self.assertEqual(self._watermark(), watermark)
+        self.assertEqual(service.coverage(), "partial")
+        self._index_until_ready(service)
+        self.assertEqual(service.coverage(), "complete")
+        self.assertGreater(service.status()["indexed_scope"], 0)
+
     def test_disabled_lane_touches_nothing(self) -> None:
         backend = FakeBackend()
         with patch(

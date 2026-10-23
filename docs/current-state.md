@@ -83,6 +83,19 @@ be closed. It retains bounded global-FD convergence and the original caller
 budget rather than adding a separate one-second entry SLO. The combined origin,
 capture-boundary/recovery and caller/remote-chain suite passed all 51 tests.
 
+Origin-upgrade candidate `066f24e` passed both jobs in hosted CI
+[39984894574](https://github.com/IndelibleVivi/sightglass/actions/runs/39984894574),
+including the isolated installed-wheel gates. Its frozen Mac candidate passed
+185 installed fixture tests without opening a configured source. A subsequent
+pre-activation regression found that revalidating nonempty retained stock into
+the current epoch could leave semantic coverage falsely complete when the
+observation episode was unchanged. Admission now advances the existing residency
+availability revision for that transition, in the same transaction as projection
+currentness. First appends retain their original cursor behavior. The new test
+failed on the old implementation; all 62 semantic and 44 adjacent residency,
+consolidation and fresh-cursor tests passed after the fix. This follow-up is
+source-complete and awaits its own installed and runtime acceptance.
+
 ## Earlier reliability and retrieval repair
 
 The `91e0a16` implementation addresses the reliability review across broker restart and

@@ -278,6 +278,7 @@ class ResidencyRepository:
         owner: str,
         decision: ResidencyDecision,
         sent_at: str,
+        became_current: bool = False,
     ) -> None:
         moment = _now()
         expires = None
@@ -313,12 +314,14 @@ class ResidencyRepository:
                 (message_id, conversation_id, owner, size, _iso(moment), expires),
             )
             if size > 0 and prior is not None and (
-                int(prior["byte_size"]) == 0
+                became_current
+                or int(prior["byte_size"]) == 0
                 or (prior["expires_at"] is not None and str(prior["expires_at"]) <= _iso(moment))
             ):
                 # Reacquiring the same state episode need not append an
                 # observation. Availability proofs must still see this newly
-                # readable body, including renewal after temporary expiry.
+                # readable body, including renewal after temporary expiry or
+                # return of retained stock from an older projection epoch.
                 # A first admission already advances the observation watermark;
                 # it must not invalidate cursors frozen before ordinary appends.
                 connection.execute("UPDATE residency_state SET revision=revision+1")

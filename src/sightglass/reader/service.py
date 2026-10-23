@@ -2680,7 +2680,8 @@ class ReaderService:
             check_operation_budget()
             message = item.source
             identity = opaque_id("wxmsg", str(context["account_id"]), message.source_message_id)
-            exists = self.repository.message_position_row(identity) is not None
+            prior_position = self.repository.message_position_row(identity)
+            exists = prior_position is not None
             owner = self.residency.admission_owner(
                 identity, exists=exists, decision=decision, sent_at=message.sent_at_utc
             )
@@ -2711,6 +2712,10 @@ class ReaderService:
                 owner=owner,
                 decision=decision,
                 sent_at=message.sent_at_utc,
+                became_current=(
+                    prior_position is not None
+                    and prior_position["projection_epoch"] != self._projection_inventory_epoch()
+                ),
             )
         if message_ids:
             self.residency.enforce_caps(decision, protect=() if background else tuple(message_ids))

@@ -211,7 +211,8 @@ Semantic coverage additionally records each pass's starting canonical revision
 and the revision actually covered. The revision combines the existing observation
 watermark, identity-correction revision and residency revision; unrelated changes
 may conservatively invalidate it. A pass interrupted by a correction behind its
-cursor cannot certify the new revision. Reacquiring a released or expired body
+cursor cannot certify the new revision. Reacquiring a released or expired body,
+or revalidating retained stock into the current projection epoch,
 invalidates availability proof even when the same observation episode is reused;
 ordinary appends retain their frozen reader cursor semantics. An old sidecar
 without this additive proof table remains usable but reports partial until a full
