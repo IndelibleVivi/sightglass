@@ -21,15 +21,19 @@ One request describes one complete bounded source operation. The edge opens a
 local typed source session, collects its account, conversation, participant,
 message or exact resource evidence, and validates the recorded dependencies when
 the session closes. It then seals one immutable envelope. Source handles are
-closed before spool publication or any transport wait.
+closed before spool publication, capture transfer or terminal-ACK waits.
+Transport revision 2 keeps a separate control thread reachable during source
+execution; its control frames carry no captured source evidence.
 
 ```mermaid
 flowchart LR
     subgraph Edge[Private source edge]
         S[Native or synthetic provider]
         X[Bounded operation executor]
+        C[Execution control thread]
         P[One durable sealed batch]
         S -->|local session and final validation| X
+        C -->|cooperative cancellation event| X
         X -->|closed session, immutable envelope| P
     end
     subgraph Core[Private Linux or local core]
@@ -44,6 +48,8 @@ flowchart LR
     end
     P -->|edge initiated restricted SSH, fixed command| B
     B -->|matching durable terminal ACK| P
+    C -->|working, exact request and generation| B
+    B -->|continue or cancel| C
 ```
 
 The wire does not invoke individual provider methods, carry SQL or shell
@@ -158,10 +164,13 @@ diagnostic and degraded-conversation semantics. Arbitrary exception details,
 identities and source content never enter an error receipt. Older edges that
 report only `SOURCE_INCOMPLETE` remain readable but cannot supply this subtype.
 
-The native provider implementation remains the original v6 implementation. The
-origin interpretation epoch uses the existing tail-projection provider/parser
-recipe; introducing the transport does not replace it with a replay-provider
-epoch or invalidate existing local projections merely because they moved.
+Transport revision 2 leaves the capture envelope and native v6 interpretation
+contract unchanged. The origin interpretation epoch uses the existing
+tail-projection provider-implementation/parser recipe; introducing transport
+control does not replace it with a replay-provider epoch or invalidate local
+projections merely because they moved. A separate provider implementation
+revision can change that recipe's result and must be checked independently when
+upgrading peers.
 
 Each bounded operation has its own finite dependency fence: its selected read-set
 revision vector is validated locally and its envelope records the selected
@@ -190,9 +199,74 @@ complete resource bytes
 Relay frames use a `uint32` big-endian payload length, then one type byte: `J`
 for a strict JSON control object or `C` for the sealed binary format. The frame
 bound is 4 MiB + 32 MiB + 64 bytes. Control kinds are fixed: `hello`, `ready`,
-`poll`, `work`, `idle`, `failed`, `retry` and `ack`. `work` carries only a typed
-`CaptureRequest`. An incomplete frame is a disconnect; no partial resource or
-message page is admitted.
+`poll`, `work`, `idle`, `failed`, `retry` and `ack`, plus revision 2's `working`,
+`continue` and `cancel`. Legacy `work` carries a typed `CaptureRequest`;
+revision 2 adds the bounded execution budget described below. An incomplete
+frame is a disconnect; no partial resource or message page is admitted.
+
+## Transport revisions and execution control
+
+The JSON `schema` remains `sightglass.capture.v1`. Transport revision is a
+separate handshake field, not a `CaptureRequest`, sealed-envelope, stream-epoch
+or native-interpretation revision. Revision 2 has these exact control shapes:
+
+| Frame | Fields |
+| --- | --- |
+| Edge `hello` | `schema`, `kind`, `role`, `token`, `source_instance_id`, `account_id`, `origin_epoch`, `stream_epoch`, `next_sequence`, `core_generation`, `transport_revision: 2` |
+| Core `ready` | `schema`, `kind`, `core_generation`, `transport_revision: 2` |
+| Core `work` | `schema`, `kind`, typed `request`, `remaining_seconds` |
+| Edge `working` | `schema`, `kind`, exact `request_id`, exact `core_generation` |
+| Core `continue` or `cancel` | `schema`, `kind`, the same exact `request_id` and `core_generation` |
+
+Unknown fields and unsupported handshake revisions fail closed. The new edge
+requires the exact revision-2 `ready`. The new core also accepts the original
+`hello` shape without `transport_revision`, replying with the original `ready`
+and `work` shapes for that session:
+
+| Core | Edge | Result |
+| --- | --- | --- |
+| Revision 2 | Revision 2 | Relative execution budget and exact cooperative cancellation are available. |
+| Revision 2 | Legacy | Legacy session remains usable, without per-request edge budget propagation or remote cancellation guarantees. Core caller cancellation can still leave selected edge work occupying the stream. |
+| Legacy | Revision 2 | Handshake fails closed; the new edge does not silently downgrade or execute source work. |
+
+At selection, the core computes `remaining_seconds` from its local broker
+deadline, capped at 120 seconds. The value must be a finite JSON number in
+`0..120`; booleans are invalid. The edge starts a local operation budget using
+the smaller of this value and its configured executor timeout. Queue time
+consumes the core budget. No monotonic absolute timestamp crosses hosts, and a
+control response never renews the selected edge budget or extends the caller's
+deadline. Background callers use their existing bounded operation budget and
+foreground-yield cancellation signal; the wire introduces no new work-class
+field.
+
+The source operation stays on the `EdgeSession` thread, including source-session
+validation, sealing and spool publication. One separate `capture-control` thread
+exchanges `working` and `continue`/`cancel` while the source executes, waiting
+up to 50 ms between exchanges. The core validates each `working` against the
+currently selected request and authenticated core generation. The edge validates
+each reply against that same exact binding. A mismatched control, disconnect or
+edge stop signals cooperative source cancellation. Each control send and receive
+has its own one-second absolute I/O budget; partial frames, send-lock contention
+and backpressure do not reset it. After source execution ends, the edge signals
+the control thread to stop and joins it for at most 2.1 seconds. Source handles
+and SQLite connections are not closed from the control thread.
+
+When the last waiting caller departs after selection, the core records a sticky
+cancel request; when the broker deadline expires it also replies `cancel`.
+Cancellation is a request to the source, not a terminal decision. A cooperative
+executor seals a cancelled receipt with empty evidence, publishes it through the
+normal durable spool, and sends that batch for exact core terminal resolution.
+If control disconnects during execution, the edge still preserves the resulting
+sealed batch in the spool before ending the session. Only an outer-committed
+matching terminal ACK releases it. A cancellation racing with sealing or admission cannot overwrite
+an already accepted terminal, skip a stream sequence, or authorize a second
+execution of unknown source work.
+
+A source call that ignores cooperative cancellation may continue to hold the
+ordered stream. The core's content-free detached/uncaptured phase remains an
+honest indication of unresolved work; neither a cancel response nor caller
+timeout proves that the source stopped. Recovery still requires the exact
+sealed terminal or the existing explicitly authorized owner/loss recovery path.
 
 ## Resource binding
 
@@ -386,9 +460,10 @@ cancellation/deadline cooperatively, including a background source worker's
 foreground-yield signal. When the last waiter departs before selection, the broker
 removes that unissued queued request under the selection lock and releases its
 pending slot. Another joined waiter keeps the request eligible. Cancellation or
-timeout after selection detaches the exact work; a later receipt still requires
-terminal recovery and never resumes the cancelled caller or reissues the source
-read. A late capture enters the configured recovery
+timeout after selection detaches the exact work and, in a revision-2 session,
+requests cancellation through the execution control exchange above. A later
+receipt still requires terminal recovery and never resumes the cancelled caller
+or reissues the source read. A late capture enters the configured recovery
 hook even when its request is already known. If a returned ticket has no durable
 ACK when its finalization wait expires, or its caller cannot commit rejection,
 the broker marks that exact work abandoned. An explicitly abandoned returned
@@ -433,11 +508,13 @@ bounded stop-aware reconnect backoff; protocol/edge-capability failures require
 correction rather than an unchecked retry loop.
 
 Framed fd I/O uses nonblocking raw short reads/writes with stop/cancel checks and
-one absolute frame deadline, including send-lock waits and write backpressure:
-30 seconds for handshake, 60 seconds for idle/work response, and 180 seconds for
-capture/ACK transfer. Partial input does not reset the deadline. Broker shutdown
-cancels finalization waits without an early ACK, and joins its listener and
-connection owners before releasing the runtime;
+one absolute deadline per frame, including send-lock waits and write backpressure.
+Receive limits are 30 seconds for handshake, 60 seconds for idle/work response,
+and 180 seconds for capture/ACK transfer; ordinary sends default to 180 seconds.
+Revision-2 control-thread sends and receives, and the core's `continue`/`cancel`
+sends, use the separate one-second limit. Partial input does not reset the
+deadline. Broker shutdown cancels finalization waits without an early ACK, and
+joins its listener and connection owners before releasing the runtime;
 failure to quiesce aborts replacement. The outgoing SSH connector owns a dedicated
 process group and terminates its descendants even if the SSH leader already exited.
 
@@ -453,6 +530,22 @@ read; a late sealed batch requires its durable request binding and recovery hook
 Already returned tickets retain their evidence for terminal admission/replay.
 
 ## Installation ownership and frozen transfer
+
+Upgrade the core before enabling a revision-2 edge. A core-only upgrade retains
+legacy edge connectivity but does not establish remote cancellation support.
+Before replacing an edge executor or changing a provider implementation/origin
+binding, settle the old owner's selected work and pending batch through its exact
+durable terminal ACK, including replay after ACK loss. Verify that the edge
+settings, executor, core expectation and any replayed pending envelope have the
+same required origin epoch for ordinary replay. Transport revision 2 does not
+waive those checks or make an older-origin batch admissible under a newer origin.
+Do not clear a spool,
+reset a sequence, or reissue an unresolved source operation to make an upgrade
+connect. If the old owner cannot settle, stop that upgrade branch and use the
+existing explicitly authorized exact recovery procedure. Rolling the core back
+to a legacy version also requires a compatible edge; the revision-2 edge fails
+closed against the legacy handshake. These compatibility requirements grant no
+installation, activation, recovery or rollback authority.
 
 Activation schema `sightglass.activation.v2` binds the core or edge role to a host
 identity, the actual WindowDB/spool namespace, a generation, exact predecessor and
@@ -486,7 +579,8 @@ read Keychain, install a daemon or publish data.
 
 ```bash
 uv run python -m unittest tests.unit.test_capture_boundary \
-  tests.integration.test_capture_native tests.integration.test_capture_edge_relay
+  tests.unit.test_capture_core tests.integration.test_capture_native \
+  tests.integration.test_capture_edge_relay tests.integration.test_capture_reliability
 uv run ruff check src/sightglass/contracts/capture.py src/sightglass/source/capture \
   src/sightglass/runtime/edge.py src/sightglass/runtime/edge_relay.py \
   tests/unit/test_capture_boundary.py tests/integration/test_capture_native.py \
@@ -498,7 +592,14 @@ versus unrelated WAL changes, explicit multi-conversation verification, cursor
 boundary/context replay, one-session native V2 resource capture, finite spool
 pressure/restart/loss, transaction rollback/order/deduplication, separate edge
 capabilities, real two-process framing/lost ACK and a private Unix broker with an
-independent stdio proxy. Native routing fixtures cover cached negative facts,
+independent stdio proxy. Core/Unix-relay/edge fixtures also cover cancellation of
+a selected cooperative source operation followed by a fresh foreground read,
+relative caller-budget propagation, disconnect during execution with exact
+terminal replay and no source reissue, mixed-version handshakes, invalid budgets
+and wrong request/generation controls. They preserve the existing accepted-wins,
+terminal-rollback and ACK-loss checks; they do not establish forced termination
+of an uncooperative native call or a production soak result.
+Native routing fixtures cover cached negative facts,
 target-table appearance, eligible candidate changes, unenrolled new shards and
 commits after a validation read view is pinned. Contact-cache fixtures cover
 unchanged reuse under a selected lease, cached-metadata WAL correction rejection

@@ -302,6 +302,111 @@ class SemanticServiceTests(unittest.TestCase):
         return created
 
     # -- default off -------------------------------------------------------
+    def test_append_invalidates_coverage_and_worker_drains_without_false_complete(self) -> None:
+        from sightglass.runtime.semantic_worker import SemanticWorker
+
+        service = self._service(backend=FakeBackend())
+        self.addCleanup(service.close)
+        self._index_until_ready(service)
+        self.assertEqual(service.coverage(), "complete")
+        appended = self._admit_many(96)
+        self.assertEqual(service.status()["pending"], 0)
+        self.assertEqual(service.status()["coverage"], "partial")
+        self.assertEqual(service.status()["state"], "building")
+        worker = SemanticWorker(service)
+        self.assertTrue(worker.run_once())
+        self.assertEqual(service.coverage(), "partial")
+        query = service.query(
+            "synthetic concept", account_id=self.account,
+            conversation_ids=(self.group_id,), watermark=self._watermark(), epoch=self.epoch,
+        )
+        self.assertEqual(query.receipt["coverage"], "partial")
+        for _ in range(20):
+            if not worker.run_once():
+                break
+        self.assertEqual(service.coverage(), "complete")
+        published = service._db().execute(
+            "SELECT message_id FROM semantic_entries WHERE published=1"
+        ).fetchall()
+        self.assertTrue(set(appended) <= {row[0] for row in published})
+
+    def test_correction_behind_active_pass_requires_another_proved_pass(self) -> None:
+        service = self._service(backend=FakeBackend())
+        self.addCleanup(service.close)
+        self._index_until_ready(service)
+        seed = self.repository.materialized_message_rows(
+            self.group_id, projection_epoch=self.epoch,
+            observation_watermark=self._watermark(), limit=1, direction="forward",
+        )[0]
+        self._admit_many(96)
+        service.index_once(limit=16)
+        context = self.repository.conversation_context(self.group_id)
+        assert context is not None
+        with self.provider.snapshot() as snapshot:
+            original = self.provider.get_message(
+                context["source_account_key"], seed["source_message_id"], snapshot
+            )
+        assert original is not None
+        changed = replace(original, raw_content="Synthetic changed behind semantic cursor")
+        self.repository.upsert_message(
+            self.account, self.group_id, seed["sender_id"], seed["sender_membership_id"],
+            changed, parse_message(changed), projection_epoch=self.epoch,
+        )
+        # The unfinished pass began before this correction. Reaching its tail
+        # must never certify that skipped earlier row as current.
+        for _ in range(15):
+            outcome = service.index_once(limit=16)
+            if outcome["scanned"] == 0:
+                break
+        self.assertEqual(service.coverage(), "partial")
+        self.assertEqual(service.status()["state"], "building")
+        for _ in range(30):
+            outcome = service.index_once(limit=16)
+            if outcome["state"] == "ready":
+                break
+        self.assertEqual(service.coverage(), "complete")
+        current = self._row(seed["message_id"])
+        manifest = service._db().execute(
+            "SELECT observation_seq FROM semantic_entries WHERE message_id=?",
+            (seed["message_id"],),
+        ).fetchone()
+        self.assertEqual(manifest[0], current["current_observation_seq"])
+
+    def test_old_coverage_without_revision_proof_is_partial_and_status_is_local(self) -> None:
+        service = self._service(backend=FakeBackend())
+        self.addCleanup(service.close)
+        self._index_until_ready(service)
+        service._db().execute("DELETE FROM semantic_coverage_proof")
+        service._db().commit()
+        with patch.object(service, "_capture", side_effect=AssertionError("status scanned bodies")):
+            self.assertEqual(service.status()["coverage"], "partial")
+            self.assertEqual(service.status()["state"], "building")
+        self._index_until_ready(service)
+        self.assertEqual(service.coverage(), "complete")
+
+    def test_reacquired_same_episode_invalidates_empty_resident_coverage(self) -> None:
+        service = self._service(backend=FakeBackend())
+        self.addCleanup(service.close)
+        resident = self.service.residency
+        preview = resident.stock_preview(self.group_id)
+        self.assertGreater(preview["releasable_messages"], 0)
+        released = resident.release_stock(self.group_id, plan=preview["plan"])
+        self.assertGreater(released["released_messages"], 0)
+        self._index_until_ready(service)
+        self.assertEqual(service.coverage(), "complete")
+        self.assertEqual(service.status()["indexed_scope"], 0)
+        watermark = self._watermark()
+        page = self.service.read_messages(
+            conversation_id=self.group_id, mode="recent", refresh=True,
+            limit=100, voice="off", include_resources="none",
+        )
+        self.assertTrue(page["messages"])
+        self.assertEqual(self._watermark(), watermark)
+        self.assertEqual(service.coverage(), "partial")
+        self._index_until_ready(service)
+        self.assertEqual(service.coverage(), "complete")
+        self.assertGreater(service.status()["indexed_scope"], 0)
+
     def test_disabled_lane_touches_nothing(self) -> None:
         backend = FakeBackend()
         with patch(

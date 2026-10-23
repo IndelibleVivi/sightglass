@@ -81,6 +81,11 @@ MCP 默认返回 `response_profile="brief"`（`sightglass.mcp.brief.v1`）：保
 
 使用 local source 时，冷 `find_links`／`retrieve` 同样先返回 preparing，再返回有界结果；正文和 index 已释放时也能重新查找，只缓存命中和有界前后文。Partial 结果给出单独的 continuation `reading_token`，用于继续扫描更早内容；原 token 只轮询，`page.next_cursor` 只翻已准备好的结果。跨多个 read lease 的遍历不宣称取得同一时刻的完整 source snapshot。详见 [冷 discovery lifecycle](docs/MCP-CONTRACT.md#cold-linkretrieval-preparation)。
 
+Remote core 的 search、links 与 retrieval 目前从已 admitted、仍驻留的 candidates 召回。
+Fresh 只验证这些有界候选，不通过 edge 任意发现从未 admitted 或已释放的 source 历史。
+需要这段历史时，按当前 residency 与授权显式创建选定会话的 history job。
+零结果不证明整个 source 没有相关消息。
+
 驻留是独立的 operator 设置。新配置和新会话默认 `on_demand`：空闲轮询不打开消息正文，
 前台搜索只缓存命中的候选，不把所有扫描过的 source rows 留下来。`keep` 持续收集未来消息，
 历史 backfill 需要显式选择 `keep --keep-backfill` 并创建有界 job；已配置的 remote capture
@@ -143,6 +148,18 @@ uv run python examples/synthetic_read.py
 Pending semantic publication 先 readback 已持久化的 exact intent。只有远端 object 确认
 absent 时，才在 durable backoff 后用相同 vector bytes 重送；已存在但冲突的 object 不覆盖。
 每次 publication 仍检查 current canonical version 与当前同意，普通 deterministic reading 继续可用。
+
+Semantic `complete` 要求一轮完整 pass 对当前 canonical revision 有证明，不能仅凭 pending
+upload 为零。新消息、correction 与正文重新驻留会使旧证明失效；bounded worker 会继续
+building，并保留 remote readback 的退避。Source/history coverage、resident availability、
+index coverage 与语义相关性是分别判断的事实。
+
+MCP 调用等待 IPC 时会让出 stdio event loop；caller cancellation／disconnect 传播进
+daemon，已在执行的 capture 仍按 durable terminal／ACK 路径收尾。IPC timeout 可能留下
+unknown outcome：用同一 update request 重试，不提前推进 ACK，见
+[caller lifecycle](docs/MCP-CONTRACT.md#caller-lifecycle)。旧 CAS 内部双 hardlink 可显式
+执行 stopped-only [preview／repair](docs/OPERATIONS.md#legacy-cas-hardlink-recovery)；
+普通读取与 startup 不修复未经证明的 hardlink。
 
 ## 接入本地账号
 

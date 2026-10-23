@@ -190,7 +190,7 @@ class CaptureReliabilityTests(unittest.TestCase):
                     self.assertIsInstance(hello, dict)
                     if phase != "handshake":
                         control.send({"schema": CAPTURE_VERSION, "kind": "ready",
-                                      "core_generation": ""})
+                                      "core_generation": "", "transport_revision": 2})
                         control.receive()  # poll or the exact pending capture
                     started = time.monotonic()
                     stop.set()

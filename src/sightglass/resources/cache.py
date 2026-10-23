@@ -3,8 +3,10 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import os
+import re
 import stat
 import tempfile
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -33,6 +35,98 @@ class ResourceObjectStore:
             metadata = directory.stat()
             if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o077:
                 raise RuntimeError("resource cache directories must be private (mode 0700)")
+
+    def legacy_links(
+        self, binding: Callable[[str], tuple[str, int] | None], *,
+        digest: str | None = None, expect: str | None = None,
+    ) -> dict[str, Any]:
+        """Explicit stopped-owner inventory/repair; never called by startup or put.
+
+        Only a registered object with exactly one internal old publication alias is
+        recoverable. The caller holds the runtime lock and a frozen DB read view.
+        ``expect`` binds apply to the exact previewed inode and temporary name.
+        """
+        if digest is not None and re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("invalid object digest")
+        if expect is not None and digest is None:
+            raise ValueError("repair requires one previewed digest")
+        locks: list[int] = []
+        try:
+            for directory in (self.root, self.objects, self.tmp):
+                fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                locks.append(fd)
+                metadata = os.fstat(fd)
+                if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+                    raise RuntimeError("unsafe resource cache directory")
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            aliases: dict[tuple[int, int], list[Path]] = {}
+            for path in self.tmp.iterdir():
+                metadata = path.lstat()
+                aliases.setdefault((metadata.st_dev, metadata.st_ino), []).append(path)
+            candidates = [self.objects / digest] if digest else sorted(self.objects.iterdir())
+            rows: list[dict[str, Any]] = []
+            for path in candidates:
+                metadata = path.lstat()
+                if digest is None and stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                    continue
+                row: dict[str, Any] = {"digest": path.name, "status": "blocked"}
+                rows.append(row)
+                peers = aliases.get((metadata.st_dev, metadata.st_ino), [])
+                if (
+                    re.fullmatch(r"[0-9a-f]{64}", path.name) is None
+                    or not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.getuid()
+                    or stat.S_IMODE(metadata.st_mode) & 0o077
+                    or metadata.st_nlink != 2 or len(peers) != 1
+                    or re.fullmatch(r"object-[A-Za-z0-9_-]+", peers[0].name) is None
+                ):
+                    row["reason"] = "unproved_internal_pair"
+                    continue
+                temporary = peers[0]
+                registered = binding(path.name)
+                if registered != (str(path), metadata.st_size):
+                    row["reason"] = "object_binding_mismatch"
+                    continue
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                try:
+                    before = os.fstat(fd)
+                    hasher = hashlib.sha256()
+                    with os.fdopen(os.dup(fd), "rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            hasher.update(chunk)
+                    # Recheck inode, size and content-change stamps after streaming.
+                    def identity(value: os.stat_result) -> tuple[int, ...]:
+                        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+                                value.st_ctime_ns, value.st_nlink, value.st_uid, value.st_mode)
+                    if (
+                        identity(metadata) != identity(before)
+                        or identity(before) != identity(os.fstat(fd))
+                        or identity(before) != identity(path.lstat())
+                        or identity(before) != identity(temporary.lstat())
+                        or hasher.hexdigest() != path.name
+                    ):
+                        row["reason"] = "object_proof_mismatch"
+                        continue
+                    token = ":".join(map(str, identity(before))) + ":" + temporary.name
+                    row.update(status="repairable", byte_size=before.st_size, expect=token)
+                    if expect is not None:
+                        if token != expect:
+                            raise RuntimeError("legacy link preview changed; preview again")
+                        temporary.unlink()
+                        os.fsync(locks[2])
+                        if os.fstat(fd).st_nlink != 1:
+                            raise RuntimeError("legacy link repair changed unexpectedly")
+                        row["status"] = "repaired"
+                        if self.storage is not None:
+                            self.storage.track(path, temporary)
+                finally:
+                    os.close(fd)
+            if expect is not None and not any(row["status"] == "repaired" for row in rows):
+                raise RuntimeError("legacy link repair proof rejected")
+            return {"schema": "sightglass.legacy-cas-links.v1", "objects": rows}
+        finally:
+            for fd in reversed(locks):
+                os.close(fd)
 
     @staticmethod
     def digest(data: bytes) -> str:

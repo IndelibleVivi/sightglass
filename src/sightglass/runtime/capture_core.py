@@ -760,24 +760,39 @@ class CoreCapture:
             job = self.service.repository.backfill_job(str(job["job_id"]))
             assert job is not None
         if int(job["processed_messages"]) >= int(job["max_messages"]):
-            return self.service.process_backfill_once(batch_limit=199)
-        request = self.service.backfill_capture_request(job, batch_limit=199)
-        ticket = self._submit(request)
+            return self.service.process_backfill_once(batch_limit=199, _job=job)
+        try:
+            request = self.service.backfill_capture_request(job, batch_limit=199)
+            ticket = self._submit(request)
+        except SightglassError as error:
+            self.service.record_backfill_error(job, error)
+            raise
         try:
             before, after = self._hooks(ticket)
             with self.service.captured_provider(
                 ticket.provider, before_commit=before, after_commit=after
             ):
-                result = self.service.process_backfill_once(batch_limit=199)
-            # Operator/storage changes can make the reader return idle/paused
-            # without admitting this already-captured page. Release its ordered
-            # slot through exact terminal rejection, never the orphan timeout.
+                result = self.service.process_backfill_once(
+                    batch_limit=199, _job=job, _record_error=False
+                )
             if ticket.durable_ack is None:
-                self._reject(ticket)
+                with operation_budget(2.0, inherit=False):
+                    self._reject(ticket)
             return result
-        except BaseException:
+        except BaseException as error:
             if ticket.durable_ack is None:
-                self._reject(ticket)
+                with operation_budget(2.0, inherit=False):
+                    self._reject(ticket)
+            if isinstance(error, SightglassError):
+                # Frozen provider intentionally exposes only the generic error. The
+                # sealed receipt retains the precise, finite generation diagnosis.
+                if ticket.envelope.document().receipt.reason == "selected_generation_changed":
+                    from sightglass.reader.backfill import invalid
+
+                    error = invalid("backfill_selected_generation_changed")
+                    self.service.record_backfill_error(job, error)
+                    raise error
+                self.service.record_backfill_error(job, error)
             raise
 
     def catalog_call(self, invoke: Callable[[], Any]) -> Any:

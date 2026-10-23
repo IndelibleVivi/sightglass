@@ -18,6 +18,16 @@ M0 contract/provenance → M1 synthetic reader → M2 context/search/updates
 
 Source completion never authorizes real account access or deployment. Native initialization keeps its one-conversation allowlist; wider scope requires an explicit operator decision.
 
+The 2026-10-23 post-repair source increment preserves this programme. Its new
+regressions cover remote caller cancellation across actual stdio/IPC/Unix relay,
+stale backfill jobs, native bounded identity windows, semantic dirty/reacquired
+coverage, voice lease failures and legacy CAS recovery. See [current state](current-state.md#post-repair-review-source-candidate)
+for source versus activation boundaries. Coverage dimensions remain independent:
+validated source intervals, resident bodies, current index publication and
+retrieval relevance. A combined operator matrix, remote cold discovery protocol,
+locked real-corpus relevance holdout and long-duration consumer soak are not
+delivered by this reliability increment; existing partial/M7 outcomes remain open.
+
 ## Complete coverage ledger
 
 “Verified” below refers to repository-owned fixture coverage. It does not certify a reader's installation, all WeChat builds, remote-client behavior or complete account history.

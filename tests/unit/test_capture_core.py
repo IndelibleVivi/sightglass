@@ -112,6 +112,127 @@ class CoreCaptureTests(unittest.TestCase):
         self.edge_stop = threading.Event()
         self.addCleanup(self.stop_edge)
 
+    def test_selected_background_cancel_releases_stream_for_fresh_foreground(self) -> None:
+        from sightglass.operations import check_operation_budget
+
+        started, release, cancelled = threading.Event(), threading.Event(), threading.Event()
+        original = self.executor._execute
+        envelopes = []
+        capture = self.executor.capture
+
+        def slow(request, snapshot):
+            if request.operation == "catalog":
+                started.set()
+                while not release.wait(.005):
+                    check_operation_budget()
+            return original(request, snapshot)
+
+        def observe(*args, **kwargs):
+            result = capture(*args, **kwargs)
+            envelopes.append(result)
+            return result
+
+        def background():
+            with operation_budget(20, cancelled=cancelled):
+                self.core.sync_once()
+
+        self.addCleanup(release.set)
+        with (mock.patch.object(self.executor, "_execute", side_effect=slow),
+              mock.patch.object(self.executor, "capture", side_effect=observe),
+              ThreadPoolExecutor(max_workers=1) as pool):
+            self.start_edge()
+            waiter = pool.submit(background)
+            self.assertTrue(started.wait(2))
+            begin = time.monotonic()
+            cancelled.set()
+            with self.assertRaises(SightglassError):
+                waiter.result(timeout=1)
+            # Source stays blocked until it observes the remote cancellation;
+            # the old implementation exhausts this foreground budget.
+            with operation_budget(3):
+                page = self.call(
+                    "wechat_read_messages", mode="recent", conversation_id=self.group,
+                    refresh=True, limit=1, voice="off", include_resources="none",
+                )
+            self.assertLess(time.monotonic() - begin, 3)
+            self.assertEqual(page["source_receipt"]["view"], "fresh")
+            self.assertFalse(release.is_set())
+            self.assertEqual(envelopes[0].document().receipt.terminal, "cancelled")
+            ack = self.core.receiver.lookup_terminal(envelopes[0])
+            assert ack is not None
+            self.assertEqual(ack.terminal, "cancelled")
+            self.assertEqual(envelopes[0].document().origin.sequence, 1)
+            self.assertEqual(envelopes[1].document().origin.sequence, 2)
+
+    def test_disconnect_during_selected_source_seals_and_replays_without_reissue(self) -> None:
+        from sightglass.operations import check_operation_budget
+
+        started = threading.Event()
+        original = self.executor._execute
+        calls = []
+
+        def slow(request, snapshot):
+            calls.append(request.request_id)
+            if request.operation == "catalog":
+                started.set()
+                while True:
+                    time.sleep(.005)
+                    check_operation_budget()
+            return original(request, snapshot)
+
+        with (mock.patch.object(self.executor, "_execute", side_effect=slow),
+              ThreadPoolExecutor(max_workers=1) as pool):
+            self.start_edge()
+            waiter = pool.submit(self.core.sync_once)
+            self.assertTrue(started.wait(2))
+            self.stop_edge()
+            assert self.edge_thread is not None
+            self.assertFalse(self.edge_thread.is_alive())
+            with self.assertRaises(SightglassError):
+                waiter.result(timeout=2)
+            pending = self.spool.pending()
+            assert pending is not None
+            self.assertEqual(pending.document().receipt.terminal, "cancelled")
+            self.edge_stop.clear()
+            self.start_edge()
+            deadline = time.monotonic() + 3
+            while self.spool.pending() is not None and time.monotonic() < deadline:
+                time.sleep(.005)
+            self.assertIsNone(self.spool.pending())
+            self.assertEqual(len(calls), 1)
+            self.assertIsNotNone(self.core.receiver.lookup_terminal(pending))
+            self.assertEqual(self.spool.next_sequence, 2)
+            self.assertFalse(any(t.name == "capture-control" for t in threading.enumerate()))
+
+    def test_selected_edge_budget_is_relative_and_bounded_by_caller(self) -> None:
+        from sightglass.operations import check_operation_budget, operation_remaining_seconds
+
+        budgets = []
+        original = self.executor._execute
+
+        def slow(request, snapshot):
+            if request.operation == "catalog":
+                budgets.append(operation_remaining_seconds())
+                while True:
+                    time.sleep(.005)
+                    check_operation_budget()
+            return original(request, snapshot)
+
+        with mock.patch.object(self.executor, "_execute", side_effect=slow):
+            self.start_edge()
+            with self.assertRaises(SightglassError):
+                with operation_budget(.3):
+                    self.core.sync_once()
+            self.assertEqual(len(budgets), 1)
+            self.assertGreater(budgets[0], 0)
+            self.assertLessEqual(budgets[0], .3)
+            with operation_budget(3):
+                page = self.call(
+                    "wechat_read_messages", mode="recent", conversation_id=self.group,
+                    refresh=True, limit=1, voice="off", include_resources="none",
+                )
+            self.assertEqual(page["source_receipt"]["view"], "fresh")
+
     def start_edge(self) -> None:
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         connection.connect(str(self.settings.socket_path))

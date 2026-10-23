@@ -3006,8 +3006,7 @@ class WindowRepository:
                 f"""
                 SELECT * FROM source_backfill_jobs
                 WHERE state IN ('queued', 'running') {scope}
-                ORDER BY CASE state WHEN 'running' THEN 0 ELSE 1 END,
-                         updated_at, created_at
+                ORDER BY updated_at, created_at, job_id
                 LIMIT 1
                 """,
                 conversation_ids or (),

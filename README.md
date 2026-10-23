@@ -102,6 +102,12 @@ to scan older rows; the original token only polls, and `page.next_cursor` only
 paginates prepared results. Traversal across multiple read leases never claims one
 complete current snapshot. See the [cold discovery lifecycle](docs/MCP-CONTRACT.md#cold-linkretrieval-preparation).
 
+Remote-core search, links and retrieval currently recall from admitted resident
+candidates. A fresh check validates those bounded candidates; it does not discover
+arbitrary never-admitted or released source history through the edge. An explicit
+selected-conversation history job can admit that history under the current
+residency and access policy. Empty results never prove source-wide absence.
+
 Retention is an independent operator setting. New configurations and conversations
 default to `on_demand`: idle polling opens no message bodies, and foreground search
 retains matching candidates rather than every scanned source row. `keep` collects
@@ -175,6 +181,20 @@ Pending semantic publication reads back the exact stored intent first. An absent
 remote object may be retried after durable backoff using the same vector bytes;
 a present conflicting object is never overwritten. Canonical version and current
 consent still gate every publication; deterministic reading remains available.
+
+Semantic `complete` requires a finished pass proved against the current canonical
+revision, not just zero pending uploads. Appends, corrections and renewed resident
+availability invalidate that proof; the bounded worker continues building while
+preserving remote readback backoff. Source/history coverage, resident availability,
+index coverage and semantic relevance remain separate claims.
+
+MCP calls yield the stdio event loop while IPC work runs. Caller cancellation and
+disconnect propagate into the daemon; an in-flight capture still settles through
+its durable terminal/ACK path. An IPC timeout can leave an unknown outcome: retry
+the same update request without advancing ACK. See the [caller lifecycle](docs/MCP-CONTRACT.md#caller-lifecycle).
+Legacy internal CAS hardlinks have an explicit stopped-only
+[preview and repair](docs/OPERATIONS.md#legacy-cas-hardlink-recovery); ordinary reads
+and startup never repair an unproved hardlink.
 
 ## Connect a local account
 

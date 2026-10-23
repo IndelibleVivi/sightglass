@@ -358,7 +358,9 @@ class SourceWorker:
                     exc.code == ErrorCode.SERVICE_TIMEOUT
                     and exc.details.get("reason") == "operation_deadline"
                 )
-                if exc.code != ErrorCode.SOURCE_GENERATION_CHANGED and not deadline_expired:
+                if not exc.retryable or (
+                    exc.code != ErrorCode.SOURCE_GENERATION_CHANGED and not deadline_expired
+                ):
                     raise
         raise RuntimeError("source backfill retry loop did not return")
 

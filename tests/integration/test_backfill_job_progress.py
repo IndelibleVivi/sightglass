@@ -12,7 +12,6 @@ import unittest
 from dataclasses import fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 from sightglass.contracts.capture import CaptureCeiling, CaptureRequest
@@ -114,14 +113,37 @@ class RemoteBackfillJobProgressTests(unittest.TestCase):
                 request, stream_epoch="synthetic-stream", sequence=len(self.captures) + 1
             )
             self.captures.append(envelope.document())
-            return SimpleNamespace(provider=FrozenCaptureProvider(envelope), durable_ack=True)
+            class Ticket:
+                def __init__(self):
+                    self.envelope = envelope
+                    self.durable_ack: bool | None = None
+
+                @property
+                def provider(self):
+                    return FrozenCaptureProvider(self.envelope)
+
+            return Ticket()
 
         submit_patch = mock.patch.object(self.core, "_submit", side_effect=submit)
         hooks_patch = mock.patch.object(self.core, "_hooks", return_value=(None, None))
         submit_patch.start()
         hooks_patch.start()
+        self.rejection_states = []
+
+        def reject(ticket):
+            self.rejection_states.append(self.repository.next_backfill_job())
+            ticket.durable_ack = True
+
+        rejection_patch = mock.patch.object(self.core, "_reject", side_effect=reject)
+        rejection_patch.start()
+        self.addCleanup(rejection_patch.stop)
         self.addCleanup(submit_patch.stop)
         self.addCleanup(hooks_patch.stop)
+
+    def job(self, identity):
+        row = self.repository.backfill_job(identity)
+        assert row is not None
+        return row
 
     def queue(self, **arguments):
         return self.core.catalog_call(
@@ -160,7 +182,7 @@ class RemoteBackfillJobProgressTests(unittest.TestCase):
         self.assertEqual(second["processed_messages"], 398)
         third = self.core.backfill_once()
         self.assertEqual((third["state"], third["processed_messages"]), ("completed", 425))
-        job = self.repository.backfill_job(queued["job_ids"][0])
+        job = self.job(queued["job_ids"][0])
         assert job is not None
         self.assertEqual(job["processed_messages"], 425)
         self.assertEqual(
@@ -195,18 +217,47 @@ class RemoteBackfillJobProgressTests(unittest.TestCase):
             )
 
     def test_selected_replacement_fails_closed_without_progress(self):
-        self.queue(max_messages=500)
+        identity = self.queue(max_messages=500)["job_ids"][0]
         self.core.backfill_once()
+        original = self.job(identity)
         path = self.fixture.source / "message/message_0.db"
         replacement = path.with_suffix(".replacement")
         shutil.copy2(path, replacement)
         replacement.replace(path)
         with self.assertRaises(SightglassError):
             self.core.backfill_once()
-        job = self.repository.next_backfill_job()
+        job = self.job(identity)
         assert job is not None
+        self.assertEqual(job["state"], "failed")
+        self.assertEqual(job["cursor_token"], original["cursor_token"])
         self.assertEqual(job["processed_messages"], 199)
         self.assertEqual(self.captures[-1].receipt.terminal, "rejected")
+        self.assertEqual(self.rejection_states[-1]["state"], "running")
+        self.assertIsNone(self.repository.next_backfill_job())
+        self.restart_reader()
+        self.queue(max_messages=500)
+        self.assertEqual(self.core.backfill_once()["processed_messages"], 199)
+
+    def test_selected_replacement_is_not_failed_before_rejection_commits(self):
+        identity = self.queue(max_messages=500)["job_ids"][0]
+        self.core.backfill_once()
+        original = self.job(identity)
+        path = self.fixture.source / "message/message_0.db"
+        replacement = path.with_suffix(".replacement")
+        shutil.copy2(path, replacement)
+        replacement.replace(path)
+        with mock.patch.object(self.core, "_reject", side_effect=SightglassError(
+            ErrorCode.SERVICE_UNAVAILABLE, retryable=True
+        )):
+            with self.assertRaises(SightglassError):
+                self.core.backfill_once()
+        job = self.job(identity)
+        self.assertEqual(job["state"], "running")
+        self.assertEqual(job["processed_messages"], original["processed_messages"])
+        self.assertEqual(job["cursor_token"], original["cursor_token"])
+        with self.assertRaises(SightglassError):
+            self.core.backfill_once()
+        self.assertEqual(self.job(identity)["state"], "failed")
 
     def test_ordinary_append_between_pages_keeps_exact_job_position(self):
         self.queue(max_messages=500)
@@ -248,7 +299,10 @@ class RemoteBackfillJobProgressTests(unittest.TestCase):
         self.assertEqual(len(self.captures), 1)
 
     def test_selected_dependency_changes_during_range_reject_before_admission(self):
-        self.queue(max_messages=500)
+        identity = self.queue(max_messages=500)["job_ids"][0]
+        self.core.backfill_once()
+        other = self.queue(max_messages=500)["job_ids"][0]
+        original_job = self.job(identity)
         writer = self.fixture._connect_new("message/message_0.db")
         self.addCleanup(writer.close)
         writer.execute("PRAGMA journal_mode=WAL")
@@ -268,9 +322,17 @@ class RemoteBackfillJobProgressTests(unittest.TestCase):
                 self.core.backfill_once()
         self.assertEqual(self.captures[-1].receipt.terminal, "rejected")
         self.assertEqual(self.captures[-1].receipt.reason, "SOURCE_GENERATION_CHANGED")
-        job = self.repository.next_backfill_job()
+        job = self.job(identity)
         assert job is not None
-        self.assertEqual(job["processed_messages"], 0)
+        self.assertEqual(job["processed_messages"], 199)
+        self.assertEqual(job["cursor_token"], original_job["cursor_token"])
+        self.assertEqual(job["state"], "running")
+        self.restart_reader()
+        next_job = self.repository.next_backfill_job()
+        assert next_job is not None
+        self.assertEqual(next_job["job_id"], other)
+        self.assertEqual(self.core.backfill_once()["processed_messages"], 199)
+        self.assertEqual(self.core.backfill_once()["processed_messages"], 398)
 
     def test_remote_untouched_legacy_job_uses_fresh_catalog_then_real_range(self):
         identity = self.queue(max_messages=500)["job_ids"][0]
@@ -286,7 +348,7 @@ class RemoteBackfillJobProgressTests(unittest.TestCase):
         self.assertEqual(
             [item.request.operation for item in self.captures], ["catalog", "catalog", "range"]
         )
-        row = self.repository.backfill_job(identity)
+        row = self.job(identity)
         assert row is not None
         self.assertTrue(row["cursor_token"])
 
@@ -361,8 +423,10 @@ class RemoteBackfillJobProgressTests(unittest.TestCase):
         with mock.patch.object(self.service, "_prepare_messages", side_effect=rebind):
             with self.assertRaises(SightglassError):
                 self.core.backfill_once()
-        current = self.repository.next_backfill_job()
+        current = self.job(str(job["job_id"]))
         assert current is not None
+        self.assertEqual(current["state"], "failed")
+        self.assertEqual(current["cursor_token"], job["cursor_token"])
         self.assertEqual(current["processed_messages"], 0)
 
     def test_stale_job_page_cannot_double_commit_progress(self):

@@ -498,7 +498,7 @@ class MacOSWeChatSourceProvider:
     def descriptor(self) -> SourceProviderDescriptor:
         return SourceProviderDescriptor(
             kind="macos-wechat",
-            implementation="sightglass.macos-wechat.sqlcipher.v6",
+            implementation="sightglass.macos-wechat.sqlcipher.v6.r1",
             source_mode="live",
             platform=("darwin",),
             supports_incremental=True,
@@ -2619,6 +2619,7 @@ class MacOSWeChatSourceProvider:
         time_after_utc: str | None,
         time_before_utc: str | None,
         include_resources: bool = True,
+        proved_text_positions: set[tuple[str, int]] | None = None,
     ) -> Iterator[SourceMessage]:
         for row in self._iter_shard_rows(
             state,
@@ -2633,6 +2634,8 @@ class MacOSWeChatSourceProvider:
             time_after_utc=time_after_utc,
             time_before_utc=time_before_utc,
         ):
+            if proved_text_positions is not None and int(row["local_type"] or 0) == 1:
+                proved_text_positions.add((relative, int(row["source_rowid"])))
             message = self._message(
                 state,
                 conversation,
@@ -2690,6 +2693,7 @@ class MacOSWeChatSourceProvider:
             page_size = 1
         else:
             page_size = min(256, max(1, int(limit)))
+        proved_text_positions: set[tuple[str, int]] = set()
         iterators = tuple(
             self._iter_shard_messages(
                 state,
@@ -2705,6 +2709,7 @@ class MacOSWeChatSourceProvider:
                 time_after_utc=time_after_utc,
                 time_before_utc=time_before_utc,
                 include_resources=include_resources,
+                proved_text_positions=proved_text_positions,
             )
             for relative in shards
         )
@@ -2740,6 +2745,12 @@ class MacOSWeChatSourceProvider:
             messages.append(message)
             if len(messages) >= max(1, int(limit)):
                 break
+        # Reconcile the final page and its lookahead before trusting either the
+        # rows or the coverage sentinel. A duplicate may lie outside every window.
+        self._reconcile_retained_messages(
+            state, conversation, table, tuple(messages), snapshot,
+            proved_text_positions=proved_text_positions,
+        )
         messages.sort(key=lambda item: item.sort_key.as_tuple())
         return messages
 
@@ -2987,6 +2998,7 @@ class MacOSWeChatSourceProvider:
             selected.append(message)
             if len(selected) == bounded + 1:
                 break
+        self._reconcile_retained_messages(state, conversation, table, tuple(selected), snapshot)
         more = len(selected) > bounded
         hydrated: list[SourceMessage] = []
         for message in selected[:bounded]:
@@ -3465,13 +3477,10 @@ class MacOSWeChatSourceProvider:
             sides.append(selected)
         left_messages, right_messages = sides
         selected_neighbors = (*reversed(left_messages[:before]), *right_messages[:after])
-        # A retained neighbor can carry a server ID that also appears in another
-        # shard outside this neighbor radius. get_message already rejects such a
-        # duplicate identity conflict; read_context must reconcile the exact
-        # neighbors it is about to return under the same session/budget, and it
-        # must do so before resource hydration so a conflict never triggers
-        # resource work.
-        self._reconcile_context_neighbors(state, conversation, table, selected_neighbors, snapshot)
+        # Include the lookahead rows: their identities also support coverage.
+        self._reconcile_retained_messages(
+            state, conversation, table, (*left_messages, *right_messages), snapshot
+        )
         hydrated = [
             self._message(
                 state,
@@ -3490,27 +3499,29 @@ class MacOSWeChatSourceProvider:
             has_more_after=len(right_messages) > after,
         )
 
-    def _reconcile_context_neighbors(
+    def _reconcile_retained_messages(
         self,
         state: _SnapshotState,
         conversation: SourceConversation,
         table: str,
-        neighbors: tuple[SourceMessage, ...],
+        retained: tuple[SourceMessage, ...],
         snapshot: SourceSnapshot,
+        *,
+        proved_text_positions: set[tuple[str, int]] | None = None,
     ) -> None:
-        """Reconcile retained neighbor identities across shards, batched and bounded.
+        """Reconcile page/sentinel identities across serving shards, batched and bounded.
 
         Only ``server`` identities can collide across shards without the shard being
         part of the token; ``local``/``fallback`` tokens already carry their shard.
         A single ``server_id IN (...)`` query per shard resolves every retained
-        neighbor id at once, so the added cost is one bounded statement per shard
-        rather than one lookup per neighbor. Cancellation/deadline budgets apply to
+        message id at once, so the added cost is one bounded statement per shard
+        rather than one lookup per message. Cancellation/deadline budgets apply to
         every step, and a differing payload for one identity fails closed exactly as
         ``get_message`` does.
         """
 
         server_ids: set[int] = set()
-        for message in neighbors:
+        for message in retained:
             decoded = self._decode_message_token(message.source_message_id)
             if decoded is None:
                 continue
@@ -3520,15 +3531,30 @@ class MacOSWeChatSourceProvider:
         if not server_ids:
             return
         expected: dict[str, str] = {}
-        for message in neighbors:
+        for message in retained:
             decoded = self._decode_message_token(message.source_message_id)
             if decoded is not None and decoded[1] == "server":
                 expected[message.source_message_id] = self._message_evidence_digest(message)
         if not expected:
             return
-        ordered = tuple(sorted(server_ids))
         for relative in self._message_shards(state, table):
             check_operation_budget()
+            # Same-shard ordinary text was already proved against every physical
+            # copy by _message_rows_by_rowid. Reuse that proof rather than decode
+            # the selected payload twice; other shards and media still need the
+            # exact identity query, even when their copy is outside the window.
+            proved_here = {
+                int(decoded[2][0])
+                for message in retained
+                if message.logical_shard_key == relative
+                and proved_text_positions is not None
+                and (relative, message.source_rowid) in proved_text_positions
+                and (decoded := self._decode_message_token(message.source_message_id)) is not None
+                and decoded[1] == "server"
+            }
+            ordered = tuple(sorted(server_ids - proved_here))
+            if not ordered:
+                continue
             rows = self._server_identity_rows(state, relative, table, ordered)
             for row in rows:
                 check_operation_budget()

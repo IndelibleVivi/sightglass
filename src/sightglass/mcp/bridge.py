@@ -29,7 +29,11 @@ class DaemonReaderTools(ReaderTools):
         try:
             return self.client.call("tools.call", {"name": name, "arguments": arguments})
         except IPCTimeoutError:
-            return SightglassError(ErrorCode.SERVICE_TIMEOUT, retryable=True).as_dict()
+            return SightglassError(
+                ErrorCode.SERVICE_TIMEOUT, retryable=True,
+                details={"reason": "ipc_outcome_unknown",
+                         "recovery": "retry_same_request_without_advancing_ack"},
+            ).as_dict()
         except IPCUnavailableError:
             return SightglassError(ErrorCode.SERVICE_UNAVAILABLE, retryable=True).as_dict()
         except IPCError:

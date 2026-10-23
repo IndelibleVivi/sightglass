@@ -86,6 +86,7 @@ class CaptureExecutor:
         sequence: int,
         batch_id: str | None = None,
         cancelled: threading.Event | None = None,
+        timeout_seconds: float | None = None,
     ) -> SealedCapture:
         captured_at = utc_now().isoformat()
         snapshot: SourceSnapshot | None = None
@@ -97,7 +98,10 @@ class CaptureExecutor:
         selected: tuple[tuple[str, str], ...] = ()
         try:
             self.ceiling.authorize(request)
-            with operation_budget(self.timeout_seconds, cancelled=cancelled):
+            with operation_budget(
+                self.timeout_seconds if timeout_seconds is None
+                else min(self.timeout_seconds, timeout_seconds), cancelled=cancelled,
+            ):
                 scope = (
                     SourceScope.catalog()
                     if request.operation == "catalog"

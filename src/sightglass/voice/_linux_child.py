@@ -174,6 +174,8 @@ def _last_error(stderr: bytes) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # This dedicated job process owns its umask; never change the daemon umask.
+    os.umask(0o077)
     parser = argparse.ArgumentParser(prog="sightglass-voice-linux-job")
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--workspace-lease-fd", type=int, required=True)

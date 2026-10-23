@@ -91,7 +91,7 @@ print(operations)
 
 当前 native runtime 应报告 `source.mode=live`、`source.implementation=sightglass.macos-wechat.sqlcipher.v6`、`synthetic_only=false`、`window_db_schema_version=10` 与 `resources=true`。Appmsg file/image 与已观测 digest-named `msg/video` payload 可进入 image/PDF/text/rich-file pipeline；resource finder 只查已物化 local catalog，HEIC/TIFF/BMP 支持本地 sniff／preview，UTF-16/GB18030 严格解码，audio/video 可返回有界 metadata，支持的本地视频可生成 PNG 首帧 preview。Thumbnail-only image 以 `preview_only` 提供 preview 而不冒充 original；encrypted V2 mapped original 在 decoder key 未 enrollment 时明确返回 `image_decoder_key_missing`，但若同一 message-position 另有可解码 cache thumbnail，则只以 `preview_only` 提供该 preview，绝不把 ciphertext 或 preview 冒充 original。当 `message/media_*.db` key 已 page-1 verified/enrolled 时，voice 可作为 `audio/silk` original 读取且 generic `metadata` 返回 `audio={format:"silk",mime_type:"audio/silk"}`；本地转写另需已安装 helper、decoder 和对应语言 speech assets。每次安装的客户端 playback/consumption 须单独验收。Sticker 由运行时 in-memory 推导的 account FileXorKey 本地解密，original 优先、message-bound thumbnail 降级，entry 缺失或推导失败保持显式 missing/key_missing/metadata_only。所有资源处理都没有 attachment network fallback。Catalog、roster、indexed history 和 local payload availability 都按实际 coverage 报告，不从 bounded empty result 推断全局不存在。
 
-Native provider v6 更新 context identity admission：升级后的旧 v5 materialized projection/cursor 不再作为 current-epoch evidence；正常有界 source 重观察／tail repair 恢复可读性，不在启动时批量重写或 refill history。Pending immutable update deliveries 保留自己的 replay bytes。
+Native interpretation v6 的 implementation revision 现为 `sightglass.macos-wechat.sqlcipher.v6.r1`，扩展 bounded retained-ID／sentinel 的跨 shard identity 核验。其既有 epoch recipe 会使旧 v6 materialized currentness／cursor 失效；正常有界 source 重观察／tail repair 恢复可读性，不在启动时批量重写或 refill history。Pending immutable reader update deliveries 保留自己的 replay bytes。Remote origin 切换还有下述独立前置要求，普通 wheel replacement 不会自动完成。
 
 遇到 source-required call 的 `SOURCE_INCOMPLETE` 时，检查 `details.warning_codes` 和 operator `source_worker.last_error_reason`（MCP diagnostic 中位于 `runtime.source_worker`）。`source_build_binding_changed` 表示当前 app/profile 与绑定不同；`source_key_missing_or_invalid`、`source_schema_invalid`、database/WAL unreadability 分别保留自己的有限诊断。Connected transport 不证明 source 可读。已支持 build 的同账号 edge 升级使用下面的 rebind；未知 build、key rotation 或缺少新 required shard key 仍需明确的 profile/verified-key enrollment，不能猜 key 或绕过验证。修复前，current-epoch materialized pages、native inbox 与通过当前 policy/resolver 检查的 warm CAS object 可以继续读取，receipt 仍明确 bounded-stale/local-cache。Sightglass 不会重签、注入或修改 WeChat。
 
@@ -183,6 +183,16 @@ logical shard generations；普通 append 可继续，selected-shard replacement
 已经部分处理但没有独立 cursor，或 inventory 不匹配的旧 job 会保留数据与计数并失败。
 此时检查 `backfill status`，为所需范围显式创建新 job（`legacy_backfill_requeue_required`），
 不要修改旧进度或把失败视作全部读完。
+
+已绑定的 job 如果发生永久 account／interpretation epoch／cursor scope／selected logical
+generation 失效，会写入现有 `failed` 终态，保留原 cursor、processed count 与 scope。
+调用返回 `SOURCE_GENERATION_CHANGED`、有限 `reason`、`requeue_required=true` 与
+`action="queue_backfill"`；durable status 的 `last_error_code` 只保存 error code。
+Global pause／resume 或 restart 不会复活 failed job。按原会话与需要的 time/max scope
+显式运行上面的 `backfill conversation` 创建新 job；不要重绑旧 signed cursor。
+临时 WAL／dependency drift 仍可重试，按实际 updated time 公平轮转，避免一个 running
+job 一直挡住另一 job。已取得 capture 的失败先完成 exact rejection，再提交 job 失败；
+admission 与 progress 仍在同一事务，rollback 不会只留下其中一项。
 
 Resource／voice／derived workers 现在先读 durable 状态，只有实际到期或可 claim 的工作
 才取得短 writer transaction；空 resource lease recovery 不取得 writer。每种 worker 有自己的
@@ -603,6 +613,14 @@ Sidecar 同时绑定 exact Cloudflare account/index 和 local source account。P
 
 关闭时停止 daemon，再执行 `uv run sightglassctl retrieval disable-semantic`，按原流程重新启动。Disable 保留 sidecar/config scope/remote vectors；它既不擦除远端数据，也不撤销已发生的外发。远端清理须另行明确授权并由 operator 在 CF 执行。Rebuild 也不会删除旧 namespaces；不要删除 `window.db` 来重建 semantic derivative。
 
+Coverage proof 是 sidecar 的 additive metadata：记录一轮 pass 开始及实际覆盖的 canonical
+revision，结合 observation watermark、identity correction 和 residency revision。
+旧 sidecar 缺 proof 时先报告 partial，保留 entries／exact send intents，完整新 pass 后才能
+complete。Append、correction、released／expired 正文重新可读会使旧 proof 失效；普通 append
+仍保留 frozen reader cursor。Pending 为零只表示没有已发送待确认的 intent，不表示没有
+未扫描／未编码消息；building worker 会继续 bounded drain，remote retry 仍按 durable backoff。
+该 proof 覆盖当前 admitted resident inputs，不证明 source 历史完整或语义相关性达标。
+
 ## Cache and identity corrections
 
 ```bash
@@ -627,11 +645,69 @@ UTF-16 也不能绕过；node/depth 在解析时限额，HTML void tags 不误�
 
 Cache cleanup 默认 dry-run；`--apply` 只删除 `resource-cache/objects/` 内 liveness 检查确认无任何引用的对象：活跃引用覆盖 `resource_bindings.object_digest`、`resource_derivations.derived_digest`、`voice_jobs.input_digest`/`result_digest` 与 `voice_batch_events.result_digest` 全部 FK 列。删除在事务内逐行复检后先 commit row；最终 inode/path revalidation、row-absence check 与 unlink 位于一个不承担 DELETE 的短 maintenance writer transaction 中，使 unlink 与 voice/resource object registration 串行化。普通 resource staging 仍在 writer transaction 外完成 source/processor/CAS 工作；admission 在同一 registration fence 内复检已验证的 private inode，若 cleanup 已回收它，才用已经有界的 staged bytes 重建并再次验证，然后提交 row/binding。嵌套 transaction 中拒绝执行 cleanup。无 DB row 的孤儿对象仅在 regular、single-link、digest-named 且 mtime 早于 24h 时被非递归清扫，新 staged 文件受宽限保护；unlink 失败的残留由后续轮次老化收敛。`status` 的 unbound 统计覆盖上述全部引用；cleanup 候选 `object_count`/`reclaimable_bytes` 是初选统计，实际删除看 `removed_count`，残留孤儿看 `orphan_count`/`orphan_bytes`。Identity correction 只更新当前 projection，并写 append-only ledger；`message_observations` 不被改写。`cache cleanup` 在同一次调用内还会顺带回收 terminal delivery spool：它一次最多处理 500 个 spool 文件（`batch_limit=500`，`has_more` 指示是否还有下一批），在 pending-publication writer fence 内逐条复核 `reader_deliveries.payload_ref`，保留任何仍有 `pending` 引用的 spool（`pending_preserved`），只删除已 `acknowledged`/`expired` 的 terminal spool 或早于 24 小时宽限（`orphan_grace_seconds`）且无引用的孤儿，并在删除后 fsync spool 目录。`cache cleanup` 的返回体里带 `deliveries` 子块。既有 pending delivery 是 immutable snapshot，继续 exact replay；message IDs/anchors 保持稳定。
 
+### Legacy CAS hardlink recovery
+
+旧版 hardlink publication 若在发布中断后留下 `resource-cache/tmp/object-*` 与
+`resource-cache/objects/<digest>` 的双链接，普通 read／`put` 仍会拒绝该对象。
+正常 startup、`put` 与日常 cache cleanup 不会暗中修复这些旧库存。恢复使用独立的
+显式 `cache legacy-links` 命令；preview 和 repair 都要求 configured daemon 已停止，
+并持有同一 runtime process lock。使用所选 installation 的 installed CLI；下面变量
+都是 operator 私下选择的 placeholders，不把 config、digest 或 preview 输出提交到 Git。
+
+```bash
+"$INSTALLED_CTL" --config "$PRIVATE_CONFIG" daemon stop
+"$INSTALLED_CTL" --config "$PRIVATE_CONFIG" cache legacy-links preview
+# 可只选择一个 digest object；证明内部 alias 仍会枚举 tmp directory：
+"$INSTALLED_CTL" --config "$PRIVATE_CONFIG" cache legacy-links preview --digest "$OBJECT_DIGEST"
+# 审阅结果并选择 status=repairable 的 exact pair 后，原样使用该行 expect：
+"$INSTALLED_CTL" --config "$PRIVATE_CONFIG" cache legacy-links repair \
+  --digest "$OBJECT_DIGEST" --expect "$PREVIEW_EXPECT"
+```
+
+Preview 不删除文件或改写 DB rows。全量 preview 枚举 objects／tmp，只对候选流式读取
+内容以证明 digest；它不是普通 status 的快速容量摘要。返回
+`sightglass.legacy-cas-links.v1`，`objects` 中可修复项为 `status=repairable`，并带
+`expect`。证明要求 digest object 与唯一内部 `object-*` temporary 是同一 owned、
+private regular inode，恰好 `nlink=2`；文件大小与内容 digest 必须匹配冻结只读 DB 中
+的 exact object path／size，并通过相关 resource binding 完整性检查。缺失 binding、
+未知额外或外部 hardlink、symlink、foreign owner、size／digest 冲突均拒绝恢复。
+
+`expect` 是 exact before-image identity token，绑定 device／inode、size、mtime／ctime、
+link count、owner／mode 和 temporary name。Repair 在 root／objects／tmp directory locks
+内重做全部证明；token 或 binding 改变时必须重新 preview，不能拼接或重用旧 token。
+成功只 unlink 已证明的内部 temporary，并 fsync tmp directory，保留 digest inode、
+对象内容及全部 DB references；结果必须为 `status=repaired`。不符合证明的旧 stock
+保持原样，不能靠手工 chmod 或删除不明 alias 强行通过。
+
+若 unlink 后 directory fsync 失败，命令返回错误；temporary 可能已经移除，不能把错误
+当作成功或直接重复 apply 旧 token。先重新 preview 并复核残留，再按原 installation
+生命周期恢复服务，用 ordinary resource read 重新通过 single-link／digest 验证。
+此流程不打开 source、不迁移 schema，也不代替 installation 或真实资源读取的单独验收。
+
 <a id="local-voice-transcription"></a>
 
 ## Voice transcription worker
 
 Daemon 生命周期内有一个 daemon sibling voice worker（`sightglass-voice-worker`）：它只在 `voice_jobs` 里 lease `pending` 作业，把注入的识别器结果通过 `complete`/`fail` 提交，并在每次循环 reclaim 已过期的 lease。提交始终带 owner/fencing token，所以被取代的执行上下文无法写入迟到结果。**默认安装不配置识别器**：worker 以 `enabled=false` 存在且从不运行任何本地 fake recognizer，`wechat_read_transcripts` 仍可读已提交页面，但 wait block 明确报告 `unavailable`，可观测的 `wechat_status(summary).runtime.voice_worker` 也报告 `enabled=false`。生产识别器由 `runtime/voice_setup.py` 按当前配置装配；测试可构造 `SightglassDaemon(..., voice_transcriber=...)` 注入替身，production `main()` 恒为 `None`。
+
+### Linux attempt workspace recovery
+
+Linux 识别使用 parent-owned `<data_dir>/voice-work/linux-jobs/` attempt tree 与继承的
+locked lease；完整 pipeline 和 systemd 限制见 [Linux processing](LINUX-PROCESSING.md#parent-owned-attempt-workspace)。
+专用 job child、generated recognizer wrapper 和 helper build script 都设置 `umask 077`，
+不修改多线程 daemon 的全局 umask。Lease 从 open 起由 parent 负责关闭；lock、marker
+write／fsync 失败或 short write 不启动 job，partial marker 在 workspace-root lock 内清理。
+
+Runner 停止其 owned scope 后，parent 才回收 attempt；startup/setup 即使 voice disabled
+或 helper unready 也执行同一 reaper。Locked live lease 仍保护继承该 FD 的 child，即使
+scope 看似 inactive。回收必须使用 marker 记录的同一 manager 和 exact nonce scope；
+manager 不匹配或无法证明 cleanup 时保留残留并报告 `helper_workspace_cleanup_failed`。
+
+清理旧孤儿 output 时允许 `0644` 等只额外可读权限，但只限 owner-private attempt 目录内
+已取得独占 lease 的 owned、single-link regular files；executable、group／other-write、
+special permission bits、symlink、foreign owner 和 external hardlink 仍拒绝。Lease 与
+SILK input 的 private 检查不放宽。失败回收的 leftover 继续计入 StorageBudget，成功
+回收后释放该记账；不要手工删除 live lease 或以 chmod 绕过 ownership／scope 检查。
 
 ### 真实本地识别器（Apple SpeechAnalyzer）
 
@@ -823,6 +899,30 @@ Promotion 是显式 operator action。先记录原 config、paused 状态、poli
 成功后只清理有明确替代物的 build inputs、旧候选 exports 和可再生成 caches；保留当前 release，以及能实际运行的上一个 release 和 verified recovery point。不要用 `git clean -fdx`，不要删除 live history、pending spool、source/Keychain/config 或未鉴定的文件。Public docs 描述可重复流程；安装专属路径、账号和 receipts 保存在 Git 外。
 
 ## Mac edge and Linux core migration
+
+### Interpretation-origin upgrade boundary
+
+Transport revision 2 按 [capture protocol](CAPTURE-PROTOCOL.md) 先升级 Core，再升级
+edge；仅升级 Core 可保留当前 native origin 和旧 edge，但尚不具备远程执行取消保证。
+Native `.v6`→`.v6.r1` 另外改变 interpretation-origin binding，不能把两者混成纯 transport
+升级。Core `RemoteCaptureSettings.origin`、`EdgeSettings.origin_epoch` 和 spool durable
+origin 必须一致；改一处 config 或只换 wheel 会 fail closed。
+
+先停止产生旧 origin 新工作，并在旧 exact origin／generation 仍可用时结清 selected work、
+pending sealed batches 与 ACK-loss replay。停止两端 owner 后，核对 Core committed stream
+position 与 edge next sequence、pending-empty proof，保留旧 installed releases、private
+config／spool before-images 与可用 recovery。现有 stream epoch-loss recovery 和
+`edge-rebind` 都不迁移 origin；必须先准备经核验的显式 origin／spool transition 与失败恢复
+步骤，不能删除 pending、重置 stream 或伪造旧 capture 的 epoch 来切换。
+
+切换会使旧 epoch 的 materialized currentness／cursors 失效，旧 signed history job failed
+并保留进度；需要历史时按已授权的原 scope 显式创建新 job。Semantic worker 发现新 epoch
+后会自动增加 generation，清空本地旧 entries／intents／checkpoints 并以新 namespace 建索引；
+旧 remote namespace 不删除。激活前保留旧 sidecar recovery，并核对当前 exact-scope
+egress consent 是否覆盖重新索引的范围与成本。需要保留原 epoch 的 repair grant 不授权
+此切换；跨 epoch／新 ACK 后也不能恢复旧 DB／spool 来冒充原有 stream continuity。
+
+### Host migration
 
 `remote-capture` is an explicitly configured Linux core binding; it is not a native
 Linux WeChat adapter. The full stopped transfer, owner handoff, recovery and rollback

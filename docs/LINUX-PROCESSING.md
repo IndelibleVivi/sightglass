@@ -123,13 +123,28 @@ WAV, recognizer JSON and `TMPDIR` stay in that tree; the child does not own a sy
 temporary directory whose cleanup depends on its `finally` executing. The attempt
 name also binds the exact nonce `.scope` and system manager used for cleanup.
 
+The dedicated job child and the generated recognizer wrapper each set `umask 077`
+before creating outputs; the build script uses the same mask for its generated files.
+This does not change the multithreaded daemon's process-wide umask. The parent owns the
+lease descriptor from `open` onward: a failure in open/lock/marker write/fsync does not
+launch a job, closes any opened descriptor, and cleans the partial marker under the
+workspace-root lock. A short marker write is a setup failure.
+
 The parent reaps after the runner has stopped its owned scope. Startup/setup runs
 the same reaper even when voice is disabled or decoder/helper readiness is blocked.
 A held lease protects active work, including an inherited live child after a parent
-crash. Abandoned attempts are validated for owner/private/single-link safety before
-their scope is stopped and their tree removed; a manager mismatch or failed cleanup
-blocks recognition. Captured SILK, bounded PCM, WAV and recognizer-output workspace
-are reserved through the shared StorageBudget, and leftover inventory is tracked.
+crash, even if the corresponding scope appears inactive. Once the reaper acquires the
+lease, it requires the recorded manager and stops that attempt's exact nonce scope
+before removing its validated tree. A manager mismatch or failed cleanup blocks
+recognition with `helper_workspace_cleanup_failed` and retains the residual files.
+
+The cleanup-only file check accepts legacy readable outputs such as `0644` inside an
+owner-private attempt tree. Each output must still be an owned regular file with one
+link, with no executable, group/other-write or special permission bits; directories
+remain private. Symlinks, foreign ownership and external hardlinks are refused. This
+exception does not loosen the private lease or SILK-input checks. Captured SILK, bounded
+PCM, WAV and recognizer-output workspace are reserved through the shared StorageBudget;
+failed cleanup retains the leftover accounting, and successful cleanup releases it.
 
 ### Isolation (not a daemon-wide limit; fail closed)
 

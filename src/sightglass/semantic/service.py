@@ -51,6 +51,7 @@ from sightglass.model.links import LinkRepository
 from sightglass.model.repositories import WindowRepository
 from sightglass.operations import check_operation_budget, operation_remaining_seconds
 from sightglass.policy.readers import ReaderContext
+from sightglass.residency.repository import ResidencyRepository
 
 from .cloudflare import CloudflareError
 from .settings import (
@@ -177,6 +178,13 @@ CREATE TABLE IF NOT EXISTS semantic_coverage (
     conversation_id TEXT NOT NULL,
     covered INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
+    PRIMARY KEY (generation, conversation_id)
+);
+CREATE TABLE IF NOT EXISTS semantic_coverage_proof (
+    generation INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    pass_revision TEXT NOT NULL,
+    covered_revision TEXT,
     PRIMARY KEY (generation, conversation_id)
 );
 """
@@ -360,6 +368,7 @@ class SemanticService:
         self._sidecar_path = Path(os.path.abspath(str(Path(sidecar_path).expanduser())))
         self._storage = repository.database.storage
         self._links = LinkRepository(repository.database)
+        self._residency = ResidencyRepository(repository.database)
         self._lock = threading.RLock()
         self._connection: sqlite3.Connection | None = None
         if settings.enabled:
@@ -585,10 +594,15 @@ class SemanticService:
                 .fetchone()[0]
             )
             bytes_ = int(state["indexed_bytes"])
+        coverage = self._coverage_state(self._capable_conversations(), generation)
+        current = self._epoch_current()
+        reported_state = str(state["state"]) if current else "rebuilding"
+        if reported_state == "ready" and coverage != "complete":
+            reported_state = "building"
         return {
             **common,
-            "state": str(state["state"]) if self._epoch_current() else "rebuilding",
-            "coverage": self._coverage_state(self._capable_conversations(), generation),
+            "state": reported_state,
+            "coverage": coverage,
             "generation": generation,
             "revision": revision,
             "indexed": int(state["indexed_count"]),
@@ -719,6 +733,7 @@ class SemanticService:
         start = {
             conversation_id: self._checkpoint(conversation_id) for conversation_id in conversations
         }
+        self._begin_coverage_pass(conversations, start, generation)
         rows, checkpoint = self._capture(conversations, limit=bounded, start_at=start)
         failure: str | None = None
         published = 0
@@ -777,6 +792,43 @@ class SemanticService:
             result["failure"] = failure
         return result
 
+    def _canonical_revision(self) -> str:
+        # These are bounded ledger/singleton reads, never message-body counts or
+        # inventory scans. Global admission is deliberately conservative: even an
+        # unrelated append may invalidate a proof, but can never falsely certify
+        # an unexamined change in the configured scope.
+        return json.dumps([
+            self.repository.observation_watermark(),
+            self.repository.identity_correction_revision(),
+            self._residency.revision(),
+        ], separators=(",", ":"))
+
+    def _begin_coverage_pass(
+        self, conversations: tuple[str, ...], start: dict[str, str | None], generation: int
+    ) -> None:
+        revision = self._canonical_revision()
+        with self._lock, self._storage_reservation(64 * 1024):
+            connection = self._db()
+            for conversation_id in conversations:
+                if not start.get(conversation_id):
+                    connection.execute(
+                        "INSERT INTO semantic_coverage_proof"
+                        "(generation,conversation_id,pass_revision) VALUES (?,?,?)"
+                        " ON CONFLICT(generation,conversation_id) DO UPDATE SET"
+                        " pass_revision=excluded.pass_revision",
+                        (generation, conversation_id, revision),
+                    )
+                else:
+                    # A pre-upgrade checkpoint has no proof of its earlier
+                    # prefix. Finish it, then prove a complete new pass.
+                    connection.execute(
+                        "INSERT OR IGNORE INTO semantic_coverage_proof"
+                        "(generation,conversation_id,pass_revision) VALUES (?,?,'')",
+                        (generation, conversation_id),
+                    )
+            connection.commit()
+        self._track_sidecar()
+
     def _mark_coverage(
         self, conversations: tuple[str, ...], checkpoint: dict[str, str], generation: int
     ) -> None:
@@ -784,7 +836,8 @@ class SemanticService:
 
         A conversation is covered once a capture pass returns no trailing rows for it
         (``checkpoint[conversation] == ""``), meaning the forward cursor reached the
-        end of the current scope. No message body is read here.
+        end of its pass. Only the revision captured at that pass's beginning is
+        certified; a correction behind the cursor cannot be hidden by its tail.
         """
         if not checkpoint:
             return
@@ -799,6 +852,11 @@ class SemanticService:
                         " VALUES (?, ?, 1, ?) ON CONFLICT(generation, conversation_id)"
                         " DO UPDATE SET covered=1, updated_at=excluded.updated_at",
                         (generation, conversation_id, _now()),
+                    )
+                    connection.execute(
+                        "UPDATE semantic_coverage_proof SET covered_revision=pass_revision"
+                        " WHERE generation=? AND conversation_id=?",
+                        (generation, conversation_id),
                     )
             connection.commit()
         self._track_sidecar()
@@ -815,13 +873,16 @@ class SemanticService:
     def _fully_covered(self, conversations: tuple[str, ...], generation: int) -> bool:
         if not conversations:
             return False
+        revision = self._canonical_revision()
         with self._lock:
             row = (
                 self._db()
                 .execute(
-                    "SELECT COUNT(*) FROM semantic_coverage WHERE generation=? AND covered=1"
-                    f" AND conversation_id IN ({','.join('?' for _ in conversations)})",
-                    (generation, *conversations),
+                    "SELECT COUNT(*) FROM semantic_coverage c JOIN semantic_coverage_proof p"
+                    " USING(generation,conversation_id) WHERE c.generation=? AND c.covered=1"
+                    " AND p.covered_revision=?"
+                    f" AND c.conversation_id IN ({','.join('?' for _ in conversations)})",
+                    (generation, revision, *conversations),
                 )
                 .fetchone()
             )
@@ -1396,6 +1457,7 @@ class SemanticService:
             connection.execute("DELETE FROM semantic_intents")
             connection.execute("DELETE FROM semantic_capture_checkpoint")
             connection.execute("DELETE FROM semantic_coverage")
+            connection.execute("DELETE FROM semantic_coverage_proof")
             connection.execute("UPDATE semantic_scan_cursor SET last_conversation_id='' WHERE id=1")
             connection.execute(
                 "UPDATE semantic_identity SET projection_epoch=? WHERE id=1",

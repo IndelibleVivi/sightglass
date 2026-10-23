@@ -12,6 +12,23 @@ from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.source.identity import SignedTokenCodec
 
 SCHEMA = "sightglass.backfill-progress.v1"
+PERMANENT_REASONS = frozenset(
+    {
+        "backfill_account_changed",
+        "backfill_epoch_changed",
+        "backfill_cursor_invalid",
+        "backfill_selected_generation_changed",
+    }
+)
+
+
+def invalid(reason: str) -> SightglassError:
+    return SightglassError(
+        ErrorCode.SOURCE_GENERATION_CHANGED,
+        "历史任务绑定已失效，请显式重新排队；原任务进度已保留。",
+        retryable=False,
+        details={"reason": reason, "action": "queue_backfill", "requeue_required": True},
+    )
 
 
 def scope(job: Any, target: Any, epoch: str) -> str:
@@ -90,8 +107,4 @@ def decode(codec: SignedTokenCodec, token: str, binding: str, processed: int) ->
             raise ValueError
         return Progress(before, generations, processed)
     except (SightglassError, ValueError, TypeError, KeyError) as exc:
-        raise SightglassError(
-            ErrorCode.SOURCE_GENERATION_CHANGED,
-            retryable=True,
-            details={"reason": "backfill_cursor_invalid"},
-        ) from exc
+        raise invalid("backfill_cursor_invalid") from exc

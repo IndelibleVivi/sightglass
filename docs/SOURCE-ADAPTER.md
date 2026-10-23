@@ -48,7 +48,7 @@ mismatch causes a reread in the same view. Contact/WAL correction during the
 operation fails final validation. Metadata and negative routing dependencies do
 not enlarge the serving message-body logical generations used by cursors.
 
-Native context reads use the optional `ContextSourceProvider.read_context` capability under the same conversation session and final selected-dependency validation. The focus is resolved once. Each selected shard uses bounded position seeks only when its actual query plan can use an existing chronology-compatible index; otherwise it streams one unordered position pass and keeps bounded neighbor candidates. Timestamp order is authoritative: `sort_seq` is not assumed to be monotonic with time. The canonical full-key merge reconciles overlaps before choosing neighbors. Every retained server-ID neighbor is also reconciled across all shards serving the conversation, including copies outside the requested radius; a conflict fails closed before resource hydration. Only selected validated neighbors resolve resources. Native implementation v6 fences materialized projections admitted under the earlier context interpretation through the existing projection epoch; it performs no startup bulk migration or history refill. A zero-radius side performs no neighbor query. Zero-side `has_more=false` does not certify a source endpoint, and a focus-only window does not prove full history or advance a sync frontier. Without a suitable source index, an exact cold context still requires scanning that conversation's positions; this path does not promise constant-time or five-second cold reads.
+Native context reads use the optional `ContextSourceProvider.read_context` capability under the same conversation session and final selected-dependency validation. The focus is resolved once. Each selected shard uses bounded position seeks only when its actual query plan can use an existing chronology-compatible index; otherwise it streams one unordered position pass and keeps bounded neighbor candidates. Timestamp order is authoritative: `sort_seq` is not assumed to be monotonic with time. The canonical full-key merge reconciles overlaps before choosing neighbors. Retained neighbors and their lookahead sentinels follow the bounded identity reconciliation below; a conflict fails closed before neighbor resource hydration. Only selected validated neighbors resolve resources. A zero-radius side performs no neighbor query. Zero-side `has_more=false` does not certify a source endpoint, and a focus-only window does not prove full history or advance a sync frontier. Without a suitable source index, an exact cold context still requires scanning that conversation's positions; this path does not promise constant-time or five-second cold reads.
 
 Stable internal message tokens use `conversation + nonzero server_id` when available, otherwise `conversation + logical shard + nonzero local_id + create_time + type`, with row/time/sort/type/payload evidence only as the final fallback. Conflicting copies of one stable identity fail closed; `get_message` resolves the stable fields rather than trusting an old physical row location. The canonical native token builder lives in `source/message_identity.py`. A valid positive appmsg reply server ID can resolve a private target token in the same conversation; retrieval exposes only an admitted canonical target under the same hard scope, while ordinary reply projection retains its unresolved display contract. Only repository-derived opaque IDs cross the MCP boundary. In a group row, canonical member evidence exists only when the same shard's `real_sender_id` maps through `Name2Id.user_name` and the raw sender envelope is the exact `mapped_sender + ":\n"` prefix. That evidence overrides a misleading status value; mismatch or unverifiable envelope remains unresolved, while an outgoing row without a member envelope may resolve to account self. System/recall rows are always non-human events and never become self. The verified prefix is removed from visible text. Current contact remark/nickname is stored as account-scoped `current_only` label evidence; it is not retroactively projected as exact message-time `shown_as`. The native v6 descriptor (parser `sightglass.wechat-parser.v2`) declares complete per-message sender evidence, so ordinary message reads admit their returned senders directly instead of pre-scanning 200 roster messages; explicit participant discovery keeps the bounded roster scan, reuses canonical sender parsing without resolving attachments, and records the latest observed activity for every sender (including pre-seeded self/direct participants). An already-admitted native target can skip the account catalog refresh and use a conversation/message session while preserving current roster and final selected-dependency validation. Providers without that evidence flag retain the original roster-first behavior.
 
@@ -66,6 +66,38 @@ the `has_more` sentinel. Refills remain within the same dependency lease and
 cancellation budget; they do not create indexes, read unrelated bodies or admit
 intermediate progress. Discovery still returns bounded physical candidates and
 requires canonical `get_message` validation before admission.
+
+Recent/range pages, bounded search preparation, and context reconcile the final
+retained server identities **and their lookahead sentinels** against every shard
+serving the conversation. A copy outside the requested time/range/context window
+cannot escape that identity check. The retained IDs are batched into at most one
+additional `server_id IN (...)` statement per serving shard, under the same
+session, cancellation/deadline budget and selected-dependency validation. Ordinary
+recent/range traversal reuses the complete same-shard raw-text proof already
+obtained for its selected physical rows; it does not reread/decompress those
+payloads merely to repeat that proof. This reuse requires raw `local_type=1`,
+not a type inferred from normalized public message metadata. Other serving shards
+and unproved identities still need exact reconciliation. Existing strict raw
+copy equivalence and rowid-sensitive cross-shard evidence remain unchanged;
+conflicts report `duplicate_message_identity_conflict`, without a successful page,
+message admission or coverage advancement. The check fetches only the bounded
+retained identities and their copies, not whole-conversation payload history.
+Identity queries retain the 20,002-row fail-closed bound. Without a suitable source
+index, these exact queries may still scan source positions; bounded payload work
+is not a constant-time claim.
+
+The native interpretation remains v6; its implementation identity is
+`sightglass.macos-wechat.sqlcipher.v6.r1` (parser
+`sightglass.wechat-parser.v2`). That implementation identity feeds the existing
+projection/origin epoch, so pre-reconciliation v6 materialized projections cannot
+remain current and their timeline/search cursors become stale. Revalidation uses
+the existing bounded source paths; startup performs no bulk history migration or
+refill. This is a source contract, not an installation receipt: a remote core
+retains its explicitly enrolled origin descriptor, while the edge configuration
+and pending spool bind an exact origin epoch. Updating a wheel alone does not
+rotate those bindings or authorize replay/admission of an old-epoch capture as
+current. [Capture protocol](CAPTURE-PROTOCOL.md) owns exact terminal recovery and
+stream ordering; [operations](OPERATIONS.md) owns authorized installation changes.
 
 Shared catalog SQLCipher handles have one registry-owned lifecycle: reserve before
 waiting on the handle lock, single-flight construction, post-open identity checking,

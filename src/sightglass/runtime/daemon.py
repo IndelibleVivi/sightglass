@@ -14,7 +14,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -24,9 +24,12 @@ from sightglass import __version__
 from sightglass.contracts.errors import ErrorCode, SightglassError, map_unexpected_error
 from sightglass.model.db import WindowDB
 from sightglass.operations import (
+    OperationBudget,
     check_operation_budget,
     local_read_only_scope,
     operation_budget,
+    operation_budget_snapshot,
+    operation_cancelled,
     operation_expired,
     operation_remaining_seconds,
     wait_for_event,
@@ -200,6 +203,37 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+class _CallerCancellation(threading.Event):
+    """Cancel shared work only once every attached caller has departed/expired."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lock = threading.Lock()
+        self.callers: dict[object, OperationBudget | None] = {}
+
+    def attach(self, caller: object, budget: OperationBudget | None) -> None:
+        with self.lock:
+            self.callers[caller] = budget
+
+    def detach(self, caller: object) -> None:
+        with self.lock:
+            self.callers.pop(caller, None)
+
+    def is_set(self) -> bool:
+        with self.lock:
+            now = time.monotonic()
+            live = any(
+                budget is None or (
+                    (budget.cancelled is None or not budget.cancelled.is_set())
+                    and (budget.deadline is None or now < budget.deadline)
+                )
+                for budget in self.callers.values()
+            )
+            if not live:
+                self.set()
+            return super().is_set()
+
+
 @dataclass
 class _InflightOperation:
     kind: str
@@ -207,6 +241,7 @@ class _InflightOperation:
     completed: threading.Event
     owner_thread_ident: int
     result: Any = None
+    cancellation: _CallerCancellation = field(default_factory=_CallerCancellation)
 
 
 @dataclass
@@ -1022,7 +1057,7 @@ class SightglassDaemon:
             self.total_bridge_calls += 1
             self.active_bridge_calls += 1
         try:
-            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS, cancelled=self._stopping):
+            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS):
                 requested_ms = bound_wait_ms(
                     arguments.get("wait_ms"), ceiling_ms=self._wait_ceiling_ms()
                 )
@@ -1074,9 +1109,22 @@ class SightglassDaemon:
             )
             return result
 
+        caller = object()
+        caller_budget = operation_budget_snapshot()
         operation_key = self._operation_key(str(name), arguments)
         with self._operations_lock:
             operation = self._operations.get(operation_key)
+            if operation is not None and operation.cancellation.is_set():
+                # Cancellation is cooperative: the old owner can still be running
+                # source code or terminal cleanup. Keep its registered identity and
+                # reject re-entry until its finally block publishes completion.
+                result = self._busy_result(lane)
+                result["details"]["reason"] = "singleflight_cleanup"
+                self.tool_metrics.record(
+                    str(name), elapsed_ms=round((time.monotonic() - started) * 1_000),
+                    result=result,
+                )
+                return result
             owner = operation is None
             if operation is not None:
                 self._joined_tool_calls += 1
@@ -1088,6 +1136,7 @@ class SightglassDaemon:
                     owner_thread_ident=threading.get_ident(),
                 )
                 self._operations[operation_key] = operation
+            operation.cancellation.attach(caller, caller_budget)
         assert operation is not None
         if not owner:
             try:
@@ -1096,6 +1145,8 @@ class SightglassDaemon:
                 result = exc.as_dict()
             else:
                 result = operation.result
+            finally:
+                operation.cancellation.detach(caller)
             self.tool_metrics.record(
                 str(name),
                 elapsed_ms=round((time.monotonic() - started) * 1_000),
@@ -1103,63 +1154,68 @@ class SightglassDaemon:
             )
             return result
 
+        # Shared execution retains its original deadline, independent of one caller.
         with self._metrics_lock:
             self.active_bridge_calls += 1
         try:
-            try:
-                with ExitStack() as stack:
-                    if lane is not None:
-                        lease = stack.enter_context(self.lanes.held(lane, wait=False))
-                        if lease is None:
-                            operation.result = self._busy_result(lane)
-                            return operation.result
-                    if local_only:
-                        stack.enter_context(local_read_only_scope())
-                    if source_foreground:
-                        self.source_worker.foreground_enter()
-                        stack.callback(self.source_worker.foreground_exit)
-                    def invoke() -> Any:
-                        return getattr(self.tools, str(name))(**arguments)
-                    operation.result = _json_value(
-                        self.capture_core.call(str(name), arguments, invoke)
-                        if self.capture_core is not None else invoke()
-                    )
-                    if (
-                        source_foreground
-                        and isinstance(operation.result, dict)
-                        and operation.result.get("ok") is not False
-                    ):
-                        self._wake_derived_work()
-                if operation_expired():
-                    operation.result = SightglassError(
-                        ErrorCode.SERVICE_TIMEOUT,
-                        retryable=True,
-                        details={"reason": "operation_deadline"},
-                    ).as_dict()
-            except TypeError:
-                operation.result = map_unexpected_error(ValueError("invalid tool arguments"))
-            except SightglassError as exc:
-                operation.result = exc.as_dict()
-            except Exception as exc:
-                operation.result = map_unexpected_error(exc)
-            if (
-                isinstance(operation.result, dict)
-                and operation.result.get("code") == ErrorCode.SERVICE_TIMEOUT.value
+            with operation_budget(
+                operation_remaining_seconds(), cancelled=operation.cancellation, inherit=False,
             ):
-                details = operation.result.setdefault("details", {})
-                if isinstance(details, dict):
-                    details.update(
-                        {
-                            "operation": operation.kind,
-                            "elapsed_ms": max(
-                                0,
-                                round((time.monotonic() - operation.started_at) * 1_000),
-                            ),
-                        }
-                    )
-                with self._operations_lock:
-                    self._timed_out_tool_calls += 1
-            return operation.result
+                try:
+                    with ExitStack() as stack:
+                        if lane is not None:
+                            lease = stack.enter_context(self.lanes.held(lane, wait=False))
+                            if lease is None:
+                                operation.result = self._busy_result(lane)
+                                return operation.result
+                        if local_only:
+                            stack.enter_context(local_read_only_scope())
+                        if source_foreground:
+                            self.source_worker.foreground_enter()
+                            stack.callback(self.source_worker.foreground_exit)
+                        def invoke() -> Any:
+                            return getattr(self.tools, str(name))(**arguments)
+                        operation.result = _json_value(
+                            self.capture_core.call(str(name), arguments, invoke)
+                            if self.capture_core is not None else invoke()
+                        )
+                        if (
+                            source_foreground
+                            and isinstance(operation.result, dict)
+                            and operation.result.get("ok") is not False
+                        ):
+                            self._wake_derived_work()
+                    if operation_expired():
+                        operation.result = SightglassError(
+                            ErrorCode.SERVICE_TIMEOUT,
+                            retryable=True,
+                            details={"reason": ("operation_cancelled" if operation_cancelled()
+                                                else "operation_deadline")},
+                        ).as_dict()
+                except TypeError:
+                    operation.result = map_unexpected_error(ValueError("invalid tool arguments"))
+                except SightglassError as exc:
+                    operation.result = exc.as_dict()
+                except Exception as exc:
+                    operation.result = map_unexpected_error(exc)
+                if (
+                    isinstance(operation.result, dict)
+                    and operation.result.get("code") == ErrorCode.SERVICE_TIMEOUT.value
+                ):
+                    details = operation.result.setdefault("details", {})
+                    if isinstance(details, dict):
+                        details.update(
+                            {
+                                "operation": operation.kind,
+                                "elapsed_ms": max(
+                                    0,
+                                    round((time.monotonic() - operation.started_at) * 1_000),
+                                ),
+                            }
+                        )
+                    with self._operations_lock:
+                        self._timed_out_tool_calls += 1
+                return operation.result
         finally:
             if operation.result is not None:
                 self.tool_metrics.record(
@@ -1169,7 +1225,9 @@ class SightglassDaemon:
                 )
             operation.completed.set()
             with self._operations_lock:
-                self._operations.pop(operation_key, None)
+                if self._operations.get(operation_key) is operation:
+                    self._operations.pop(operation_key, None)
+            operation.cancellation.detach(caller)
             with self._metrics_lock:
                 self.active_bridge_calls -= 1
 
@@ -1458,9 +1516,10 @@ class SightglassDaemon:
         if method == "tools.call" and self._lifecycle_state != "ready":
             return self._runtime_unavailable()
         if method == "tools.call" and params.get("name") == "wechat_read_transcripts":
-            return self._dispatch_transcripts(params, connection=connection)
+            with self._caller_cancellation(connection):
+                return self._dispatch_transcripts(params, connection=connection)
         if method == "tools.call":
-            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS, cancelled=self._stopping):
+            with self._caller_cancellation(connection):
                 with self._state_gate.read():
                     if self._lifecycle_state != "ready":
                         return self._runtime_unavailable()
@@ -1494,6 +1553,29 @@ class SightglassDaemon:
         return SightglassError(
             ErrorCode.SERVICE_UNAVAILABLE, retryable=True,
             details={"reason": "runtime_not_ready"}).as_dict()
+
+    @contextmanager
+    def _caller_cancellation(self, connection: socket.socket | None) -> Iterator[None]:
+        cancelled = threading.Event()
+        finished = threading.Event()
+
+        def watch() -> None:
+            while not finished.wait(0.025):
+                if self._stopping.is_set() or (
+                    connection is not None and self._peer_gone(connection)
+                ):
+                    cancelled.set()
+                    return
+
+        watcher = threading.Thread(target=watch, name="sightglass-caller-cancel", daemon=True)
+        watcher.start()
+        try:
+            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS, cancelled=cancelled):
+                yield
+        finally:
+            cancelled.set()
+            finished.set()
+            watcher.join(timeout=0.2)
 
     @contextmanager
     def _storage_diagnostic_cancellation(

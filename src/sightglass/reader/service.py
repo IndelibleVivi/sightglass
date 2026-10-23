@@ -1574,10 +1574,10 @@ class ReaderService:
         self.reader.require_active()
         target = self._persisted_source_target(str(job["conversation_id"]))
         if target.account_id != str(job["account_id"]):
-            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+            raise backfill.invalid("backfill_account_changed")
         epoch = self._projection_inventory_epoch()
         if str(job["source_inventory_epoch"] or "") != epoch:
-            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+            raise backfill.invalid("backfill_epoch_changed")
         progress = backfill.decode(
             self.token_codec,
             str(job["cursor_token"] or ""),
@@ -1599,7 +1599,9 @@ class ReaderService:
             "expected_generations": progress.generations,
         }
 
-    def process_backfill_once(self, *, batch_limit: int = 200) -> dict[str, Any]:
+    def process_backfill_once(
+        self, *, batch_limit: int = 200, _job: Any = None, _record_error: bool = True
+    ) -> dict[str, Any]:
         self.reader.require_active()
         batch_limit = max(1, min(int(batch_limit), 500))
         if self._pause_backfill_under_pressure(batch_limit * 16_384):
@@ -1609,7 +1611,7 @@ class ReaderService:
                 "reason": "storage_pressure",
                 "message_count": 0,
             }
-        job = self.repository.next_backfill_job(
+        job = _job if _job is not None else self.repository.next_backfill_job(
             tuple(
                 item
                 for item in self.residency.historical_conversation_ids()
@@ -1618,6 +1620,10 @@ class ReaderService:
         )
         if job is None:
             return {"schema": "sightglass.backfill-step.v1", "state": "idle"}
+        if _job is not None:
+            current = self.repository.backfill_job(str(job["job_id"]))
+            if current is None or current["state"] not in {"queued", "running"}:
+                return {"schema": "sightglass.backfill-step.v1", "state": "idle"}
         if not self._residency_decision(str(job["conversation_id"])).allow_historical_backfill:
             return {
                 "schema": "sightglass.backfill-step.v1",
@@ -1625,6 +1631,35 @@ class ReaderService:
                 "reason": "residency_selection",
                 "message_count": 0,
             }
+        try:
+            return self._process_backfill_job(job, batch_limit=batch_limit)
+        except SightglassError as error:
+            if _record_error:
+                self.record_backfill_error(job, error)
+            raise
+
+    def record_backfill_error(self, job: Any, error: SightglassError) -> None:
+        """Keep exact progress; permanent bindings fail, transient attempts yield fairly.
+
+        Capture callers invoke this only after exact terminal rejection commits.
+        CAS prevents a stale attempt from resurrecting a paused or advanced job.
+        """
+        # A deadline/cancellation may have exhausted the source attempt. Reserve
+        # only bounded local cleanup time; this path never reopens the source.
+        with operation_budget(2.0, inherit=False):
+            self.reader.authorize(str(job["conversation_id"]))
+            if not self._residency_decision(str(job["conversation_id"])).allow_historical_backfill:
+                return
+            permanent = error.details.get("reason") in backfill.PERMANENT_REASONS
+            with self.repository.database.transaction(maintenance=True):
+                self.repository.update_backfill_job(
+                    str(job["job_id"]), state="failed" if permanent else str(job["state"]),
+                    processed_messages=int(job["processed_messages"]),
+                    updated_at=utc_now().isoformat(timespec="microseconds"),
+                    error_code=error.code.value, expected_job=job,
+                )
+
+    def _process_backfill_job(self, job: Any, *, batch_limit: int) -> dict[str, Any]:
         if not job["cursor_token"]:
             initialized = self.initialize_legacy_backfill(job)
             if initialized["state"] == "failed":
@@ -1665,12 +1700,13 @@ class ReaderService:
             generations = self.provider.search_generation_binding(
                 request["account_id"], request["conversation_source_id"], snapshot=snapshot
             )
-            if (
-                request["expected_generations"]
-                and generations != request["expected_generations"]
-                or self._projection_inventory_epoch() != epoch
-            ):
-                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+            if request["expected_generations"] and generations != request["expected_generations"]:
+                # Validate the read first: ordinary WAL/session drift is retryable,
+                # whereas a stable logical-generation replacement cannot resume.
+                stack.close()
+                raise backfill.invalid("backfill_selected_generation_changed")
+            if self._projection_inventory_epoch() != epoch:
+                raise backfill.invalid("backfill_epoch_changed")
             candidates = tuple(
                 message
                 for message in page.messages
@@ -1757,7 +1793,7 @@ class ReaderService:
                     str(job["job_id"]),
                     state=state,
                     processed_messages=processed,
-                    updated_at=observed_at,
+                    updated_at=utc_now().isoformat(timespec="microseconds"),
                     expected_job=job,
                     cursor_token=progress.encode(
                         self.token_codec, backfill.scope(job, target, epoch)

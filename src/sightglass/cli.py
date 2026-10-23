@@ -297,6 +297,12 @@ def _parser() -> argparse.ArgumentParser:
 
     cache = commands.add_parser("cache")
     cache_commands = _subcommands(cache, dest="cache_command", required=True)
+    legacy_links = cache_commands.add_parser(
+        "legacy-links", help="stopped-only legacy CAS hardlink inventory and exact repair"
+    )
+    legacy_links.add_argument("action", choices=("preview", "repair"))
+    legacy_links.add_argument("--digest")
+    legacy_links.add_argument("--expect", help="exact identity token returned by preview")
     cache_commands.add_parser("status")
     cache_commands.add_parser("preview")
     cleanup = cache_commands.add_parser("cleanup")
@@ -606,6 +612,28 @@ def _compact_command(args: argparse.Namespace, store: ConfigStore) -> dict[str, 
         raise RuntimeError("unknown compact operation")
     finally:
         release_runtime_lock(lock)
+
+
+def _legacy_cache_links(args: argparse.Namespace, store: ConfigStore) -> dict[str, Any]:
+    from sightglass.model.cache_recovery import frozen_object_bindings
+    from sightglass.resources.cache import ResourceObjectStore
+    from sightglass.runtime.process_lock import acquire_runtime_lock, release_runtime_lock
+
+    repair = args.action == "repair"
+    if repair and (not args.digest or not args.expect):
+        raise RuntimeError("repair requires --digest and --expect from preview")
+    if not repair and args.expect:
+        raise RuntimeError("--expect is only valid for repair")
+    config = store.load()
+    _daemon_must_be_stopped(config, store)
+    runtime_lock = acquire_runtime_lock(config.socket_path.parent / "sightglassd.lock")
+    try:
+        with frozen_object_bindings(config.window_db_path) as binding:
+            return ResourceObjectStore(config.window_db_path).legacy_links(
+                binding, digest=args.digest, expect=args.expect if repair else None,
+            )
+    finally:
+        release_runtime_lock(runtime_lock)
 
 
 def _storage_command(args: argparse.Namespace, store: ConfigStore) -> dict[str, Any]:
@@ -1265,6 +1293,9 @@ def main(argv: list[str] | None = None) -> None:
                 return
             params = {"kind": args.kind} if args.retrieval_command == "rebuild" else {}
             _print(_operator(store).call(f"operator.retrieval.{args.retrieval_command}", params))
+            return
+        if args.command == "cache" and args.cache_command == "legacy-links":
+            _print(_legacy_cache_links(args, store))
             return
         if args.command == "storage":
             _print(_storage_command(args, store))

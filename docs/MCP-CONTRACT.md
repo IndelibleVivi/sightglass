@@ -25,6 +25,30 @@ argument declaration from `ReaderTools`, and contract tests compare every tool's
 full input schema, description, output schema and annotations. Fixed `strict=true`
 is no longer advertised; old catalogs may still supply it, and `false` is rejected.
 
+## Caller lifecycle
+
+The async stdio adapters preserve all thirteen tool schemas while running the
+synchronous IPC call off the event loop. A status call can complete while another
+call in the same session waits for source work. An actual MCP cancellation
+notification, client disconnect or daemon shutdown propagates cancellation to
+the operation budget; cancelling a host's local wait alone need not send that
+notification.
+
+Joined calls keep separate caller leases. One caller leaving does not cancel work
+still needed by another; the last caller leaving cancels avoidable work. A cancelled
+owner retains its single-flight registry slot until cleanup finishes. A new call
+with that key receives `SERVICE_BUSY(reason="singleflight_cleanup")` during this
+interval rather than starting a second owner. The original owner's absolute
+deadline is never extended by followers. Selected capture work still needs exact
+terminal recovery, with no early ACK or source reissue.
+
+IPC uses one absolute deadline across connect, send and receive. A timeout with
+`details.reason="ipc_outcome_unknown"` and
+`details.recovery="retry_same_request_without_advancing_ack"` does not prove that a
+durable update failed. Repeat the identical update request under current policy;
+recover its immutable delivery and ACK only after consuming it. Cancellation never
+automatically acknowledges a delivery or deletes an already committed winner.
+
 ## Read views and operation capture
 
 消息读取、literal search、`find_links` 和 `retrieve` 接受可选 `view="replica"|"fresh"`。

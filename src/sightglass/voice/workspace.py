@@ -25,19 +25,20 @@ def _directory(path: Path) -> None:
         raise RuntimeError("unsafe voice workspace directory")
 
 
-def _file(fd: int) -> None:
+def _file(fd: int, *, cleanup: bool = False) -> None:
     metadata = os.fstat(fd)
     if (
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_nlink != 1
         or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) & 0o077
+        or stat.S_IMODE(metadata.st_mode) & (0o7133 if cleanup else 0o077)
     ):
         raise RuntimeError("unsafe voice workspace file")
 
 
 def _remove(path: Path) -> None:
-    # Validate before deleting anything. Never follow links, nor accept outside aliases.
+    # Readable legacy outputs (e.g. 0644) are removable only inside this private,
+    # exclusively leased tree. Never follow links or accept outside aliases.
     _directory(path)
     for directory, dirs, files in os.walk(path, followlinks=False):
         for name in dirs:
@@ -45,7 +46,7 @@ def _remove(path: Path) -> None:
         for name in files:
             fd = os.open(Path(directory) / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
-                _file(fd)
+                _file(fd, cleanup=True)
             finally:
                 os.close(fd)
     shutil.rmtree(path)
@@ -114,17 +115,33 @@ def attempt(root: Path, name: str, *, manager: str | None) -> Iterator[tuple[Pat
     if not _NAME.fullmatch(name):
         raise RuntimeError("invalid voice workspace name")
     path = root / name
-    with _root(root):
-        path.mkdir(mode=0o700)
-        fd = os.open(path / "lease", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        os.write(fd, json.dumps({"manager": manager}).encode())
-        os.fsync(fd)
+    fd: int | None = None
     try:
+        with _root(root):
+            path.mkdir(mode=0o700)
+            try:
+                fd = os.open(
+                    path / "lease", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+                )
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                marker = json.dumps({"manager": manager}).encode()
+                if os.write(fd, marker) != len(marker):
+                    raise OSError("short voice workspace lease write")
+                os.fsync(fd)
+            except BaseException:
+                # Nothing has launched. Discard a partial marker while the root lock
+                # excludes reapers, including failures before the lease was opened.
+                if fd is not None:
+                    os.close(fd)
+                    fd = None
+                _remove(path)
+                raise
         yield path, fd
     finally:
-        # Cleanup is driven by reap only after runner confirms subtree termination.
-        os.close(fd)
+        # Own the descriptor from open onward, including root-lock release failures.
+        # Successful attempts are reaped only after confirmed subtree termination.
+        if fd is not None:
+            os.close(fd)
 
 
 def validate_child(path: Path, lease_fd: int) -> None:

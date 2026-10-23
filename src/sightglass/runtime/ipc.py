@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import hmac
 import json
 import os
+import select
 import socket
 import struct
 import sys
@@ -11,6 +13,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+from sightglass.operations import check_operation_budget
 
 from .config import ConfigStore
 from .secrets import (
@@ -63,16 +67,27 @@ def peer_effective_ids(connection: socket.socket) -> tuple[int, int]:
 
 def _receive_exact(
     connection: socket.socket, size: int, *, deadline: float | None = None,
+    cancellable: bool = False,
 ) -> bytes:
     chunks: list[bytes] = []
     remaining = size
     while remaining:
+        if cancellable:
+            check_operation_budget()
+        if cancellable and deadline is None:
+            connection.settimeout(0.05)
         if deadline is not None:
             remaining_seconds = deadline - time.monotonic()
             if remaining_seconds <= 0:
                 raise TimeoutError("IPC frame deadline expired")
-            connection.settimeout(remaining_seconds)
-        chunk = connection.recv(remaining)
+            connection.settimeout(min(remaining_seconds, 0.05) if cancellable
+                                  else remaining_seconds)
+        try:
+            chunk = connection.recv(remaining)
+        except TimeoutError:
+            if not cancellable:
+                raise
+            continue
         if not chunk:
             raise IPCError("IPC connection closed before the frame completed")
         chunks.append(chunk)
@@ -82,12 +97,15 @@ def _receive_exact(
 
 def receive_frame(
     connection: socket.socket, *, deadline: float | None = None,
+    cancellable: bool = False,
 ) -> dict[str, Any]:
-    length = struct.unpack("!I", _receive_exact(connection, 4, deadline=deadline))[0]
+    header = _receive_exact(connection, 4, deadline=deadline, cancellable=cancellable)
+    length = struct.unpack("!I", header)[0]
     if length < 2 or length > MAX_FRAME_BYTES:
         raise IPCError("IPC frame size is invalid")
     try:
-        value = json.loads(_receive_exact(connection, length, deadline=deadline).decode("utf-8"))
+        payload = _receive_exact(connection, length, deadline=deadline, cancellable=cancellable)
+        value = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise IPCError("IPC frame is not strict UTF-8 JSON") from exc
     if not isinstance(value, dict):
@@ -144,11 +162,43 @@ class IPCClient:
             "params": params or {},
         }
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(self.timeout)
+        deadline = time.monotonic() + self.timeout
         try:
-            connection.connect(str(config.socket_path))
-            send_frame(connection, request)
-            response = receive_frame(connection)
+            # Nonblocking connect/send keep cancellation effective under backlog or
+            # backpressure too, with the same absolute client budget as receive.
+            connection.setblocking(False)
+            error = connection.connect_ex(str(config.socket_path))
+            if error not in {0, errno.EINPROGRESS, errno.EALREADY, errno.EWOULDBLOCK}:
+                raise OSError(error, "IPC connect failed")
+            while error:
+                check_operation_budget()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("IPC connect deadline expired")
+                if select.select([], [connection], [], min(0.05, remaining))[1]:
+                    error = connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                    if error:
+                        raise OSError(error, "IPC connect failed")
+            payload = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            if len(payload) > MAX_FRAME_BYTES:
+                raise IPCError("IPC request exceeds the frame budget")
+            pending = memoryview(struct.pack("!I", len(payload)) + payload)
+            while pending:
+                check_operation_budget()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("IPC send deadline expired")
+                if not select.select([], [connection], [], min(0.05, remaining))[1]:
+                    continue
+                try:
+                    sent = connection.send(pending)
+                except BlockingIOError:
+                    continue
+                if sent == 0:
+                    raise IPCError("IPC connection closed during send")
+                pending = pending[sent:]
+
+            response = receive_frame(connection, deadline=deadline, cancellable=True)
         except TimeoutError as exc:
             raise IPCTimeoutError("Sightglass IPC request timed out") from exc
         except OSError as exc:

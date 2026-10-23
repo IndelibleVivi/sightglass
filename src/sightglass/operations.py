@@ -29,10 +29,11 @@ def operation_budget(
     timeout_seconds: float | None,
     *,
     cancelled: threading.Event | None = None,
+    inherit: bool = True,
 ) -> Iterator[None]:
     """Bound cooperative work in the current thread and all nested call layers."""
 
-    current = _CURRENT_BUDGET.get()
+    current = _CURRENT_BUDGET.get() if inherit else None
     deadline = (
         time.monotonic() + max(0.0, float(timeout_seconds)) if timeout_seconds is not None else None
     )
@@ -47,6 +48,12 @@ def operation_budget(
         yield
     finally:
         _CURRENT_BUDGET.reset(token)
+
+
+def operation_budget_snapshot() -> OperationBudget | None:
+    """Capture one caller lease without binding shared work to that caller alone."""
+
+    return _CURRENT_BUDGET.get()
 
 
 @contextmanager

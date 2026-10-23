@@ -47,11 +47,17 @@ class NativeContextWindowTests(unittest.TestCase):
         return tools, message_id, focus, reference
 
     def test_v6_revalidates_v5_context_cache_and_stales_its_materialized_cursor(self) -> None:
+        self._assert_implementation_epoch_transition("sightglass.macos-wechat.sqlcipher.v5")
+
+    def test_v6_revision_revalidates_pre_reconciliation_materialized_cache(self) -> None:
+        self._assert_implementation_epoch_transition("sightglass.macos-wechat.sqlcipher.v6")
+
+    def _assert_implementation_epoch_transition(self, previous: str) -> None:
         current = self.provider.descriptor
-        self.assertEqual(current.implementation, "sightglass.macos-wechat.sqlcipher.v6")
+        self.assertEqual(current.implementation, "sightglass.macos-wechat.sqlcipher.v6.r1")
         with patch.object(type(self.provider), "descriptor", new_callable=PropertyMock,
                           return_value=replace(
-                              current, implementation="sightglass.macos-wechat.sqlcipher.v5"
+                              current, implementation=previous
                           )):
             tools = self.fixture._reader_tools()
             conversation = tools.wechat_find_conversations("Fixture")["candidates"][0][

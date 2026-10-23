@@ -45,7 +45,11 @@ jobs:
           tests.integration.test_capture_reliability
           tests.integration.test_frozen_installation tests.integration.test_replica_reads
           tests.integration.test_daemon_reliability tests.integration.test_backfill_job_progress
+          tests.integration.test_backfill_stale_jobs tests.integration.test_caller_cancellation
+          tests.integration.test_remote_caller_cancellation
+          tests.integration.test_native_identity_window
           tests.unit.test_delivery_durability tests.unit.test_resource_reliability
+          tests.unit.test_legacy_cas_recovery tests.unit.test_voice_workspace_recovery
           tests.integration.test_fresh_cursor_host
           tests.unit.test_schema_v2_migration tests.unit.test_schema_v3_migration
           tests.unit.test_schema_v4_migration tests.unit.test_schema_v5_migration

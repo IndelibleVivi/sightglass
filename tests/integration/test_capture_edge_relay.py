@@ -662,21 +662,95 @@ class CaptureEdgeRelayTests(unittest.TestCase):
         self.assertEqual(len(broker._queue), 0)
         self.assertFalse(broker.connected)
 
+    def test_wrong_request_or_generation_control_disconnects_and_preserves_terminal(self) -> None:
+        from sightglass.operations import check_operation_budget
+
+        for wrong in ("request_id", "core_generation"):
+            with self.subTest(wrong=wrong), EdgeSpool.initialize(
+                self.root / ("wrong-control-" + wrong),
+                source_instance_id=self.executor.source_instance_id,
+                account_id=self.ceiling.account_id,
+                origin_epoch=self.executor.origin_epoch,
+                stream_epoch="fixture-stream",
+            ) as spool:
+                request = self.request()
+                reply = {"schema": CAPTURE_VERSION, "kind": "cancel",
+                         "request_id": request.request_id, "core_generation": ""}
+                reply[wrong] = "synthetic-wrong-binding"
+                wire = io.BytesIO()
+                FramedStream(io.BytesIO(), wire).send(reply)
+
+                def slow(*args):
+                    while True:
+                        check_operation_budget()
+
+                with mock.patch.object(self.executor, "_execute", side_effect=slow):
+                    with self.assertRaisesRegex(RelayDisconnected, "control_disconnected"):
+                        edge = EdgeSession(self.executor, spool, token="synthetic-token")
+                        edge._capture_controlled(
+                            FramedStream(io.BytesIO(wire.getvalue()), io.BytesIO()),
+                            request, 1.0, threading.Event(),
+                        )
+                pending = spool.pending()
+                assert pending is not None
+                self.assertEqual(pending.document().request, request)
+                self.assertEqual(pending.document().receipt.terminal, "cancelled")
+                self.assertEqual(spool.next_sequence, 2)
+
+    def test_invalid_relative_budget_never_starts_source(self) -> None:
+        with EdgeSpool.initialize(
+            self.root / "invalid-budget-spool",
+            source_instance_id=self.executor.source_instance_id,
+            account_id=self.ceiling.account_id,
+            origin_epoch=self.executor.origin_epoch,
+            stream_epoch="fixture-stream",
+        ) as spool, mock.patch.object(self.executor, "capture") as capture:
+            for budget in (float("nan"), float("inf"), -1, 121, True, "1"):
+                with self.subTest(budget=budget), self.assertRaises(CaptureProtocolError):
+                    EdgeSession(self.executor, spool, token="synthetic-token")._capture_controlled(
+                        FramedStream(io.BytesIO(), io.BytesIO()), self.request(), budget,
+                        threading.Event(),
+                    )
+            capture.assert_not_called()
+            self.assertIsNone(spool.pending())
+            self.assertEqual(spool.next_sequence, 1)
+
+    def test_new_edge_rejects_legacy_core_ready_without_source_execution(self) -> None:
+        wire = io.BytesIO()
+        FramedStream(io.BytesIO(), wire).send({
+            "schema": CAPTURE_VERSION, "kind": "ready", "core_generation": "",
+        })
+        with EdgeSpool.initialize(
+            self.root / "legacy-core-spool",
+            source_instance_id=self.executor.source_instance_id,
+            account_id=self.ceiling.account_id,
+            origin_epoch=self.executor.origin_epoch,
+            stream_epoch="fixture-stream",
+        ) as spool, mock.patch.object(self.executor, "capture") as capture:
+            with self.assertRaisesRegex(CaptureProtocolError, "handshake_rejected"):
+                EdgeSession(self.executor, spool, token="synthetic-token").run(
+                    FramedStream(io.BytesIO(wire.getvalue()), io.BytesIO())
+                )
+            capture.assert_not_called()
+            self.assertEqual(spool.next_sequence, 1)
+
     def test_unsealed_failure_control_is_content_free_and_consumes_no_sequence(self) -> None:
         from unittest import mock
 
         stop = threading.Event()
         incoming = io.BytesIO()
         frames = FramedStream(io.BytesIO(), incoming)
-        frames.send({"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": ""})
+        frames.send({"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": "",
+                     "transport_revision": 2})
         frames.send(
-            {"schema": CAPTURE_VERSION, "kind": "work", "request": json_value(self.request())}
+            {"schema": CAPTURE_VERSION, "kind": "work", "request": json_value(self.request()),
+             "remaining_seconds": 5.0}
         )
         outgoing = io.BytesIO()
 
         class StopAfterFailure(FramedStream):
-            def send(self, value):
-                super().send(value)
+            def send(self, value, **kwargs):
+                super().send(value, **kwargs)
                 if isinstance(value, dict) and value.get("kind") == "failed":
                     stop.set()
 
@@ -688,7 +762,8 @@ class CaptureEdgeRelayTests(unittest.TestCase):
             stream_epoch="fixture-stream",
         ) as spool:
             with mock.patch.object(
-                self.executor, "capture", side_effect=CaptureProtocolError(str(self.root))
+                EdgeSession, "_capture_controlled",
+                side_effect=CaptureProtocolError(str(self.root))
             ):
                 EdgeSession(self.executor, spool, token="synthetic-token").run(
                     StopAfterFailure(io.BytesIO(incoming.getvalue()), outgoing), stop=stop
@@ -819,10 +894,10 @@ class CaptureEdgeRelayTests(unittest.TestCase):
         errors: list[BaseException] = []
 
         class LoseAck(FramedStream):
-            def send(self, value):
+            def send(self, value, **kwargs):
                 if isinstance(value, dict) and value.get("kind") == "ack":
                     raise RelayDisconnected("fixture deliberately drops terminal ACK")
-                super().send(value)
+                super().send(value, **kwargs)
 
         def run_broker(channel):
             try:
@@ -1033,7 +1108,8 @@ class CaptureEdgeRelayTests(unittest.TestCase):
         wire = io.BytesIO()
         channel = FramedStream(io.BytesIO(), wire)
         channel.send(
-            {"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": "synthetic-core"}
+            {"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": "synthetic-core",
+             "transport_revision": 2}
         )
         channel.send({"schema": CAPTURE_VERSION, "kind": "ack", "ack": json_value(ack)})
         with EdgeSpool.initialize(

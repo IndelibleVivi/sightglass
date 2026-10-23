@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from functools import wraps
+import threading
+from functools import partial, wraps
 from inspect import signature
+
+import anyio
+
+from sightglass.operations import operation_budget
 
 from .bridge import DaemonReaderTools
 
@@ -10,8 +15,15 @@ def _structured_errors(method):
     """Preserve typed tool signatures and one structured domain-error envelope."""
 
     @wraps(method)
-    def call(*args, **kwargs):
-        result = method(*args, **kwargs)
+    async def call(*args, **kwargs):
+        cancelled = threading.Event()
+        try:
+            with operation_budget(None, cancelled=cancelled):
+                result = await anyio.to_thread.run_sync(
+                    partial(method, *args, **kwargs), abandon_on_cancel=True
+                )
+        finally:
+            cancelled.set()
         if isinstance(result, dict) and result.get("ok") is False:
             return DaemonReaderTools._error_result(result)
         return result

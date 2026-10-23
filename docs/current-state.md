@@ -8,11 +8,48 @@ history belong in private operator records outside Git.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
-- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and native provider `sightglass.macos-wechat.sqlcipher.v6`. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
+- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and source native implementation `sightglass.macos-wechat.sqlcipher.v6.r1`. Native interpretation remains v6; the r1 implementation changes the existing projection/capture epoch recipe. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Reliability and retrieval repair
+## Post-repair review: source candidate
+
+The next source candidate addresses seven confirmed residual/new findings:
+selection-time budget and cooperative edge cancellation; nonblocking stdio with
+caller leases and unknown-IPC recovery; permanent stale history jobs and fair
+retry; revision-proved semantic coverage; bounded native retained-ID/sentinel
+consistency; private voice outputs and exception-safe leases; and explicit
+stopped-only legacy CAS hardlink recovery. It preserves schema v10, reader ACK,
+current policy, residency and exact semantic send-intent fences.
+
+Transport revision 2 is independent of native interpretation. New Core accepts
+an old edge with legacy behavior and no remote execution-cancellation guarantee;
+new edge requires revision 2. The native r1 fix also needs a deliberate origin
+binding transition across Core config, edge config and durable spool. Existing
+stream-loss recovery and same-account app `edge-rebind` are not origin migration
+tools. Old pending captures must settle under the old exact binding; replacing a
+wheel or deleting pending state cannot complete that transition. Old materialized
+currentness and signed history progress will be fenced by a new epoch; semantic
+indexing then uses a new generation/namespace without remote deletion.
+
+The current installation remains Core `d936dde` with Mac edge `91e0a16` until a
+separate activation receipt says otherwise. Source and generated regression
+results do not establish a new installed version, actual native acceptance,
+remote ANN relevance or the proposed 24/72-hour soak. The measured status-latency
+sample is evidence, not a promised 250 ms SLO. Remote cold discovery and a unified
+operator coverage matrix remain separate extensions; remote retrieval presently
+recalls admitted resident candidates and never proves source-wide absence.
+
+Fresh source validation passed 1,598 full tests, plus two subsequently added
+cross-chain caller regressions (actual stdio → authenticated IPC → Core → Unix
+edge relay), full Pyright, Ruff and compileall. The cross-chain tests hold terminal
+commit behind a barrier to prove no early ACK/spool release, then recover and
+complete the next fresh request. This is generated-source process evidence, not
+SSH or real-account acceptance. The full suite also caught and corrected an
+availability-revision regression: ordinary appends must preserve existing inbox
+and materialized timeline cursors while semantic coverage becomes partial.
+
+## Earlier reliability and retrieval repair
 
 The `91e0a16` implementation addresses the reliability review across broker restart and
 cancellation, exact terminal replay after policy tightening, frozen delivery ACKs,

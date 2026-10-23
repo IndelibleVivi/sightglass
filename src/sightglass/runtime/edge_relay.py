@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import os
 import random
 import re
@@ -51,6 +52,8 @@ RELAY_HANDSHAKE_TIMEOUT_SECONDS = 30.0
 RELAY_IDLE_TIMEOUT_SECONDS = 60.0
 RELAY_ACK_TIMEOUT_SECONDS = 180.0
 RELAY_CANCEL_POLL_SECONDS = 0.05
+RELAY_TRANSPORT_REVISION = 2
+RELAY_CONTROL_TIMEOUT_SECONDS = 1.0
 FIXED_EDGE_REMOTE_COMMAND = "sightglassctl edge-session"
 _EDGE_FAILURE_REASONS = frozenset(
     {"capture_unsealed", "edge_spool_pressure", "edge_storage_unavailable"}
@@ -303,6 +306,8 @@ class _BrokerWork:
     waiters: int = 0
     detached: bool = False
     recovering: bool = False
+    deadline: float = 0.0
+    cancel_requested: bool = False
 
 
 class CaptureBroker:
@@ -372,6 +377,7 @@ class CaptureBroker:
         ).authorize(request)
         if request.policy_revision != self.expected.policy_revision:
             raise CaptureProtocolError("request_policy_revision_mismatch")
+        deadline = time.monotonic() + max(0.0, timeout)
         with self._condition:
             if self._closed:
                 raise RelayDisconnected("capture_broker_closed")
@@ -379,7 +385,7 @@ class CaptureBroker:
             if work is None:
                 if len(self._by_request) >= self.max_pending_requests:
                     raise CaptureProtocolError("capture_broker_queue_full")
-                work = _BrokerWork(request)
+                work = _BrokerWork(request, deadline=deadline)
                 self._by_request[request.request_id] = work
                 self._queue.append(work)
                 self._condition.notify_all()
@@ -387,8 +393,8 @@ class CaptureBroker:
                 raise CaptureProtocolError("request_identity_conflict")
             work.waiters += 1
             work.detached = False
+            work.deadline = max(work.deadline, deadline)
         completed = False
-        deadline = time.monotonic() + max(0.0, timeout)
         try:
             while True:
                 check_operation_budget()
@@ -401,6 +407,7 @@ class CaptureBroker:
                 work.waiters -= 1
                 if not completed and work.waiters == 0:
                     work.detached = True
+                    work.cancel_requested = True
                     # Selection and removal share this lock. An unissued request
                     # with no remaining callers must never start source work or
                     # keep a pending slot; an already selected request retains its
@@ -597,6 +604,13 @@ class CaptureBroker:
                 "next_sequence",
                 "core_generation",
             }
+            transport_v2 = (
+                isinstance(hello, dict)
+                and type(hello.get("transport_revision")) is int
+                and hello.get("transport_revision") == RELAY_TRANSPORT_REVISION
+            )
+            if transport_v2:
+                hello_keys.add("transport_revision")
             if (
                 not isinstance(hello, dict)
                 or set(hello) != hello_keys
@@ -625,6 +639,7 @@ class CaptureBroker:
                     "schema": CAPTURE_VERSION,
                     "kind": "ready",
                     "core_generation": self.core_generation,
+                    **({"transport_revision": RELAY_TRANSPORT_REVISION} if transport_v2 else {}),
                 }
             )
             with self._condition:
@@ -658,6 +673,22 @@ class CaptureBroker:
                         completed_work = self._by_request.pop(ack.request_id, None)
                         if self._inflight is completed_work:
                             self._inflight = None
+                elif transport_v2 and isinstance(frame, dict) and frame.get("kind") == "working":
+                    with self._condition:
+                        work = self._inflight
+                        if (set(frame) != {"schema", "kind", "request_id", "core_generation"}
+                                or frame["schema"] != CAPTURE_VERSION
+                                or frame["core_generation"] != self.core_generation
+                                or work is None or work.ticket is not None
+                                or frame["request_id"] != work.request.request_id):
+                            raise CaptureProtocolError("unsupported_edge_session_frame")
+                        cancel = work.cancel_requested or time.monotonic() >= work.deadline
+                    channel.send({
+                        "schema": CAPTURE_VERSION,
+                        "kind": "cancel" if cancel else "continue",
+                        "request_id": work.request.request_id,
+                        "core_generation": self.core_generation,
+                    }, timeout=RELAY_CONTROL_TIMEOUT_SECONDS)
                 elif isinstance(frame, dict) and frame.get("kind") == "failed":
                     self._receive_failure(frame)
                 elif frame == {"schema": CAPTURE_VERSION, "kind": "poll"}:
@@ -675,6 +706,8 @@ class CaptureBroker:
                                 "schema": CAPTURE_VERSION,
                                 "kind": "work",
                                 "request": json_value(work.request),
+                                **({"remaining_seconds": max(0.0, min(120.0,
+                                    work.deadline - time.monotonic()))} if transport_v2 else {}),
                             }
                         )
                 else:
@@ -927,6 +960,7 @@ class EdgeSession:
                 "origin_epoch": self.executor.origin_epoch,
                 "stream_epoch": self.spool.stream_epoch,
                 "next_sequence": self.spool.next_sequence,
+                "transport_revision": RELAY_TRANSPORT_REVISION,
                 "core_generation": self.core_generation,
             }
         )
@@ -934,6 +968,7 @@ class EdgeSession:
             "schema": CAPTURE_VERSION,
             "kind": "ready",
             "core_generation": self.core_generation,
+            "transport_revision": RELAY_TRANSPORT_REVISION,
         }:
             raise CaptureProtocolError("edge_session_handshake_rejected")
         while not stop.is_set():
@@ -962,17 +997,13 @@ class EdgeSession:
                 if type(delay) is not int or not 0 <= delay <= 5:
                     raise CaptureProtocolError("edge_idle_delay_invalid")
                 stop.wait(delay)
-            elif set(response) == {"schema", "kind", "request"} and response["kind"] == "work":
+            elif (set(response) == {"schema", "kind", "request", "remaining_seconds"}
+                  and response["kind"] == "work"):
                 request: CaptureRequest = typed_value(CaptureRequest, response["request"])
                 try:
-                    envelope = self.executor.capture(
-                        request,
-                        stream_epoch=self.spool.stream_epoch,
-                        sequence=self.spool.next_sequence,
-                        cancelled=stop,
+                    self._capture_controlled(
+                        channel, request, response["remaining_seconds"], stop
                     )
-                    self._require_owned()
-                    self.spool.store(envelope)
                 except (CaptureProtocolError, OSError) as exc:
                     # Do not manufacture a sealed capture or consume a sequence.
                     # If publication committed, disconnect so its exact bytes
@@ -996,6 +1027,63 @@ class EdgeSession:
                     )
             else:
                 raise CaptureProtocolError("unsupported_edge_work_frame")
+
+    def _capture_controlled(
+        self, channel: FramedStream, request: CaptureRequest,
+        remaining: Any, stop: threading.Event,
+    ) -> SealedCapture:
+        # Relative seconds are interpreted on this host only. The source keeps its
+        # own smaller configured cap; transport/native interpretation are independent.
+        if (type(remaining) not in (int, float) or not math.isfinite(remaining)
+                or not 0 <= remaining <= 120):
+            raise CaptureProtocolError("edge_work_envelope_invalid")
+        cancelled, done = threading.Event(), threading.Event()
+        failures: list[BaseException] = []
+
+        def control() -> None:
+            try:
+                while not done.is_set():
+                    if stop.is_set():
+                        cancelled.set()
+                        return
+                    channel.send({
+                        "schema": CAPTURE_VERSION, "kind": "working",
+                        "request_id": request.request_id,
+                        "core_generation": self.core_generation,
+                    }, timeout=RELAY_CONTROL_TIMEOUT_SECONDS)
+                    reply = channel.receive(timeout=RELAY_CONTROL_TIMEOUT_SECONDS)
+                    if (not isinstance(reply, dict)
+                            or set(reply) != {"schema", "kind", "request_id", "core_generation"}
+                            or reply["schema"] != CAPTURE_VERSION
+                            or reply["request_id"] != request.request_id
+                            or reply["core_generation"] != self.core_generation
+                            or reply["kind"] not in {"continue", "cancel"}):
+                        raise CaptureProtocolError("unsupported_edge_work_frame")
+                    if reply["kind"] == "cancel":
+                        cancelled.set()
+                    done.wait(RELAY_CANCEL_POLL_SECONDS)
+            except BaseException as exc:
+                failures.append(exc)
+                cancelled.set()
+
+        owner = threading.Thread(target=control, name="capture-control", daemon=True)
+        owner.start()
+        try:
+            # The normal executor seals cancellation, then the caller durably
+            # spools it. Disconnect must never discard an already selected read.
+            envelope = self.executor.capture(
+                request, stream_epoch=self.spool.stream_epoch,
+                sequence=self.spool.next_sequence, cancelled=cancelled,
+                timeout_seconds=float(remaining),
+            )
+        finally:
+            done.set()
+            owner.join(timeout=2 * RELAY_CONTROL_TIMEOUT_SECONDS + .1)
+        self._require_owned()
+        self.spool.store(envelope)
+        if owner.is_alive() or failures:
+            raise RelayDisconnected("capture_control_disconnected")
+        return envelope
 
     def reconnect(
         self,

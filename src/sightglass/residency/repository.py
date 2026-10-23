@@ -288,6 +288,10 @@ class ResidencyRepository:
                 datetime.fromisoformat(sent_at) + timedelta(days=decision.recent_window_days or 30)
             )
         with self.db.transaction() as connection:
+            prior = connection.execute(
+                "SELECT byte_size,expires_at FROM message_body_residency WHERE message_id=?",
+                (message_id,),
+            ).fetchone()
             # A new bounded read can renew an expired temporary body. Exact manual
             # release of protected stock has no expiry and keeps its durable job.
             connection.execute(
@@ -308,6 +312,16 @@ class ResidencyRepository:
                 "expires_at=excluded.expires_at",
                 (message_id, conversation_id, owner, size, _iso(moment), expires),
             )
+            if size > 0 and prior is not None and (
+                int(prior["byte_size"]) == 0
+                or (prior["expires_at"] is not None and str(prior["expires_at"]) <= _iso(moment))
+            ):
+                # Reacquiring the same state episode need not append an
+                # observation. Availability proofs must still see this newly
+                # readable body, including renewal after temporary expiry.
+                # A first admission already advances the observation watermark;
+                # it must not invalidate cursors frozen before ordinary appends.
+                connection.execute("UPDATE residency_state SET revision=revision+1")
 
     def record_foreground_lease(
         self,

@@ -249,6 +249,8 @@ class NativeSourceProviderTests(unittest.TestCase):
             "payload": 0,
             "position_queries": 0,
             "payload_queries": 0,
+            "identity_queries": 0,
+            "identity_query_ids_max": 0,
             "position_query_max": 0,
         }
 
@@ -282,6 +284,11 @@ class NativeSourceProviderTests(unittest.TestCase):
                 elif "message_row.rowid AS source_rowid" in normalized:
                     counts["payload"] += len(rows)
                     counts["payload_queries"] += 1
+                    if "message_row.server_id IN (" in normalized:
+                        counts["identity_queries"] += 1
+                        counts["identity_query_ids_max"] = max(
+                            counts["identity_query_ids_max"], len(args[0])
+                        )
                 return _Cursor(rows)
 
         real_connect = self.provider._connect
@@ -1340,7 +1347,13 @@ class NativeSourceProviderTests(unittest.TestCase):
         self.assertLess(counts["position_queries"], shard_count + requested)
         self.assertLessEqual(counts["position_query_max"], 256)
         # Each payload page stays lazy: one point lookup per shard per global winner.
-        self.assertLessEqual(counts["payload_queries"], shard_count + requested)
+        self.assertLessEqual(
+            counts["payload_queries"] - counts["identity_queries"], shard_count + requested
+        )
+        # Retained IDs plus the sentinel need at most one identity statement per
+        # other serving shard; this cost does not grow with conversation history.
+        self.assertEqual(counts["identity_queries"], shard_count - 1)
+        self.assertLessEqual(counts["identity_query_ids_max"], requested + 1)
 
     def test_native_multishard_traversal_completes_past_one_position_page(self) -> None:
         # Three shards, 300 rows each: a page larger than the bounded 256-row

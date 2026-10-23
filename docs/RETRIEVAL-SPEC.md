@@ -207,6 +207,28 @@ network work never holds the canonical writer transaction. An independent worker
 and read capacity preserve deterministic reads. Exact account/conversation egress
 consent and a platform-secret-store token are operator configuration, not MCP inputs.
 
+Semantic coverage additionally records each pass's starting canonical revision
+and the revision actually covered. The revision combines the existing observation
+watermark, identity-correction revision and residency revision; unrelated changes
+may conservatively invalidate it. A pass interrupted by a correction behind its
+cursor cannot certify the new revision. Reacquiring a released or expired body
+invalidates availability proof even when the same observation episode is reused;
+ordinary appends retain their frozen reader cursor semantics. An old sidecar
+without this additive proof table remains usable but reports partial until a full
+new pass completes. Entries and exact send intents are preserved. Status checks
+use bounded ledger/header reads, not a whole-history body scan. Zero pending
+intents does not mean that all current eligible bodies have been captured.
+
+The existing semantic worker drains further bounded capture/publication batches
+while state is building; readback failures and confirmed-absent retries retain
+their durable 30–600 second backoff. This is index coverage over admitted resident
+messages, separate from source intervals, history-job progress, current resident
+availability and retrieval relevance. The remote core currently recalls admitted
+candidates only; fresh validation does not implement remote cold discovery over
+never-admitted or released source history. A remote discovery protocol and a
+combined operator coverage matrix remain separate product extensions, not a
+claim made by this repair.
+
 A supported lane remains optional and disabled by default, degraded on failure, fenced
 by input/model/recipe generation and subject to ordinary policy/current canonical
 projection. Deterministic search/read remain usable with it disabled. Publish only
