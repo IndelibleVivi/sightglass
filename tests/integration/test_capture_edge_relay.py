@@ -735,7 +735,15 @@ class CaptureEdgeRelayTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        self.addCleanup(lambda: proxy.poll() is None and proxy.kill())
+        def close_proxy():
+            if proxy.poll() is None:
+                proxy.kill()
+            proxy.wait(timeout=5)
+            for stream in (proxy.stdin, proxy.stdout, proxy.stderr):
+                if stream is not None:
+                    stream.close()
+
+        self.addCleanup(close_proxy)
         assert proxy.stdin is not None and proxy.stdout is not None
         channel = FramedStream(proxy.stdout, proxy.stdin)
         channel.send(
@@ -755,7 +763,11 @@ class CaptureEdgeRelayTests(unittest.TestCase):
         self.assertEqual(
             channel.receive(), {"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": ""}
         )
-        self.assertTrue(broker.connected)
+        # The peer can receive ready before the serving thread publishes its
+        # next local state change. Synchronize on that state rather than OS
+        # scheduling between the wire write and the condition acquisition.
+        with broker._condition:
+            self.assertTrue(broker._condition.wait_for(lambda: broker.connected, 5))
         with ThreadPoolExecutor(max_workers=1) as pool:
             waiting = pool.submit(broker.submit, self.request(), timeout=5.0)
             channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
@@ -782,7 +794,8 @@ class CaptureEdgeRelayTests(unittest.TestCase):
         assert proxy.stderr is not None
         self.assertEqual(proxy.stderr.read(), b"")
         proxy.stderr.close()
-        self.assertFalse(broker.connected)
+        with broker._condition:
+            self.assertTrue(broker._condition.wait_for(lambda: not broker.connected, 5))
         self.assertEqual(broker._by_request, {})
 
     def test_two_process_disconnect_and_lost_ack_replay_unchanged(self) -> None:
