@@ -193,7 +193,7 @@ Cold resource read/search no longer rehydrates the owning message or opens two g
 
 ## Search and historical coverage
 
-Synthetic M2 search and updates retain the explicit bounded full-conversation traversal used by the deterministic regression baseline. Full-local native account-wide search instead queries `window.db.search_text`, reports whether indexed coverage is complete, and current-source-validates the bounded candidates it may return. Historical indexing is performed by durable per-conversation/account backfill jobs with required message bounds, processed counts and resume cursors. Tail work is scheduled before backfill so old history cannot delay new-message observation. Pure shard generation replacement with byte-equivalent current canonical payload does not create a reader-visible observation; changed payload/state/parser evidence does. Idempotence compares the current episode only: A→B→A appends a new observation for the final A and points the current projection at that actual episode.
+Synthetic M2 search retains its bounded deterministic baseline. Fresh updates on both local and remote providers use bounded reconciliation: each step verifies or traverses at most 200 candidates, and local reads use a typed conversation session rather than whole-conversation hydration. Reconciliation progress remains separate from delivery ACK and restarts a completed scan to discover older arrivals or corrections. Full-local native account-wide search instead queries `window.db.search_text`, reports whether indexed coverage is complete, and current-source-validates the bounded candidates it may return. Historical indexing is performed by durable per-conversation/account backfill jobs with required message bounds, processed counts and resume cursors. Tail work is scheduled before backfill so old history cannot delay new-message observation. Pure shard generation replacement with byte-equivalent current canonical payload does not create a reader-visible observation; changed payload/state/parser evidence does. Idempotence compares the current episode only: A→B→A appends a new observation for the final A and points the current projection at that actual episode.
 
 Search candidate recall is parameterized `window.db` matching over visible text and normalized link search fields; a casefolded FTS5 trigram index supplies only a necessary-condition accelerator and never evidence, and a query whose eligible terms are all shorter than three characters (or otherwise unsupported by the index) uses the bounded resumable timeline fallback. URL query/fragment are excluded. For a source-backed search, final hits are restricted to stable message IDs re-admitted from current source, so a retained historical row missing from the validated page cannot become a current search result. Ordinary remote replica search reports its bounded-stale local evidence instead. Absence still does not create deletion/recall evidence.
 
@@ -252,9 +252,15 @@ gap remains partial. Projection cropping and sender filters do not
 choose those positions. Source validation failure rolls back rows and evidence together.
 
 Background sync continues after the contiguous frontier, so observing 181–200 after
-1–100 still leaves 101–180 for bounded subsequent sync. Historical backfill continues
-before the contiguous floor, rather than before the earliest independently observed
-island. Overlapping windows merge only with validated page/anchor evidence. A legacy
+1–100 still leaves 101–180 for bounded subsequent sync. Explicit historical jobs
+traverse their requested time window using an independent signed backward position,
+including previously released bodies. They bind the interpretation epoch and actual
+selected logical shard generations, rather than comparing a catalog-wide inventory
+digest with a narrow capture fingerprint. Job position, processed count and admission
+commit together; bounded completion never certifies the full source history.
+Only a validated window connected to the existing frontier can extend its contiguous
+floor. An independently observed island cannot skip an intervening gap.
+Overlapping windows merge only with validated page/anchor evidence. A legacy
 v8 tail/complete flag supplies no continuity proof: metadata-only v9 migration preserves
 messages and observations, while bounded forward sync revalidates from the oldest
 source page and persists each successful step for restart. An unchanged physical

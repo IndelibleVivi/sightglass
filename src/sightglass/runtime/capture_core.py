@@ -11,10 +11,14 @@ import json
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import MISSING, asdict, fields
+from dataclasses import MISSING, asdict, fields, replace
 from typing import Any
 
-from sightglass.contracts.capture import CaptureExpectation, CaptureProtocolError, CaptureRequest
+from sightglass.contracts.capture import (
+    CaptureExpectation,
+    CaptureProtocolError,
+    CaptureRequest,
+)
 from sightglass.contracts.common import utc_now
 from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.contracts.resources import SourceResource
@@ -126,7 +130,18 @@ class CoreCapture:
         self._authorize(request)
         now = utc_now().isoformat()
         metadata = canonical_json(
-            {"generation": self.config.activation_generation, "request": json_value(request)}
+            {
+                "generation": self.config.activation_generation,
+                "expectation": {
+                    "account_id": self.expected.account_id,
+                    "source_instance_id": self.expected.source_instance_id,
+                    "origin_epoch": self.expected.origin_epoch,
+                    "policy_revision": self.expected.policy_revision,
+                    "egress_revision": self.expected.egress_revision,
+                    "conversations": sorted(self.expected.conversations),
+                },
+                "request": json_value(request),
+            }
         ).decode()
         with self.database.transaction() as connection:
             require_core_activation(self.config)
@@ -155,13 +170,19 @@ class CoreCapture:
                     attempted_at=now,
                 )
 
-    def _claim_request(self, request: CaptureRequest, outcome: str) -> None:
+    def _claim_request(
+        self,
+        request: CaptureRequest,
+        outcome: str,
+        *,
+        binding: dict[str, Any] | None = None,
+    ) -> None:
         # The hook runs in the reader's outer writer. If timeout/recovery won,
         # its failure rolls back all bodies/ACK/delivery already staged here.
+        rejected = outcome in {"rejected", "cancelled"}
         admissible = (
-            ("pending",)
-            if outcome == "accepted"
-            else ("pending", "detached", "disconnected", "failed")
+            ("pending", "detached", "disconnected", "failed")
+            if rejected else ("pending",)
         )
         with self.database.connection() as connection:
             row = connection.execute(
@@ -169,9 +190,23 @@ class CoreCapture:
                 (_identity("request", request.request_id), CAPTURE_REQUEST_TOOL),
             ).fetchone()
             metadata = json.loads(row[0]) if row is not None else {}
-            if metadata.get("generation") != self.config.activation_generation or canonical_json(
-                metadata.get("request")
-            ) != canonical_json(request):
+            expected_binding = binding or {
+                "generation": self.config.activation_generation,
+                "expectation": {
+                    "account_id": self.expected.account_id,
+                    "source_instance_id": self.expected.source_instance_id,
+                    "origin_epoch": self.expected.origin_epoch,
+                    "policy_revision": self.expected.policy_revision,
+                    "egress_revision": self.expected.egress_revision,
+                    "conversations": sorted(self.expected.conversations),
+                },
+            }
+            if (
+                metadata.get("generation") != expected_binding["generation"]
+                or canonical_json(metadata.get("expectation"))
+                != canonical_json(expected_binding.get("expectation"))
+                or canonical_json(metadata.get("request")) != canonical_json(request)
+            ):
                 raise CaptureProtocolError("capture_request_binding_changed")
             slots = ",".join("?" for _ in admissible)
             changed = connection.execute(
@@ -282,7 +317,6 @@ class CoreCapture:
         # A failed/cancelled request releases the ordered stream without advancing
         # reader ACK or admitting a body. This bounded transaction contains no RPC.
         try:
-            prepared = self.receiver.prepare(ticket.envelope)
             with operation_budget(2.0):
                 with self.database.transaction(maintenance=True):
                     require_core_activation(self.config)
@@ -290,11 +324,20 @@ class CoreCapture:
                     if duplicate is not None:
                         self.database.wake_after_commit(lambda: ticket.complete(duplicate))
                         return
+                    binding = self._durable_request_binding(ticket)
+                    historical = self._rejection_expectation(ticket.envelope, binding)
+                    receiver = CaptureReceiver(
+                        self.journal, historical, stream_epoch=self.settings.stream_epoch)
+                    prepared = receiver.prepare(ticket.envelope)
                     terminal = prepared.document.receipt.terminal
                     self._claim_request(
-                        ticket.request, "cancelled" if terminal == "cancelled" else "rejected"
+                        ticket.request,
+                        "cancelled" if terminal == "cancelled" else "rejected",
+                        binding=binding,
                     )
-                    ack = self.receiver.admit_in_transaction(
+                    # The ordinary receiver still validates the original binding;
+                    # reject=True never constructs a provider or admits its bodies.
+                    ack = receiver.admit_in_transaction(
                         prepared,
                         None,
                         receipt_id=_identity("terminal", ticket.request.request_id),
@@ -305,9 +348,7 @@ class CoreCapture:
             if ticket.durable_ack is None:
                 self.broker.abandon(ticket)
 
-    def _recover(self, ticket: PreparedRemoteCapture) -> None:
-        # Reconnect can cancel an exact previously authorized pending task. It may
-        # never silently accept an unknown capture or reconstruct query text.
+    def _durable_request_binding(self, ticket: PreparedRemoteCapture) -> dict[str, Any]:
         with self.database.connection() as connection:
             row = connection.execute(
                 "SELECT warning_codes_json FROM access_receipts WHERE receipt_id=? AND tool_name=?",
@@ -315,11 +356,61 @@ class CoreCapture:
             ).fetchone()
         if row is None:
             raise CaptureProtocolError("unknown_capture_request_requires_operator_recovery")
-        metadata = json.loads(row[0])
-        if metadata.get("generation") != self.config.activation_generation or canonical_json(
-            metadata.get("request")
-        ) != canonical_json(ticket.request):
+        try:
+            metadata = json.loads(row[0])
+        except (TypeError, ValueError) as exc:
+            raise CaptureProtocolError("corrupt_capture_request_binding") from exc
+        if not isinstance(metadata, dict):
+            raise CaptureProtocolError("corrupt_capture_request_binding")
+        return metadata
+
+    def _rejection_expectation(
+        self,
+        envelope: Any,
+        binding: dict[str, Any],
+    ) -> CaptureExpectation:
+        document = envelope.document()
+        expectation_value = binding.get("expectation")
+        if expectation_value is None:
+            # Installed pre-fix requests already retain the exact request and
+            # generation. Only its original policy revision may differ; source,
+            # egress and the enrolled stream must still match today's binding.
+            historical = replace(
+                self.expected, policy_revision=document.request.policy_revision)
+        else:
+            keys = {"account_id", "source_instance_id", "origin_epoch",
+                    "policy_revision", "egress_revision", "conversations"}
+            if (not isinstance(expectation_value, dict) or set(expectation_value) != keys
+                    or any(not isinstance(expectation_value[key], str)
+                           for key in keys - {"conversations"})
+                    or not isinstance(expectation_value["conversations"], list)
+                    or any(not isinstance(value, str)
+                           for value in expectation_value["conversations"])):
+                raise CaptureProtocolError("capture_recovery_binding_mismatch")
+            historical = CaptureExpectation(
+                **{key: expectation_value[key] for key in keys - {"conversations"}},
+                conversations=frozenset(expectation_value["conversations"]),
+            )
+        if (
+            binding.get("generation") != self.config.activation_generation
+            or canonical_json(binding.get("request")) != canonical_json(document.request)
+            or document.request.account_id != historical.account_id
+            or document.origin.source_instance_id != historical.source_instance_id
+            or document.origin.origin_epoch != historical.origin_epoch
+            or document.request.policy_revision != historical.policy_revision
+            or document.origin.egress_revision != historical.egress_revision
+            or historical.account_id != self.expected.account_id
+            or historical.source_instance_id != self.expected.source_instance_id
+            or historical.origin_epoch != self.expected.origin_epoch
+            or historical.egress_revision != self.expected.egress_revision
+        ):
             raise CaptureProtocolError("capture_recovery_binding_mismatch")
+        return historical
+
+    def _recover(self, ticket: PreparedRemoteCapture) -> None:
+        # Reconnect can cancel an exact previously authorized pending task. It may
+        # never silently accept an unknown capture or reconstruct query text.
+        self._durable_request_binding(ticket)
         self._reject(ticket)
 
     def _verify_values(self, ids: tuple[str, ...], arguments: dict[str, Any]) -> dict[str, Any]:
@@ -659,29 +750,18 @@ class CoreCapture:
         job = self.service.repository.next_backfill_job(eligible)
         if job is None:
             return {"schema": "sightglass.backfill-step.v1", "state": "idle"}
+        if not job["cursor_token"]:
+            if int(job["processed_messages"]):
+                return self.service.initialize_legacy_backfill(job)
+            initialized = self.catalog_call(lambda: self.service.initialize_legacy_backfill(job))
+            if initialized["state"] == "failed":
+                return initialized
+            job = self.service.repository.backfill_job(str(job["job_id"]))
+            assert job is not None
         if int(job["processed_messages"]) >= int(job["max_messages"]):
             return self.service.process_backfill_once(batch_limit=199)
-        target = self.service._persisted_source_target(str(job["conversation_id"]))
-        state = self.service.repository.source_conversation_state(target.conversation_id)
-        earliest = (
-            key_from_position(state["contiguous_floor_position"])
-            if state is not None and state["coverage_version"]
-            else None
-        )
-        count = min(199, int(job["max_messages"]) - int(job["processed_messages"]))
-        ticket = self._submit(
-            {
-                "operation": "range",
-                "account_id": target.source_account_key,
-                "conversation_source_id": target.source_conversation_id,
-                "after": None,
-                "before": json_value(earliest),
-                "direction": "backward",
-                "limit": count + 1,
-                "time_after_utc": job["requested_after"],
-                "time_before_utc": job["requested_before"],
-            }
-        )
+        request = self.service.backfill_capture_request(job, batch_limit=199)
+        ticket = self._submit(request)
         try:
             before, after = self._hooks(ticket)
             with self.service.captured_provider(

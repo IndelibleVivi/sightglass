@@ -183,6 +183,193 @@ class ReplicaReadTests(unittest.TestCase):
         ):
             return plan, self.service.read_messages(**arguments)
 
+    def test_frozen_frontier_ack_survives_epoch_sort_correction_and_legacy(self, legacy=False):
+        self.offline()
+        arguments = {
+            "mode": "updates",
+            "conversation_id": self.group,
+            "view": "fresh",
+            "limit": 1,
+            "projection": "compact",
+        }
+        _, page = self.read_capture(arguments)
+        delivery = page["page"]["delivery_id"]
+        frontier = self.service.replica._update_frontier(delivery, self.group, "conversation", "*")
+        assert frontier is not None
+        row = self.repository.frozen_message_rows((page["messages"][0][0],))[0]
+        with self.repository.database.transaction() as connection:
+            connection.execute(
+                "UPDATE messages SET sort_seq=sort_seq+100 WHERE message_id=?", (row["message_id"],)
+            )
+        # Exercise both persisted formats with an epoch which cannot reconstruct v1.
+        for legacy in (legacy,):
+            if legacy:
+                with self.repository.database.transaction() as connection:
+                    receipt_id = self.service.replica._frontier_id(delivery)
+                    receipt = self.repository.update_delivery_frontier(receipt_id)
+                    assert receipt is not None
+                    metadata = json.loads(receipt["warning_codes_json"])
+                    metadata["schema"] = "sightglass.updates-frontier.v1"
+                    connection.execute(
+                        "UPDATE access_receipts SET warning_codes_json=?,"
+                        "scope_digest='synthetic-old-epoch-digest' WHERE receipt_id=?",
+                        (json.dumps(metadata), receipt_id),
+                    )
+            with patch.object(
+                self.service, "_projection_inventory_epoch", return_value="synthetic-new"
+            ):
+                self.assertEqual(
+                    self.service.replica._update_frontier(
+                        delivery, self.group, "conversation", "*"
+                    ),
+                    frontier,
+                )
+        with patch.object(
+            self.service, "_projection_inventory_epoch", return_value="synthetic-new"
+        ):
+            for _ in range(2):
+                with self.repository.database.transaction():
+                    self.service.replica.acknowledge_delivery(
+                        delivery_id=delivery,
+                        reader_id="codex",
+                        conversation_id=self.group,
+                        scope_kind="conversation",
+                        scope_key="*",
+                        acknowledged_at=self.moment.isoformat(),
+                    )
+        self.assertEqual(self.delivery(delivery)["status"], "acknowledged")
+        position = self.repository.timeline_position("codex", self.group, "conversation", "*")
+        assert position is not None
+        self.assertEqual(position["committed_sort_primary"], frontier.as_tuple()[0])
+
+    def test_legacy_frozen_frontier_ack_survives_epoch_and_sort_correction(self):
+        self.test_frozen_frontier_ack_survives_epoch_sort_correction_and_legacy(legacy=True)
+
+    def test_frozen_frontier_revoke_restore_cannot_ack(self):
+        self.offline()
+        _, page = self.read_capture(
+            {"mode": "updates", "conversation_id": self.group, "view": "fresh", "limit": 1}
+        )
+        delivery = page["page"]["delivery_id"]
+        original = self.service.reader.policy.as_dict()
+        for policy in (ReaderPolicy(mode="allowlist").as_dict(), original):
+            self.repository.upsert_reader(
+                "codex", self.service.reader.display_name, policy, self.moment.isoformat()
+            )
+        self.assert_error(
+            ErrorCode.DELIVERY_ACK_INVALID,
+            self.service.replica.acknowledge_delivery,
+            delivery_id=delivery,
+            reader_id="codex",
+            conversation_id=self.group,
+            scope_kind="conversation",
+            scope_key="*",
+            acknowledged_at=self.moment.isoformat(),
+        )
+
+    def test_local_large_updates_use_bounded_session_and_reconciliation(self):
+        for count in (10001, 100000):
+            with self.subTest(count=count):
+                self.append_source(count, prefix=f"synthetic-large-{count}")
+                ack = None
+                for _ in range(4):
+                    resident = self.service.read_messages(
+                        mode="updates", conversation_id=self.group, view="replica",
+                        projection="compact", limit=500, ack_delivery_id=ack)
+                    ack = resident["page"]["delivery_id"]
+                    if ack is None:
+                        break
+                self.assertIsNone(ack)
+                with (
+                    patch.object(
+                        self.provider, "read_range", wraps=self.provider.read_range
+                    ) as ranges,
+                    patch.object(
+                        self.provider, "get_message", wraps=self.provider.get_message
+                    ) as points,
+                    patch.object(
+                        self.provider, "snapshot", side_effect=AssertionError("global snapshot")
+                    ),
+                ):
+                    for _ in range(3):
+                        page = self.service.read_messages(
+                            mode="updates",
+                            conversation_id=self.group,
+                            limit=1,
+                            projection="compact",
+                            ack_delivery_id=ack,
+                        )
+                        ack = page["page"]["delivery_id"]
+                        self.assertIsNotNone(ack)
+                    self.assertLessEqual(points.call_count, 600)
+                    self.assertTrue(
+                        all(call.kwargs["limit"] == 200 for call in ranges.call_args_list)
+                    )
+                    self.assertGreaterEqual(ranges.call_count, 1)
+                    self.assertLessEqual(ranges.call_count, 3)
+                # A filtered independent scope drives the scan without draining all
+                # unrelated resident observations first.
+                with patch.object(
+                    self.provider, "read_range", wraps=self.provider.read_range
+                ) as ranges:
+                    page = self.service.read_messages(
+                        mode="updates",
+                        conversation_id=self.group,
+                        query="synthetic-no-hit",
+                        limit=1,
+                        projection="compact",
+                    )
+                    self.assertIsNotNone(page["page"]["delivery_id"])
+
+    def test_local_reconciliation_delivers_old_append_and_sort_correction_after_ack(self):
+        self.append_source(225)
+        arguments = {
+            "mode": "updates",
+            "conversation_id": self.group,
+            "limit": 500,
+            "projection": "compact",
+            "view": "fresh",
+        }
+        ack = None
+        for _ in range(5):
+            page = self.service.read_messages(**arguments, ack_delivery_id=ack)
+            ack = page["page"]["delivery_id"]
+        old = _row(
+            "synthetic-local-old",
+            "conv_group",
+            self.moment.isoformat(),
+            0,
+            900001,
+            1,
+            "wxid_demo_member:\nSynthetic local old append",
+            sender="wxid_demo_member",
+        )
+        columns = tuple(old)
+        with closing(sqlite3.connect(self.source_root / "messages-2.db")) as connection:
+            connection.execute(
+                f"INSERT INTO messages ({','.join(columns)}) VALUES "
+                f"({','.join('?' for _ in columns)})",
+                tuple(old[key] for key in columns),
+            )
+            connection.execute(
+                "UPDATE messages SET raw_content=?,sort_seq=sort_seq+1 "
+                "WHERE source_message_id='synthetic-range-0'",
+                ("wxid_demo_member:\nSynthetic local corrected",),
+            )
+            connection.commit()
+        received = []
+        for _ in range(6):
+            page = self.service.read_messages(**arguments, ack_delivery_id=ack)
+            ack = page["page"]["delivery_id"]
+            received.extend(
+                row["text"]
+                for row in self.repository.frozen_message_rows(
+                    tuple(row[0] for row in page["messages"])
+                )
+            )
+        self.assertIn("Synthetic local old append", received)
+        self.assertIn("Synthetic local corrected", received)
+
     def append_source(self, count: int, *, prefix: str = "synthetic-range") -> set[str]:
         rows = [
             _row(

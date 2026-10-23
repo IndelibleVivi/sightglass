@@ -49,9 +49,13 @@ paused 时一律不能），`read_plane.live_refresh_confirmed` 表示 current c
 继续发现旧位置 arrivals/corrections；跨页不宣称同一 global change snapshot。缺失 source
 prefix 会 fail closed。当前 scope 的 `request_id` 可在 30 天内精确 replay 已完成的 update
 response，仍受当前 policy 和 pause 约束。
+Local source updates 也使用同一有界验证／reconciliation 路径，每步最多 200 条 message
+candidates 或 range 页消息，不整会话 hydrate。Interpretation 升级或已 admission 的 sort
+correction 后，ACK 仍消费 frozen delivery position；当前授权继续生效，撤销再恢复 scope
+不会使已经 expired 的 delivery 复活。
 
 Native support 仍只指上方精确的 macOS profile。`remote-capture` 是 offline core binding，
-尚无 Linux 微信 adapter。处理依赖与 candidate evidence 见
+尚无 Linux 微信 adapter。处理依赖与平台证据见
 [Linux processing](docs/LINUX-PROCESSING.md)，ownership、loss recovery 和 wire limits 见
 [Capture protocol](docs/CAPTURE-PROTOCOL.md)。
 
@@ -79,8 +83,10 @@ MCP 默认返回 `response_profile="brief"`（`sightglass.mcp.brief.v1`）：保
 
 驻留是独立的 operator 设置。新配置和新会话默认 `on_demand`：空闲轮询不打开消息正文，
 前台搜索只缓存命中的候选，不把所有扫描过的 source rows 留下来。`keep` 持续收集未来消息，
-历史 backfill 需要显式选择。`recent` 默认保留 30 天、每会话最多 512 MiB；按需读取缓存有界
-页和前后文，默认 24 小时、每会话最多 256 MiB，两类临时正文共享 1 GiB cap。
+历史 backfill 需要显式选择 `keep --keep-backfill` 并创建有界 job；已配置的 remote capture
+路径同样支持。见 [单会话 setup](docs/OPERATIONS.md#single-conversation-history-and-semantic-setup)，
+区分历史驻留、可选 semantic indexing 与另行所需的外发同意。`recent` 默认保留 30 天、
+每会话最多 512 MiB；按需读取缓存有界页和前后文，默认 24 小时、每会话最多 256 MiB，两类临时正文共享 1 GiB cap。
 这些是正文副本的预算，外层 storage budget 仍覆盖整个 installation。旧库存保持 protected，
 只有 exact operator preview/apply 才释放可丢弃副本。到期保留身份、已观察进度、corrections
 和 pending exact replay，不自动重新抓历史。CLI 与 schema-v10 停机 candidate／paired rollback
@@ -133,6 +139,10 @@ uv run python examples/synthetic_read.py
 另行授权的 [semantic benchmarks](docs/benchmarks/README.md) 可将**生成的 synthetic 文本**发给 Cloudflare Workers AI，并将向量写入独立的 Vectorize 实验索引。实验不读取配置账号或 daemon，不下载模型权重，也不启用生产 semantic retrieval。当前 benchmark 只使用 BGE-M3，双模型 artifact 保留为历史证据。运行实验会使用 operator 的 Cloudflare 服务；普通安装和 CI 都不会运行它。
 
 可选账号 semantic retrieval 有独立的 [operator setup](docs/OPERATIONS.md#optional-bge-m3--vectorize-lane)：单独的 index、精确会话范围、明确外发授权和 platform secret store 中的 token。后台索引与查询失败会报告 coverage；关闭 lane 保留本地／远端 derivatives，不擦除已经上传的数据。 Semantic recipe v2 对相同的 canonical text/card fields 去重，并排除空输入与 unknown 消息占位文案；这些消息仍可通过 context 邻居读到。v1 sidecar 升级须按 operator guide 在 daemon 停止时保留旧目录并重建 derivative。
+
+Pending semantic publication 先 readback 已持久化的 exact intent。只有远端 object 确认
+absent 时，才在 durable backoff 后用相同 vector bytes 重送；已存在但冲突的 object 不覆盖。
+每次 publication 仍检查 current canonical version 与当前同意，普通 deterministic reading 继续可用。
 
 ## 接入本地账号
 
@@ -199,8 +209,15 @@ uv run python -m unittest discover -s tests -t . -p 'test_*.py'
 uv run python -m compileall -q src tests examples
 uv run ruff check src tests examples
 uv run pyright
+uv build
+uv run python scripts/check-installed-wheel.py
 git diff --check
 ```
+
+两个 CI jobs 在 build 后调用相同的 [installed-wheel gate](scripts/check-installed-wheel.py)：
+核对 exact source／license payload，在全新 noneditable environment 中安装 frozen runtime
+extras，从 empty cwd 执行四个真实 entrypoints，再用 installed imports 读取 generated messages。
+该 gate 不激活安装；单独 candidate 可用 `--wheel /path/to/candidate.whl` 指定。
 
 Suite 使用生成的 fixtures；安装 native extra 后还覆盖加密 SQLCipher fixture。Hosted gates 分开执行 portable Linux synthetic daemon／bridge 与完整 macOS fixture suite；native 微信访问仍只支持 macOS。完整 macOS resource 验证需要 `sips` 和 Poppler。真实 Apple speech test 默认跳过，显式运行时也只用合成音频；真实对话或录音不得进入 Git。[Current state](docs/current-state.md) 记录已验证的 source scope 与剩余限制。
 

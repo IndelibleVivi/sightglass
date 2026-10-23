@@ -365,7 +365,7 @@ class ResidencyRepository:
             or connection.execute(
                 "SELECT 1 FROM messages m JOIN reader_deliveries d "
                 "ON d.conversation_id=m.conversation_id AND d.status='pending' "
-                "WHERE m.message_id=? AND m.current_observation_seq>d.from_observation_seq "
+                "WHERE m.message_id=? AND m.current_observation_seq>=d.from_observation_seq "
                 "AND m.current_observation_seq<=d.to_observation_seq LIMIT 1",
                 (message_id,),
             ).fetchone()
@@ -383,7 +383,7 @@ class ResidencyRepository:
         "AND NOT EXISTS(SELECT 1 FROM messages m JOIN reader_deliveries d "
         "ON d.conversation_id=m.conversation_id AND d.status='pending' "
         "WHERE m.message_id=b.message_id "
-        "AND m.current_observation_seq>d.from_observation_seq "
+        "AND m.current_observation_seq>=d.from_observation_seq "
         "AND m.current_observation_seq<=d.to_observation_seq)"
     )
 
@@ -535,7 +535,7 @@ class ResidencyRepository:
                 "OR EXISTS(SELECT 1 FROM voice_jobs j WHERE j.resource_id=r.resource_id "
                 "AND j.state IN ('pending','leased','running')))) AND NOT EXISTS("
                 "SELECT 1 FROM reader_deliveries d WHERE d.conversation_id=m.conversation_id "
-                "AND d.status='pending' AND m.current_observation_seq>d.from_observation_seq "
+                "AND d.status='pending' AND m.current_observation_seq>=d.from_observation_seq "
                 "AND m.current_observation_seq<=d.to_observation_seq) "
                 "ORDER BY b.expires_at,b.message_id LIMIT ?",
                 (moment, max(1, min(limit, 500))),

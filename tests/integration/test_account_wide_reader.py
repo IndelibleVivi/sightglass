@@ -853,11 +853,13 @@ class AccountWideReaderTests(unittest.TestCase):
                 rowid=20_000 + index,
                 text=f"search history {index:03d}",
             )
-        with mock.patch.object(
-            self.service,
-            "_read_hydrate_page",
-            side_effect=AssertionError("full hydrate must not run"),
-        ):
+        original_range = self.service.provider.read_range
+
+        def bounded_range(*args, **kwargs):
+            self.assertLessEqual(kwargs["limit"], 200)
+            return original_range(*args, **kwargs)
+
+        with mock.patch.object(self.service.provider, "read_range", side_effect=bounded_range):
             result = self.tools.wechat_search_messages(query="私聊", limit=20)
 
         self.assertGreaterEqual(len(result["hits"]), 1)

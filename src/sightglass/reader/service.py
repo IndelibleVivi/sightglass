@@ -29,7 +29,12 @@ from sightglass.contracts.identity import (
 )
 from sightglass.contracts.messages import SourceMessage, SourceMessagePage
 from sightglass.contracts.voice import VoiceReadSettings
-from sightglass.model.coverage import key_from_position, record_window, state_frontier
+from sightglass.model.coverage import (
+    containing_window,
+    key_from_position,
+    record_window,
+    state_frontier,
+)
 from sightglass.model.current_body import current_search_document
 from sightglass.model.repositories import WindowRepository, message_search_fields
 from sightglass.operations import (
@@ -38,6 +43,7 @@ from sightglass.operations import (
     operation_budget,
 )
 from sightglass.policy.readers import ReaderContext
+from sightglass.reader import backfill
 from sightglass.reader.cursors import (
     AccountCursorCodec,
     SearchCursorCodec,
@@ -1472,14 +1478,22 @@ class ReaderService:
                         created_at,
                         max_messages,
                     )
+                    epoch = self._projection_inventory_epoch()
+                    target = self._persisted_source_target(selected_id)
+                    job_scope = {
+                        "job_id": job_id,
+                        "account_id": external_account_id,
+                        "conversation_id": selected_id,
+                        "requested_after": after_utc,
+                        "requested_before": before_utc,
+                        "max_messages": max_messages,
+                    }
                     self.repository.create_backfill_job(
-                        job_id=job_id,
-                        account_id=external_account_id,
-                        conversation_id=selected_id,
-                        inventory_epoch=snapshot.inventory_digest,
-                        requested_after=after_utc,
-                        requested_before=before_utc,
-                        max_messages=max_messages,
+                        **job_scope,
+                        inventory_epoch=epoch,
+                        cursor_token=backfill.Progress().encode(
+                            self.token_codec, backfill.scope(job_scope, target, epoch)
+                        ),
                         created_at=created_at,
                     )
                     queued.append(job_id)
@@ -1507,7 +1521,86 @@ class ReaderService:
             return True
         return False
 
+    def initialize_legacy_backfill(self, job: Any) -> dict[str, Any]:
+        """Rebind an untouched legacy job only under a fresh matching catalog.
+
+        Old partially traversed jobs have no independent resume position. Retain their
+        data/count and require a new explicit job rather than inventing continuation.
+        """
+        self.reader.authorize(str(job["conversation_id"]))
+        if int(job["processed_messages"]):
+            self.repository.update_backfill_job(
+                str(job["job_id"]),
+                state="failed",
+                processed_messages=int(job["processed_messages"]),
+                updated_at=utc_now().isoformat(),
+                error_code=ErrorCode.SOURCE_GENERATION_CHANGED.value,
+                expected_job=job,
+            )
+            return {
+                "schema": "sightglass.backfill-step.v1",
+                "state": "failed",
+                "reason": "legacy_backfill_requeue_required",
+                "message_count": 0,
+            }
+        with self._source_read() as (stack, snapshot):
+            matching = str(job["source_inventory_epoch"] or "") == snapshot.inventory_digest
+            target = self._persisted_source_target(str(job["conversation_id"]))
+            epoch = self._projection_inventory_epoch()
+            with self._admission(stack):
+                self.repository.update_backfill_job(
+                    str(job["job_id"]),
+                    state="queued" if matching else "failed",
+                    processed_messages=0,
+                    updated_at=snapshot.fresh_as_of,
+                    error_code=None if matching else ErrorCode.SOURCE_GENERATION_CHANGED.value,
+                    inventory_epoch=epoch if matching else None,
+                    cursor_token=backfill.Progress().encode(
+                        self.token_codec, backfill.scope(job, target, epoch)
+                    )
+                    if matching
+                    else None,
+                    expected_job=job,
+                )
+        return {
+            "schema": "sightglass.backfill-step.v1",
+            "state": "queued" if matching else "failed",
+            "message_count": 0,
+            **({"reason": "legacy_backfill_requeue_required"} if not matching else {}),
+        }
+
+    def backfill_capture_request(self, job: Any, *, batch_limit: int = 199) -> dict[str, Any]:
+        """The same signed job position drives both capture and reader replay."""
+        self.reader.require_active()
+        target = self._persisted_source_target(str(job["conversation_id"]))
+        if target.account_id != str(job["account_id"]):
+            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        epoch = self._projection_inventory_epoch()
+        if str(job["source_inventory_epoch"] or "") != epoch:
+            raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+        progress = backfill.decode(
+            self.token_codec,
+            str(job["cursor_token"] or ""),
+            backfill.scope(job, target, epoch),
+            int(job["processed_messages"]),
+        )
+        remaining = int(job["max_messages"]) - progress.processed
+        count = min(max(1, min(int(batch_limit), 500)), max(1, remaining))
+        return {
+            "operation": "range",
+            "account_id": target.source_account_key,
+            "conversation_source_id": target.source_conversation_id,
+            "after": None,
+            "before": progress.before,
+            "direction": "backward",
+            "limit": count + 1,
+            "time_after_utc": job["requested_after"],
+            "time_before_utc": job["requested_before"],
+            "expected_generations": progress.generations,
+        }
+
     def process_backfill_once(self, *, batch_limit: int = 200) -> dict[str, Any]:
+        self.reader.require_active()
         batch_limit = max(1, min(int(batch_limit), 500))
         if self._pause_backfill_under_pressure(batch_limit * 16_384):
             return {
@@ -1516,125 +1609,164 @@ class ReaderService:
                 "reason": "storage_pressure",
                 "message_count": 0,
             }
-        job = self.repository.next_backfill_job(tuple(
-            item for item in self.residency.historical_conversation_ids()
-            if self.reader.policy.permits(item)
-        ))
+        job = self.repository.next_backfill_job(
+            tuple(
+                item
+                for item in self.residency.historical_conversation_ids()
+                if self.reader.policy.permits(item)
+            )
+        )
         if job is None:
             return {"schema": "sightglass.backfill-step.v1", "state": "idle"}
-        decision = self._residency_decision(str(job["conversation_id"]))
-        if not decision.allow_historical_backfill:
+        if not self._residency_decision(str(job["conversation_id"])).allow_historical_backfill:
             return {
                 "schema": "sightglass.backfill-step.v1",
                 "state": "paused",
                 "reason": "residency_selection",
                 "message_count": 0,
             }
-        job_id = str(job["job_id"])
+        if not job["cursor_token"]:
+            initialized = self.initialize_legacy_backfill(job)
+            if initialized["state"] == "failed":
+                return initialized
+            job = self.repository.backfill_job(str(job["job_id"]))
+            assert job is not None
+        request = self.backfill_capture_request(job, batch_limit=batch_limit)
         processed = int(job["processed_messages"])
-        remaining = int(job["max_messages"]) - processed
-        if remaining <= 0:
-            completed_at = utc_now().isoformat(timespec="microseconds")
+        if processed >= int(job["max_messages"]):
             self.repository.update_backfill_job(
-                job_id,
+                str(job["job_id"]),
                 state="completed",
                 processed_messages=processed,
-                updated_at=completed_at,
+                updated_at=utc_now().isoformat(),
+                expected_job=job,
             )
             return {
                 "schema": "sightglass.backfill-step.v1",
                 "state": "completed",
                 "message_count": 0,
             }
-        selected_limit = min(batch_limit, remaining)
-        state = "running"
-        message_count = 0
-        exhausted = False
+        conversation_id = str(job["conversation_id"])
+        before = request["before"]
+        selected_limit = int(request["limit"]) - 1
+        epoch = self._projection_inventory_epoch()
         with self._source_read() as (stack, snapshot):
-            if str(job["source_inventory_epoch"] or "") != snapshot.inventory_digest:
-                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
-            conversation_id = str(job["conversation_id"])
-            target = self._persisted_source_target(conversation_id)
-            conversation_state = self.repository.source_conversation_state(conversation_id)
-            # Historical backfill must not certify that the current live tail was
-            # reprojected under new provider/parser semantics. Preserve the tail's
-            # existing epoch; only sync_source_once may advance that repair marker.
-            conversation_projection_epoch = (
-                str(conversation_state["source_inventory_epoch"] or "")
-                if conversation_state is not None
-                else snapshot.inventory_digest
-            )
-            earliest = (
-                key_from_position(conversation_state["contiguous_floor_position"])
-                if conversation_state is not None and conversation_state["coverage_version"]
-                else None
-            )
             page = self.provider.read_range(
-                target.source_account_key,
-                target.source_conversation_id,
+                request["account_id"],
+                request["conversation_source_id"],
                 after=None,
-                before=earliest,
+                before=before,
                 direction="backward",
                 limit=selected_limit + 1,
                 snapshot=snapshot,
-                time_after_utc=job["requested_after"],
-                time_before_utc=job["requested_before"],
+                time_after_utc=request["time_after_utc"],
+                time_before_utc=request["time_before_utc"],
             )
+            generations = self.provider.search_generation_binding(
+                request["account_id"], request["conversation_source_id"], snapshot=snapshot
+            )
+            if (
+                request["expected_generations"]
+                and generations != request["expected_generations"]
+                or self._projection_inventory_epoch() != epoch
+            ):
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
             candidates = tuple(
                 message
                 for message in page.messages
-                if earliest is None or message.sort_key.as_tuple() < earliest.as_tuple()
+                if before is None or message.sort_key.as_tuple() < before.as_tuple()
             )
             selected = candidates[-selected_limit:]
             prepared = self._prepare_messages(selected)
+            exhausted = not page.has_more_before and len(candidates) <= selected_limit
+            processed += len(selected)
+            state = "completed" if exhausted or processed >= int(job["max_messages"]) else "running"
+            progress = backfill.Progress(
+                selected[0].sort_key if selected else before, generations, processed
+            )
             with self._admission(stack):
+                # Binding/policy may change while the source page is prepared.
+                # This is local-only and runs under the short admission writer.
+                if self.backfill_capture_request(job, batch_limit=batch_limit) != request:
+                    raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
+                target = self._persisted_source_target(conversation_id)
                 context = self._conversation_context(conversation_id)
+                if not self._residency_decision(conversation_id).allow_historical_backfill:
+                    raise SightglassError(ErrorCode.POLICY_DENIED)
                 message_ids = self._ingest_prepared_messages(context, prepared, background=True)
-                message_count = len(message_ids)
-                processed += len(selected)
-                exhausted = not page.has_more_before and len(candidates) <= selected_limit
-                state = (
-                    "completed" if exhausted or processed >= int(job["max_messages"]) else "running"
-                )
                 observed_at = snapshot.fresh_as_of
-                bounds_after, bounds_before = self.repository.observation_bounds(conversation_id)
-                self.repository.record_source_conversation_state(
-                    conversation_id=conversation_id,
-                    inventory_epoch=conversation_projection_epoch,
-                    tail=state_frontier(conversation_state)
-                    or (selected[-1].sort_key if selected else None),
-                    indexed_before=bounds_before,
-                    indexed_after=bounds_after,
-                    backfill_state="complete" if exhausted else "partial",
-                    observed_at=observed_at,
-                    coverage_version=1,
-                    contiguous_floor=selected[0].sort_key if selected else earliest,
-                    history_complete=exhausted
-                    and not job["requested_after"]
-                    and not job["requested_before"],
-                    forward_complete=bool(conversation_state["forward_complete"])
-                    if earliest is not None and conversation_state is not None
-                    else not page.has_more_after,
-                )
+                prior = self.repository.source_conversation_state(conversation_id)
                 if selected:
                     record_window(
                         self.repository.database,
                         conversation_id,
-                        conversation_projection_epoch,
+                        epoch,
                         selected[0].sort_key,
-                        earliest or selected[-1].sort_key,
+                        before or selected[-1].sort_key,
                         observed_at,
                     )
+                # Preserve live-tail ownership. Only a window actually connected to
+                # its verified frontier can extend the global contiguous floor.
+                frontier = state_frontier(prior)
+                if (
+                    prior is not None
+                    and frontier is not None
+                    and str(prior["source_inventory_epoch"]) == epoch
+                ):
+                    window = containing_window(
+                        self.repository.database, conversation_id, epoch, frontier
+                    )
+                    previous_floor = key_from_position(prior["contiguous_floor_position"])
+                    lower = min(
+                        (
+                            key
+                            for key in (window[0] if window else None, previous_floor)
+                            if key is not None
+                        ),
+                        key=lambda key: key.as_tuple(),
+                        default=None,
+                    )
+                    reaches_history = (
+                        exhausted
+                        and not job["requested_after"]
+                        and not job["requested_before"]
+                        and progress.before is not None
+                        and lower is not None
+                        and lower.as_tuple() <= progress.before.as_tuple()
+                    )
+                    history = bool(prior["history_complete"]) or reaches_history
+                    bounds_after, bounds_before = self.repository.observation_bounds(
+                        conversation_id
+                    )
+                    self.repository.record_source_conversation_state(
+                        conversation_id=conversation_id,
+                        inventory_epoch=epoch,
+                        tail=frontier,
+                        indexed_before=bounds_before,
+                        indexed_after=bounds_after,
+                        backfill_state="complete"
+                        if history and prior["forward_complete"]
+                        else "partial",
+                        observed_at=observed_at,
+                        coverage_version=int(prior["coverage_version"]),
+                        contiguous_floor=lower,
+                        history_complete=history,
+                        forward_complete=bool(prior["forward_complete"]),
+                    )
                 self.repository.update_backfill_job(
-                    job_id,
+                    str(job["job_id"]),
                     state=state,
                     processed_messages=processed,
                     updated_at=observed_at,
+                    expected_job=job,
+                    cursor_token=progress.encode(
+                        self.token_codec, backfill.scope(job, target, epoch)
+                    ),
                 )
         return {
             "schema": "sightglass.backfill-step.v1",
             "state": state,
-            "message_count": message_count,
+            "message_count": len(message_ids),
             "processed_messages": processed,
         }
 
@@ -3000,25 +3132,6 @@ class ReaderService:
             forward_complete=forward_complete,
         )
 
-    def _read_hydrate_page(
-        self, target: _SourceTarget, snapshot: SourceSnapshot
-    ) -> tuple[SourceMessage, ...]:
-        page = self.provider.read_range(
-            target.source_account_key,
-            target.source_conversation_id,
-            after=None,
-            before=None,
-            direction="forward",
-            limit=10_001,
-            snapshot=snapshot,
-        )
-        if page.has_more_after or len(page.messages) > 10_000:
-            raise SightglassError(
-                ErrorCode.SOURCE_INCOMPLETE,
-                details={"warning_codes": ["m2_bounded_hydrate_limit_reached"]},
-            )
-        return page.messages
-
     def _anchor_target(
         self,
         anchor: str,
@@ -3249,42 +3362,55 @@ class ReaderService:
                 request_binding=request_binding,
             )
 
-        with self._source_read() as (stack, snapshot):
-            catalog_read = self._read_catalog(snapshot)
-            facts = self._catalog_facts(snapshot)
+        local_source = self._operation_provider.get() is None
+        reconcile_after = self._captured_updates_after.get()
+        reconcile_revision = self._captured_updates_reconcile_revision.get()
+        captured_ids = self._captured_updates_ids.get()
+        if local_source:
+            target = self._persisted_source_target(conversation_id)
+            committed = self.replica._effective_update_sequence(
+                conversation_id, scope_kind, scope_key, ack_delivery_id)
+            candidates = self.repository.observation_rows_after(
+                conversation_id, committed, participant_ids,
+                projection_epoch=self._projection_inventory_epoch(), limit=200)
+            captured_ids = tuple(str(row["message_id"]) for row in candidates) or None
+            if captured_ids is None:
+                reconcile_after, reconcile_revision, _ = (
+                    self.replica.fresh_updates_reconcile_position(conversation_id))
+            source_context = self._source_session(SourceScope.conversation(
+                target.source_account_key, target.source_conversation_id))
+        else:
+            source_context = self._source_read()
+        with source_context as (stack, snapshot):
+            catalog_read = _CatalogRead((), ()) if local_source else self._read_catalog(snapshot)
             target = self._source_target(catalog_read, conversation_id)
+            facts = (self._persisted_catalog_facts(target, snapshot) if local_source
+                     else self._catalog_facts(snapshot))
             participants = self._read_message_participants(target, snapshot)
             captured_page = None
-            captured_ids = None
-            if self._operation_provider.get() is not None:
-                captured_ids = self._captured_updates_ids.get()
-                if captured_ids is not None:
-                    captured_rows = self.repository.frozen_message_rows(captured_ids)
-                    if len(captured_rows) != len(captured_ids):
-                        raise SightglassError(ErrorCode.CURSOR_STALE)
-                    verified = []
-                    for row in captured_rows:
-                        if row["conversation_id"] != conversation_id:
-                            raise SightglassError(ErrorCode.CURSOR_INVALID)
-                        source = self.provider.get_message(
-                            target.source_account_key, str(row["source_message_id"]), snapshot)
-                        if source is None:
-                            raise SightglassError(ErrorCode.SOURCE_INCOMPLETE, retryable=True)
-                        verified.append(source)
-                    hydrated_messages = tuple(verified)
-                else:
-                    if self._captured_updates_reconcile_revision.get() is None:
-                        raise SightglassError(ErrorCode.QUERY_INVALID,
-                                             details={"reason": "missing_reconciliation_revision"})
-                    captured_page = self.provider.read_range(
-                        target.source_account_key, target.source_conversation_id,
-                        after=self._captured_updates_after.get(), before=None,
-                        direction="forward", limit=200, snapshot=snapshot,
-                        participant_source_ids=(),
-                    )
-                    hydrated_messages = captured_page.messages
+            if captured_ids is not None:
+                captured_rows = self.repository.frozen_message_rows(captured_ids)
+                if len(captured_rows) != len(captured_ids):
+                    raise SightglassError(ErrorCode.CURSOR_STALE)
+                verified = []
+                for row in captured_rows:
+                    if row["conversation_id"] != conversation_id:
+                        raise SightglassError(ErrorCode.CURSOR_INVALID)
+                    source = self.provider.get_message(
+                        target.source_account_key, str(row["source_message_id"]), snapshot)
+                    if source is None:
+                        raise SightglassError(ErrorCode.SOURCE_INCOMPLETE, retryable=True)
+                    verified.append(source)
+                hydrated_messages = tuple(verified)
             else:
-                hydrated_messages = self._read_hydrate_page(target, snapshot)
+                if reconcile_revision is None:
+                    raise SightglassError(ErrorCode.QUERY_INVALID,
+                                         details={"reason": "missing_reconciliation_revision"})
+                captured_page = self.provider.read_range(
+                    target.source_account_key, target.source_conversation_id,
+                    after=reconcile_after, before=None, direction="forward", limit=200,
+                    snapshot=snapshot, participant_source_ids=())
+                hydrated_messages = captured_page.messages
             prepared_hydrated_messages = self._prepare_messages(hydrated_messages)
             with self._admission(stack):
                 replay = self.replica.replay_update_request(request_id, request_binding)
@@ -3334,21 +3460,21 @@ class ReaderService:
                         )
                 if (captured_page is not None
                         and self.replica.fresh_updates_reconcile_position(conversation_id)[:2]
-                        != (self._captured_updates_after.get(),
-                            self._captured_updates_reconcile_revision.get())):
+                        != (reconcile_after,
+                            reconcile_revision)):
                     raise SightglassError(ErrorCode.CURSOR_STALE)
                 self._ingest_prepared_messages(context, prepared_hydrated_messages)
                 capture_receipt = None
                 if captured_page is not None:
                     capture_receipt = self.replica.record_captured_updates(
-                        context, snapshot, captured_page, self._captured_updates_after.get(),
-                        self._captured_updates_reconcile_revision.get())
-                if self._operation_provider.get() is not None and capture_receipt is None:
+                        context, snapshot, captured_page, reconcile_after,
+                        reconcile_revision)
+                if capture_receipt is None:
                     capture_receipt = self.replica.captured_updates_receipt(context, snapshot)
                 captured_message_ids = (tuple(opaque_id(
                     "wxmsg", str(context["account_id"]), source.source_message_id)
                     for source in hydrated_messages)
-                    if self._operation_provider.get() is not None else None)
+                    if hydrated_messages else ())
                 return self._publish_updates(
                     context=context, snapshot=snapshot, facts=facts,
                     projection=projection, conversation_id=conversation_id,
@@ -3358,10 +3484,15 @@ class ReaderService:
                     voice_policy=voice_policy, view=view, request_id=request_id,
                     request_binding=request_binding,
                     source_receipt_override=capture_receipt,
-                    capture_has_more=bool(captured_page and captured_page.has_more_after),
+                    # Verifying known observations has not reconciled the source
+                    # traversal yet. Even an empty filtered delivery must advertise
+                    # continuation so its ACK can reach the bounded discovery page.
+                    capture_has_more=bool(captured_ids is not None
+                                          or captured_page and captured_page.has_more_after),
                     captured_message_ids=captured_message_ids,
                     captured_empty_frontier=(hydrated_messages[-1].sort_key
-                                             if captured_page and hydrated_messages else None),
+                                             if captured_page and hydrated_messages
+                                             and not local_source else None),
                 )
 
     def _publish_updates(

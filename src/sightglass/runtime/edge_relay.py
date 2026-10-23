@@ -7,6 +7,8 @@ import hmac
 import os
 import random
 import re
+import select
+import signal
 import socket
 import stat
 import struct
@@ -19,7 +21,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, cast
 
 from sightglass.contracts.capture import (
     CAPTURE_VERSION,
@@ -37,7 +39,6 @@ from sightglass.source.capture.codec import (
     json_value,
     strict_json,
     typed_value,
-    validate_capture,
 )
 from sightglass.source.capture.executor import CaptureExecutor
 from sightglass.source.capture.frozen import FrozenCaptureProvider
@@ -46,6 +47,10 @@ from sightglass.source.capture.receiver import ack_matches
 from .edge import EdgeSpool
 
 MAX_RELAY_FRAME_BYTES = MAX_CAPTURE_METADATA_BYTES + MAX_CAPTURE_RESOURCE_BYTES + 64
+RELAY_HANDSHAKE_TIMEOUT_SECONDS = 30.0
+RELAY_IDLE_TIMEOUT_SECONDS = 60.0
+RELAY_ACK_TIMEOUT_SECONDS = 180.0
+RELAY_CANCEL_POLL_SECONDS = 0.05
 FIXED_EDGE_REMOTE_COMMAND = "sightglassctl edge-session"
 _EDGE_FAILURE_REASONS = frozenset(
     {"capture_unsealed", "edge_spool_pressure", "edge_storage_unavailable"}
@@ -64,12 +69,58 @@ def edge_token_hash(token: str) -> str:
     return hashlib.sha256(b"sightglass-edge-capability\x00" + token.encode()).hexdigest()
 
 
-def _read_exact(stream: IO[Any], amount: int) -> bytes:
+def _stream_fileno(stream: IO[Any]) -> int | None:
+    try:
+        return stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _read_exact(
+    stream: IO[Any],
+    amount: int,
+    *,
+    stop: threading.Event | None = None,
+    cancelled: threading.Event | None = None,
+    timeout: float | None = None,
+) -> bytes:
+    deadline = time.monotonic() + timeout if timeout is not None else None
     chunks = []
     remaining = amount
     while remaining:
+        if ((stop is not None and stop.is_set())
+                or (cancelled is not None and cancelled.is_set())):
+            raise RelayDisconnected("edge_relay_read_cancelled")
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RelayDisconnected("edge_relay_read_timeout")
+        descriptor = _stream_fileno(stream)
+        if descriptor is not None:
+            wait = RELAY_CANCEL_POLL_SECONDS
+            if deadline is not None:
+                wait = min(wait, max(0.0, deadline - time.monotonic()))
+            try:
+                os.set_blocking(descriptor, False)
+                readable, _writable, _errors = select.select([descriptor], [], [], wait)
+            except InterruptedError:
+                continue
+            except (OSError, ValueError) as exc:
+                raise RelayDisconnected("edge_relay_read_closed") from exc
+            if not readable:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise RelayDisconnected("edge_relay_read_timeout")
+                continue
         try:
-            chunk = stream.read(remaining)
+            # Bypass BufferedReader prefetch for real descriptors. select() only
+            # observes the kernel fd; avoiding read-ahead consistently also keeps
+            # the next frame's readiness aligned with that descriptor. Raw short
+            # reads let each partial frame recheck stop and its absolute deadline.
+            chunk = (
+                os.read(descriptor, remaining)
+                if descriptor is not None
+                else stream.read(remaining)
+            )
+        except (BlockingIOError, InterruptedError):
+            continue
         except (OSError, ValueError) as exc:
             raise RelayDisconnected("edge_relay_read_closed") from exc
         if not chunk:
@@ -80,12 +131,48 @@ def _read_exact(stream: IO[Any], amount: int) -> bytes:
 
 
 class FramedStream:
-    def __init__(self, reader: IO[Any], writer: IO[Any]) -> None:
+    def __init__(
+        self,
+        reader: IO[Any],
+        writer: IO[Any],
+        *,
+        stop: threading.Event | None = None,
+        closers: tuple[Any, ...] = (),
+    ) -> None:
         self.reader = reader
         self.writer = writer
+        self.stop = stop
+        self._closers = closers
+        self._cancelled = threading.Event()
         self._write_lock = threading.Lock()
 
-    def send(self, value: dict[str, Any] | SealedCapture) -> None:
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def bind_stop(self, stop: threading.Event) -> None:
+        self.stop = stop
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+        for closer in self._closers:
+            try:
+                closer.close()
+            except (OSError, ValueError):
+                pass
+
+    def _check_send(self, deadline: float) -> None:
+        if self.cancelled or (self.stop is not None and self.stop.is_set()):
+            raise RelayDisconnected("edge_relay_write_cancelled")
+        if time.monotonic() >= deadline:
+            raise RelayDisconnected("edge_relay_write_timeout")
+
+    def send(
+        self, value: dict[str, Any] | SealedCapture,
+        *, timeout: float = RELAY_ACK_TIMEOUT_SECONDS,
+    ) -> None:
+        deadline = time.monotonic() + max(0.0, timeout)
+        self._check_send(deadline)
         payload = (
             b"C" + value.to_bytes()
             if isinstance(value, SealedCapture)
@@ -93,25 +180,72 @@ class FramedStream:
         )
         if len(payload) > MAX_RELAY_FRAME_BYTES:
             raise CaptureProtocolError("relay_frame_too_large")
-        with self._write_lock:
+        while True:
+            self._check_send(deadline)
+            if self._write_lock.acquire(
+                timeout=min(RELAY_CANCEL_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
+            ):
+                break
+        try:
             try:
+                descriptor = _stream_fileno(self.writer)
+                if descriptor is not None:
+                    # All framed fd I/O bypasses Python buffering. Nonblocking
+                    # writes remain short even after readiness changes; select
+                    # followed by a large blocking write can still hang forever.
+                    os.set_blocking(descriptor, False)
                 for chunk in (struct.pack("!I", len(payload)), payload):
                     view = memoryview(chunk)
                     while view:
-                        written = self.writer.write(view)
+                        self._check_send(deadline)
+                        if descriptor is not None:
+                            try:
+                                _, writable, _ = select.select(
+                                    [], [descriptor], [],
+                                    min(RELAY_CANCEL_POLL_SECONDS,
+                                        max(0.0, deadline - time.monotonic())),
+                                )
+                                if not writable:
+                                    continue
+                                written = os.write(descriptor, view[:65_536])
+                            except (BlockingIOError, InterruptedError):
+                                continue
+                        else:
+                            written = self.writer.write(view)
                         if written is None or written <= 0:
                             raise RelayDisconnected("edge_relay_write_incomplete")
                         view = view[written:]
-                self.writer.flush()
+                # Raw fd writes are already published; flushing BufferedWriter
+                # here would reintroduce an uncancellable blocking operation.
+                self._check_send(deadline)
+                if descriptor is None:
+                    self.writer.flush()
+                    self._check_send(deadline)
             except (OSError, ValueError) as exc:
+                if isinstance(exc, RelayDisconnected):
+                    raise
                 raise RelayDisconnected("edge_relay_write_closed") from exc
+        finally:
+            self._write_lock.release()
 
-    def receive(self) -> dict[str, Any] | SealedCapture:
-        amount = struct.unpack("!I", _read_exact(self.reader, 4))[0]
+    def receive(
+        self, *, timeout: float = RELAY_IDLE_TIMEOUT_SECONDS
+    ) -> dict[str, Any] | SealedCapture:
+        if self.cancelled:
+            raise RelayDisconnected("edge_relay_read_cancelled")
+        deadline = time.monotonic() + max(0.0, timeout)
+
+        def read(amount: int) -> bytes:
+            remaining = max(0.0, deadline - time.monotonic())
+            return _read_exact(
+                self.reader, amount, stop=self.stop, cancelled=self._cancelled, timeout=remaining
+            )
+
+        amount = struct.unpack("!I", read(4))[0]
         if not 2 <= amount <= MAX_RELAY_FRAME_BYTES:
             raise CaptureProtocolError("relay_frame_size_invalid")
-        kind = _read_exact(self.reader, 1)
-        payload = _read_exact(self.reader, amount - 1)
+        kind = read(1)
+        payload = read(amount - 1)
         if kind == b"C":
             return SealedCapture.from_bytes(payload)
         if kind != b"J":
@@ -203,6 +337,7 @@ class CaptureBroker:
         self._by_request: dict[str, _BrokerWork] = {}
         self._inflight: _BrokerWork | None = None
         self._session_lock = threading.Lock()
+        self._stop = threading.Event()
         self._closed = False
         self._connected = False
 
@@ -314,7 +449,16 @@ class CaptureBroker:
             if not ack_matches(envelope, terminal):
                 raise CaptureProtocolError("batch_identity_conflict")
             return terminal
-        validate_capture(envelope, self.expected, require_fresh=False)
+        # Unknown captures can only enter through CoreCapture's exact durable request
+        # recovery. Checking current policy here would strand valid old pending work
+        # after a policy tightening before its terminal rejection can commit.
+        if (
+            document.request.account_id != self.expected.account_id
+            or document.origin.source_instance_id != self.expected.source_instance_id
+            or document.origin.origin_epoch != self.expected.origin_epoch
+            or document.origin.egress_revision != self.expected.egress_revision
+        ):
+            raise CaptureProtocolError("capture_expectation_mismatch")
         with self._condition:
             work = self._by_request.get(document.request.request_id)
             if work is not None:
@@ -388,6 +532,8 @@ class CaptureBroker:
     def _wait_for_finalization(self, ticket: PreparedRemoteCapture) -> CaptureAck | None:
         deadline = time.monotonic() + self.finalization_timeout
         while True:
+            if self._stop.is_set():
+                return None
             ack = ticket.durable_ack
             if ack is not None:
                 return ack
@@ -409,11 +555,12 @@ class CaptureBroker:
                 return ack
 
     def serve_connection(self, channel: FramedStream) -> None:
+        channel.bind_stop(self._stop)
         if not self._session_lock.acquire(blocking=False):
             raise CaptureProtocolError("edge_stream_already_connected")
         authenticated = False
         try:
-            hello = channel.receive()
+            hello = channel.receive(timeout=RELAY_HANDSHAKE_TIMEOUT_SECONDS)
             hello_keys = {
                 "schema",
                 "kind",
@@ -460,7 +607,9 @@ class CaptureBroker:
                 self._connected = True
                 self._condition.notify_all()
             while not self._closed:
-                frame = channel.receive()
+                # The session loop itself is bounded by the edge acknowledgment
+                # deadline; partial frames cannot pin a closed broker indefinitely.
+                frame = channel.receive(timeout=RELAY_ACK_TIMEOUT_SECONDS)
                 if self.ownership_guard is not None:
                     self.ownership_guard()
                 if isinstance(frame, SealedCapture):
@@ -515,6 +664,7 @@ class CaptureBroker:
             self._session_lock.release()
 
     def close(self) -> None:
+        self._stop.set()
         with self._condition:
             self._closed = True
             for work in self._by_request.values():
@@ -531,8 +681,58 @@ class CaptureBrokerServer:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._connections: set[socket.socket] = set()
+        self._channels: set[FramedStream] = set()
+        self._connection_threads: set[threading.Thread] = set()
         self._connections_lock = threading.Lock()
-        self._socket_identity: int | None = None
+        self._socket_identity: tuple[int, int, int, int] | None = None
+
+    @property
+    def running(self) -> bool:
+        thread = self._thread
+        return self._socket is not None and thread is not None and thread.is_alive()
+
+    def _socket_metadata(self) -> tuple[int, int, int, int]:
+        metadata = self.socket_path.lstat()
+        return (
+            int(metadata.st_dev),
+            int(metadata.st_ino),
+            int(metadata.st_uid),
+            int(stat.S_IMODE(metadata.st_mode)),
+        )
+
+    def _probe_socket(self) -> None:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(0.25)
+        try:
+            probe.connect(str(self.socket_path))
+        finally:
+            probe.close()
+
+    def _prepare_socket_path(self) -> None:
+        path = self.socket_path
+        if not (path.exists() or path.is_symlink()):
+            return
+        metadata = path.lstat()
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISSOCK(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise CaptureProtocolError("broker_socket_path_unsafe")
+        before = self._socket_metadata()
+        try:
+            self._probe_socket()
+        except (ConnectionRefusedError, FileNotFoundError):
+            # A dead listener leaves an inode at this exact path. Re-check all stable
+            # identity fields before removing it so a replacement cannot be stolen.
+            if self._socket_metadata() != before:
+                raise CaptureProtocolError("broker_socket_changed_during_probe")
+            path.unlink()
+            return
+        except OSError as exc:
+            raise CaptureProtocolError("broker_socket_probe_failed") from exc
+        raise CaptureProtocolError("broker_socket_already_exists")
 
     def start(self) -> None:
         parent = self.socket_path.parent
@@ -544,19 +744,34 @@ class CaptureBrokerServer:
             or stat.S_IMODE(metadata.st_mode) != 0o700
         ):
             raise CaptureProtocolError("broker_directory_not_private")
-        if self.socket_path.exists() or self.socket_path.is_symlink():
-            raise CaptureProtocolError("broker_socket_already_exists")
+        self._prepare_socket_path()
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        listener.bind(str(self.socket_path))
-        os.chmod(self.socket_path, 0o600)
-        listener.listen(2)
-        listener.settimeout(0.2)
-        self._socket = listener
-        self._socket_identity = self.socket_path.lstat().st_ino
-        self._thread = threading.Thread(
-            target=self._serve, name="sightglass-capture-broker", daemon=True
-        )
-        self._thread.start()
+        try:
+            listener.bind(str(self.socket_path))
+            self._socket_identity = self._socket_metadata()
+            os.chmod(self.socket_path, 0o600)
+            self._socket_identity = self._socket_metadata()
+            listener.listen(2)
+            listener.settimeout(0.2)
+            self._socket = listener
+            self._socket_identity = self._socket_metadata()
+            self._thread = threading.Thread(
+                target=self._serve, name="sightglass-capture-broker", daemon=True
+            )
+            self._thread.start()
+        except BaseException:
+            self._stop.set()
+            self._socket = None
+            self._thread = None
+            listener.close()
+            try:
+                if (self._socket_identity is not None
+                        and self._socket_metadata() == self._socket_identity):
+                    self.socket_path.unlink()
+            except OSError:
+                pass
+            self._socket_identity = None
+            raise
 
     def _serve(self) -> None:
         listener = self._socket
@@ -570,7 +785,18 @@ class CaptureBrokerServer:
                 break
             with self._connections_lock:
                 self._connections.add(connection)
-            threading.Thread(target=self._connection, args=(connection,), daemon=True).start()
+                thread = threading.Thread(
+                    target=self._connection, args=(connection,),
+                    name="sightglass-capture-connection", daemon=True)
+                self._connection_threads.add(thread)
+            try:
+                thread.start()
+            except BaseException:
+                with self._connections_lock:
+                    self._connections.discard(connection)
+                    self._connection_threads.discard(thread)
+                connection.close()
+                raise
 
     def _connection(self, connection: socket.socket) -> None:
         from .ipc import peer_effective_ids
@@ -582,14 +808,26 @@ class CaptureBrokerServer:
             # A healthy local capture may use the executor's 150-second ceiling.
             # Foreground waiters have their own shorter deadline; do not force a
             # connection failure while the edge is closing that bounded session.
-            connection.settimeout(180.0)
-            with connection.makefile("rb") as reader, connection.makefile("wb") as writer:
-                self.broker.serve_connection(FramedStream(reader, writer))
+            connection.settimeout(RELAY_ACK_TIMEOUT_SECONDS)
+            with (
+                connection.makefile("rb", buffering=0) as reader,
+                connection.makefile("wb", buffering=0) as writer,
+            ):
+                channel = FramedStream(
+                    cast(IO[Any], reader), cast(IO[Any], writer), closers=(connection,))
+                with self._connections_lock:
+                    self._channels.add(channel)
+                try:
+                    self.broker.serve_connection(channel)
+                finally:
+                    with self._connections_lock:
+                        self._channels.discard(channel)
         except (RuntimeError, RelayDisconnected, OSError):
             pass  # Content-free fail closed. Pending sender bytes stay durable.
         finally:
             with self._connections_lock:
                 self._connections.discard(connection)
+                self._connection_threads.discard(threading.current_thread())
             connection.close()
 
     def close(self) -> None:
@@ -597,20 +835,36 @@ class CaptureBrokerServer:
         self.broker.close()
         if self._socket is not None:
             self._socket.close()
-        with self._connections_lock:
-            for connection in self._connections:
-                try:
-                    connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-        if (
-            self._socket_identity is not None
-            and self.socket_path.exists()
-            and self.socket_path.lstat().st_ino == self._socket_identity
-        ):
-            self.socket_path.unlink()
+            if self._thread.is_alive():
+                raise RuntimeError("capture listener did not stop")
+        with self._connections_lock:
+            connections = tuple(self._connections)
+            channels = tuple(self._channels)
+            threads = tuple(self._connection_threads)
+        for channel in channels:
+            channel.cancel()
+        for connection in connections:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        deadline = time.monotonic() + 3.0
+        for thread in threads:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in threads):
+            raise RuntimeError("capture connections did not stop")
+        if self._socket_identity is not None and self.socket_path.exists():
+            try:
+                current = self._socket_metadata()
+            except OSError:
+                current = None
+            if current is not None and current == self._socket_identity:
+                self.socket_path.unlink()
+        self._socket = None
+        self._thread = None
+        self._socket_identity = None
 
 
 class EdgeSession:
@@ -634,6 +888,7 @@ class EdgeSession:
 
     def run(self, channel: FramedStream, *, stop: threading.Event | None = None) -> None:
         stop = stop or threading.Event()
+        channel.bind_stop(stop)
         if self.spool.epoch_lost:
             raise CaptureProtocolError("epoch_loss_requires_explicit_recovery")
         self._require_owned()
@@ -651,7 +906,7 @@ class EdgeSession:
                 "core_generation": self.core_generation,
             }
         )
-        if channel.receive() != {
+        if channel.receive(timeout=RELAY_HANDSHAKE_TIMEOUT_SECONDS) != {
             "schema": CAPTURE_VERSION,
             "kind": "ready",
             "core_generation": self.core_generation,
@@ -662,7 +917,7 @@ class EdgeSession:
             pending = self.spool.pending()
             if pending is not None:
                 channel.send(pending)
-                response = channel.receive()
+                response = channel.receive(timeout=RELAY_ACK_TIMEOUT_SECONDS)
                 if response == {"schema": CAPTURE_VERSION, "kind": "retry"}:
                     raise RelayDisconnected("capture_finalization_pending")
                 if (
@@ -778,21 +1033,47 @@ class SSHRelayConnector:
     @contextmanager
     def connect(self) -> Iterator[FramedStream]:
         process = subprocess.Popen(
-            self.argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            self.argv(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
         assert process.stdin is not None and process.stdout is not None
+        channel = FramedStream(
+            process.stdout,
+            process.stdin,
+            closers=(process.stdin, process.stdout),
+        )
         try:
-            yield FramedStream(process.stdout, process.stdin)
+            yield channel
         finally:
-            process.stdin.close()
-            process.stdout.close()
-            if process.poll() is None:
-                process.terminate()
+            channel.cancel()
+            for stream in (process.stdin, process.stdout):
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+            # The SSH leader may have exited while a descendant still owns pipes
+            # or transport state. The entire dedicated process group is ours.
+            self._signal_process_tree(process, signal_number=signal.SIGTERM)
             try:
                 process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
-                process.kill()
+                self._signal_process_tree(process, signal_number=signal.SIGKILL)
                 process.wait()
+            finally:
+                self._signal_process_tree(process, signal_number=signal.SIGKILL)
+
+    @staticmethod
+    def _signal_process_tree(
+        process: subprocess.Popen[bytes], *, signal_number: int
+    ) -> None:
+        try:
+            os.killpg(process.pid, signal_number)
+        except (ProcessLookupError, PermissionError):
+            if signal_number == signal.SIGKILL:
+                process.kill()
 
 
 def run_core_stdio(

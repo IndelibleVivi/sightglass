@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import stat
@@ -42,7 +43,20 @@ class ResourceObjectStore:
     ) -> tuple[CachedObject, str]:
         digest = self.digest(data)
         destination = self.objects / digest
-        if not destination.exists():
+        # A directory lock coordinates threads, processes and store instances without
+        # persistent per-digest lock files. Rename never publishes a two-link inode.
+        lock = os.open(self.objects, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return self._put_locked(data, digest, destination, mime_type, origin, maintenance)
+        finally:
+            os.close(lock)
+
+    def _put_locked(
+        self, data: bytes, digest: str, destination: Path, mime_type: str,
+        origin: str, maintenance: bool,
+    ) -> tuple[CachedObject, str]:
+        if not os.path.lexists(destination):
             reservation = (
                 self.storage.reserve(len(data) + 4096, maintenance=maintenance)
                 if self.storage else nullcontext()
@@ -56,10 +70,17 @@ class ResourceObjectStore:
                         handle.write(data)
                         handle.flush()
                         os.fsync(handle.fileno())
-                    try:
-                        os.link(temporary, destination, follow_symlinks=False)
-                    except FileExistsError:
-                        pass
+                    os.rename(temporary, destination)
+                    # Persist both the destination entry and removal from the source
+                    # directory: this rename crosses two directory namespaces.
+                    for directory in (self.objects, self.tmp):
+                        directory_fd = os.open(
+                            directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        )
+                        try:
+                            os.fsync(directory_fd)
+                        finally:
+                            os.close(directory_fd)
                 finally:
                     temporary.unlink(missing_ok=True)
                     if self.storage is not None:

@@ -7,6 +7,7 @@ import os
 import socket
 import struct
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -60,10 +61,17 @@ def peer_effective_ids(connection: socket.socket) -> tuple[int, int]:
     return int(uid.value), int(gid.value)
 
 
-def _receive_exact(connection: socket.socket, size: int) -> bytes:
+def _receive_exact(
+    connection: socket.socket, size: int, *, deadline: float | None = None,
+) -> bytes:
     chunks: list[bytes] = []
     remaining = size
     while remaining:
+        if deadline is not None:
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise TimeoutError("IPC frame deadline expired")
+            connection.settimeout(remaining_seconds)
         chunk = connection.recv(remaining)
         if not chunk:
             raise IPCError("IPC connection closed before the frame completed")
@@ -72,12 +80,14 @@ def _receive_exact(connection: socket.socket, size: int) -> bytes:
     return b"".join(chunks)
 
 
-def receive_frame(connection: socket.socket) -> dict[str, Any]:
-    length = struct.unpack("!I", _receive_exact(connection, 4))[0]
+def receive_frame(
+    connection: socket.socket, *, deadline: float | None = None,
+) -> dict[str, Any]:
+    length = struct.unpack("!I", _receive_exact(connection, 4, deadline=deadline))[0]
     if length < 2 or length > MAX_FRAME_BYTES:
         raise IPCError("IPC frame size is invalid")
     try:
-        value = json.loads(_receive_exact(connection, length).decode("utf-8"))
+        value = json.loads(_receive_exact(connection, length, deadline=deadline).decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise IPCError("IPC frame is not strict UTF-8 JSON") from exc
     if not isinstance(value, dict):

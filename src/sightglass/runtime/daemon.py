@@ -140,6 +140,8 @@ TOOL_NAMES = {
     "wechat_search_resource_text",
 }
 MAX_CONCURRENT_IPC_CONNECTIONS = 16
+RESERVED_IPC_CONTROL_CONNECTIONS = 4
+IPC_FRAME_TIMEOUT_SECONDS = 2.0
 IPC_HANDLER_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 TOOL_OPERATION_TIMEOUT_SECONDS = 25.0
 STORAGE_HISTORY_STOP_TIMEOUT_SECONDS = 5.0
@@ -251,6 +253,15 @@ class SightglassDaemon:
             raise RuntimeError("operator credential does not match the private config")
         self.lanes = RuntimeLanes()
         self.tools = build_daemon_tools(self.config, secret_store=self.secret_store)
+        try:
+            self._initialize_runtime(runtime_lock)
+        except BaseException:
+            self.tools.close()
+            raise
+
+    def _initialize_runtime(self, runtime_lock: TextIO | None) -> None:
+        # No runtime workers start during construction. The prepared tools own
+        # provider/receipt resources and must close if any assembly step fails.
         from .capture_core import CoreCapture
 
         self.capture_core = (
@@ -281,6 +292,14 @@ class SightglassDaemon:
         self._state_gate = _StateGate()
         self._metrics_lock = threading.Lock()
         self._connection_slots = threading.BoundedSemaphore(MAX_CONCURRENT_IPC_CONNECTIONS)
+        self._reader_request_slots = threading.BoundedSemaphore(
+            MAX_CONCURRENT_IPC_CONNECTIONS - RESERVED_IPC_CONTROL_CONNECTIONS)
+        self._lifecycle_lock = threading.RLock()
+        self._lifecycle_state = "starting"
+        self._serving = False
+        self._runtime_closed = False
+        self._owned_tools = [self.tools]
+        self._socket_owned = False
         self._operations_lock = threading.RLock()
         self._operations: dict[str, _InflightOperation] = {}
         self._joined_tool_calls = 0
@@ -352,6 +371,7 @@ class SightglassDaemon:
 
     def _close_resource_worker(self) -> None:
         self.resource_worker.stop()
+        self._require_worker_stopped(self.resource_worker, "resource")
         self._claim_resource_leases()
 
     def _resolve_voice_transcriber(self, tools) -> Transcriber | None:
@@ -381,6 +401,7 @@ class SightglassDaemon:
         """Stop this context's worker, wake its waiters, and fence out its leases."""
 
         self.voice_worker.stop()
+        self._require_worker_stopped(self.voice_worker, "voice")
         self._transcript_waiters.notify()
         self._claim_voice_leases()
 
@@ -510,6 +531,7 @@ class SightglassDaemon:
         handle = self._lock_handle
         if handle is None:
             handle = acquire_runtime_lock(self.lock_path)
+        self._lock_handle = handle
         handle.seek(0)
         handle.truncate()
         json.dump(
@@ -575,64 +597,114 @@ class SightglassDaemon:
         self.derived_worker.wake()
         self.semantic_worker.wake()
 
+    @staticmethod
+    def _require_worker_stopped(worker: Any, name: str) -> None:
+        thread = getattr(worker, "_thread", None)
+        if thread is not None and thread.is_alive():
+            raise RuntimeError(f"{name} worker did not stop")
+
     def _start_runtime_workers(self) -> None:
-        if self.capture_core is not None:
-            self.capture_core.start()
-        self.search_preparation.start()
-        self._claim_resource_leases()
-        self.source_worker.start()
-        self.derived_worker.start()
-        self.semantic_worker.start()
-        self.resource_worker.start()
-        self.voice_worker.start()
-        self._start_storage_history()
+        with self._lifecycle_lock:
+            if self.capture_core is not None:
+                self.capture_core.start()
+            self.search_preparation.start()
+            self._claim_resource_leases()
+            self._claim_voice_leases()
+            self.source_worker.start()
+            self.derived_worker.start()
+            self.semantic_worker.start()
+            self.resource_worker.start()
+            self.voice_worker.start()
+            self._start_storage_history()
 
     def _stop_runtime_workers(self) -> None:
-        if not self.search_preparation.stop():
-            raise RuntimeError("search preparation did not stop; refusing runtime reload")
-        if not self.semantic_worker.stop():
-            raise RuntimeError("semantic worker did not stop; refusing runtime reload")
-        if not self.derived_worker.stop():
-            raise RuntimeError("derived index worker did not stop; refusing runtime reload")
-        if not self._stop_storage_history():
-            raise RuntimeError("storage history recorder did not stop; refusing runtime reload")
-        self._close_resource_worker()
-        self._close_voice_worker()
-        self.source_worker.stop()
-        if self.source_worker.status().get("running"):
-            raise RuntimeError("source worker did not stop; refusing runtime reload")
-        if self.capture_core is not None:
-            self.capture_core.close()
+        # Even one failed join must not leave later workers running unnoticed.
+        # Callers may retry compensation, but never replace an unquiesced owner.
+        with self._lifecycle_lock:
+            failures = []
+            steps = [
+                ("preparation", self.search_preparation.stop),
+                ("semantic", self.semantic_worker.stop),
+                ("derived", self.derived_worker.stop),
+                ("history", self._stop_storage_history),
+                ("resource", self._close_resource_worker),
+                ("voice", self._close_voice_worker),
+                ("source", self.source_worker.stop),
+            ]
+            if self.capture_core is not None:
+                steps.append(("capture", self.capture_core.close))
+            for name, stop in steps:
+                try:
+                    if stop() is False:
+                        raise RuntimeError(f"{name} worker did not stop")
+                except BaseException as error:
+                    failures.append(error)
+            for name in ("search_preparation", "semantic_worker", "derived_worker",
+                         "resource_worker", "voice_worker", "source_worker"):
+                try:
+                    self._require_worker_stopped(getattr(self, name), name)
+                except RuntimeError as error:
+                    failures.append(error)
+            if failures:
+                raise RuntimeError("runtime workers could not be quiesced") from failures[0]
 
     def _reload(self, config: SightglassConfig) -> None:
-        # The operator holds the state-gate writer: current reader calls have drained.
-        # Prepare/probe without closing the usable generation. Retain it until config
-        # publication and every replacement worker's start have succeeded.
-        candidate = build_daemon_tools(config, secret_store=self.secret_store)
-        previous_config, previous_tools = self.config, self.tools
-        config_published = False
-        swapped = False
-        try:
-            if candidate.service.repository.database.schema_version != self.database.schema_version:
-                raise RuntimeError(
-                    "replacement runtime schema does not match the active generation"
-                )
-            self._stop_runtime_workers()
-            swapped = True
-            self._install_runtime(config, candidate)
-            config_published = True
-            self.config_store.save(config)
-            self._start_runtime_workers()
-        except BaseException:
-            if swapped:
+        # The state-gate writer drains reader calls. This lock also serializes
+        # startup, shutdown and every compensation attempt under one owner.
+        with self._lifecycle_lock:
+            if self._stopping.is_set() or self._runtime_closed:
+                raise RuntimeError("runtime is stopping")
+            previous_config, previous_tools = self.config, self.tools
+            previous_state = self._lifecycle_state
+            self._lifecycle_state = "reloading"
+            candidate = None
+            stopping_started = False
+            config_published = False
+            try:
+                candidate = build_daemon_tools(config, secret_store=self.secret_store)
+                self._owned_tools.append(candidate)
+                if (candidate.service.repository.database.schema_version
+                        != self.database.schema_version):
+                    raise RuntimeError("replacement schema does not match active generation")
+                stopping_started = True
                 self._stop_runtime_workers()
-                if config_published:
-                    self.config_store.save(previous_config)
-                self._install_runtime(previous_config, previous_tools)
+                self._install_runtime(config, candidate)
+                config_published = True
+                self.config_store.save(config)
                 self._start_runtime_workers()
-            candidate.close()
-            raise
-        previous_tools.close()
+                self._lifecycle_state = "ready"
+            except BaseException:
+                if stopping_started:
+                    try:
+                        # A partial stop/start can leave either generation active.
+                        # Confirm all its workers stopped before constructing another.
+                        self._stop_runtime_workers()
+                        if config_published:
+                            self.config_store.save(previous_config)
+                        self._install_runtime(previous_config, previous_tools)
+                        self._start_runtime_workers()
+                    except BaseException:
+                        self._lifecycle_state = "degraded"
+                        self.last_error_code = "runtime_recovery_failed"
+                    else:
+                        self._lifecycle_state = "ready"
+                else:
+                    self._lifecycle_state = previous_state
+                if candidate is not None and candidate is not self.tools:
+                    self._close_tools(candidate)
+                raise
+            try:
+                for tools in tuple(self._owned_tools):
+                    if tools is not self.tools:
+                        self._close_tools(tools)
+            except BaseException:
+                self._lifecycle_state = "degraded"
+                self.last_error_code = "runtime_cleanup_failed"
+                raise
+
+    def _close_tools(self, tools: Any) -> None:
+        tools.close()
+        self._owned_tools.remove(tools)
 
     def status(self) -> dict[str, Any]:
         cache = cache_status(self.database)
@@ -642,7 +714,8 @@ class SightglassDaemon:
             total_bridge_calls = self.total_bridge_calls
         return {
             "schema": "sightglass.daemon-status.v1",
-            "ready": not self._stopping.is_set(),
+            "ready": self._lifecycle_state == "ready" and not self._stopping.is_set(),
+            "lifecycle_state": self._lifecycle_state,
             "pid": os.getpid(),
             "instance_id": self.instance_id,
             "uptime_seconds": max(0.0, time.time() - self.started_at),
@@ -819,7 +892,10 @@ class SightglassDaemon:
         else:
             return SightglassError(ErrorCode.QUERY_INVALID).as_dict()
         if result.get("schema") == "sightglass.status.v1":
+            if self._lifecycle_state != "ready":
+                result["ready"] = False
             result["runtime"] = {
+                "lifecycle_state": self._lifecycle_state,
                 "operations": self._operation_status(),
                 "work_lanes": self._lane_status(),
                 "resource_runtime": self.tools.service.resource_service.runtime_status(),
@@ -844,6 +920,8 @@ class SightglassDaemon:
             if lease is None:
                 return self._busy_result(WorkClass.LOCAL_READ)
             with self._state_gate.read():
+                if self._lifecycle_state != "ready":
+                    return self._runtime_unavailable()
                 return self.tools.wechat_read_transcripts(**arguments)
 
     def _wait_ceiling_ms(self) -> int:
@@ -944,7 +1022,7 @@ class SightglassDaemon:
             self.total_bridge_calls += 1
             self.active_bridge_calls += 1
         try:
-            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS):
+            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS, cancelled=self._stopping):
                 requested_ms = bound_wait_ms(
                     arguments.get("wait_ms"), ceiling_ms=self._wait_ceiling_ms()
                 )
@@ -1359,6 +1437,12 @@ class SightglassDaemon:
                     raise RuntimeError("operation diagnostics require the operator role")
                 return self._operation_status(include_stack=include_stack)
             return self.status()
+        if method == "daemon.shutdown":
+            # Cancellation/control cannot wait behind the reader it must stop.
+            self._stopping.set()
+            return {"stopping": True, "instance_id": self.instance_id}
+        if method in {"operator.policy.status", "operator.backfill.status"}:
+            return self._dispatch_operator(method, params)
         if method == "operator.storage.explain":
             with self._storage_diagnostic_cancellation(
                 connection, deadline_seconds=params.get("deadline_seconds", 10.0)
@@ -1366,16 +1450,20 @@ class SightglassDaemon:
                 with self._state_gate.read():
                     return self._dispatch_operator(method, params)
         if method == "operator.maintenance.observations.inspect":
-            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS):
+            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS, cancelled=self._stopping):
                 with self._state_gate.read():
                     return self._dispatch_operator(method, params)
         if method == "tools.call" and params.get("name") == "wechat_status":
             return self._dispatch_tool(params)
+        if method == "tools.call" and self._lifecycle_state != "ready":
+            return self._runtime_unavailable()
         if method == "tools.call" and params.get("name") == "wechat_read_transcripts":
             return self._dispatch_transcripts(params, connection=connection)
         if method == "tools.call":
-            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS):
+            with operation_budget(TOOL_OPERATION_TIMEOUT_SECONDS, cancelled=self._stopping):
                 with self._state_gate.read():
+                    if self._lifecycle_state != "ready":
+                        return self._runtime_unavailable()
                     if params.get("name") == "wechat_read_resource":
                         # The resource service changes lanes at the acquisition and
                         # derivation boundaries; keeping a top-level slot here would
@@ -1400,6 +1488,12 @@ class SightglassDaemon:
                     )
         with self._state_gate.write():
             return self._dispatch_operator(method, params)
+
+    @staticmethod
+    def _runtime_unavailable() -> dict[str, Any]:
+        return SightglassError(
+            ErrorCode.SERVICE_UNAVAILABLE, retryable=True,
+            details={"reason": "runtime_not_ready"}).as_dict()
 
     @contextmanager
     def _storage_diagnostic_cancellation(
@@ -1447,7 +1541,8 @@ class SightglassDaemon:
             peer_uid, _peer_gid = peer_effective_ids(connection)
             if peer_uid != os.geteuid():
                 raise RuntimeError("IPC peer is not the daemon owner")
-            request = receive_frame(connection)
+            request = receive_frame(
+                connection, deadline=time.monotonic() + IPC_FRAME_TIMEOUT_SECONDS)
             request_id = request.get("id")
             if (
                 request.get("version") != IPC_VERSION
@@ -1457,6 +1552,7 @@ class SightglassDaemon:
                 or not isinstance(request.get("params", {}), dict)
             ):
                 raise RuntimeError("invalid IPC request envelope")
+            connection.settimeout(60)
             role = authenticated_role(
                 request["token"],
                 reader_token_hash=self.config.reader_token_hash,
@@ -1464,12 +1560,22 @@ class SightglassDaemon:
             )
             if role is None:
                 raise RuntimeError("IPC authentication failed")
-            result = self._dispatch(
-                role,
-                request["method"],
-                request.get("params", {}),
-                connection=connection,
-            )
+            # Authenticated ordinary reader work, including single-flight
+            # followers, cannot occupy the status/control connection reserve.
+            reader_work = (role == "reader" and request["method"] == "tools.call"
+                           and request.get("params", {}).get("name") != "wechat_status")
+            admitted = not reader_work or self._reader_request_slots.acquire(blocking=False)
+            if not admitted:
+                result = SightglassError(
+                    ErrorCode.SERVICE_BUSY, retryable=True,
+                    details={"reason": "ipc_reader_capacity", "retry_after_ms": 250}).as_dict()
+            else:
+                try:
+                    result = self._dispatch(
+                        role, request["method"], request.get("params", {}), connection=connection)
+                finally:
+                    if reader_work:
+                        self._reader_request_slots.release()
             response = {
                 "version": IPC_VERSION,
                 "id": request_id,
@@ -1506,36 +1612,77 @@ class SightglassDaemon:
 
     def shutdown(self) -> None:
         self._stopping.set()
-        preparation_stopped = self.search_preparation.stop()
-        semantic_stopped = self.semantic_worker.stop()
-        self.derived_worker.stop()
-        self._stop_storage_history()
-        self._close_resource_worker()
-        self._close_voice_worker()
-        self.source_worker.stop()
-        if semantic_stopped and preparation_stopped:
-            self.tools.close()
         if self._server is not None:
             self._server.close()
+        with self._lifecycle_lock:
+            if not self._serving:
+                self._finish_runtime()
+
+    def _finish_runtime(self) -> None:
+        """One owner closes resources only after every worker is quiescent."""
+        with self._lifecycle_lock:
+            if self._runtime_closed:
+                return
+            self._lifecycle_state = "stopping"
+            stopped = False
+            try:
+                self._stop_runtime_workers()
+                stopped = True
+            except BaseException:
+                self._lifecycle_state = "degraded"
+                self.last_error_code = "runtime_cleanup_failed"
+            if self._server is not None:
+                self._server.close()
+            deadline = time.monotonic() + IPC_HANDLER_SHUTDOWN_TIMEOUT_SECONDS
+            with self._connection_threads_lock:
+                threads = tuple(self._connection_threads)
+            for thread in threads:
+                if thread is threading.current_thread():
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                thread.join(timeout=remaining)
+            stopped = stopped and not any(thread.is_alive() for thread in threads
+                                          if thread is not threading.current_thread())
+            if not stopped:
+                self._lifecycle_state = "degraded"
+                self.last_error_code = "runtime_cleanup_failed"
+            if self._socket_owned:
+                self.config.socket_path.unlink(missing_ok=True)
+                self._socket_owned = False
+            if stopped:
+                try:
+                    for tools in tuple(self._owned_tools):
+                        self._close_tools(tools)
+                except BaseException:
+                    self._lifecycle_state = "degraded"
+                    self.last_error_code = "runtime_cleanup_failed"
+                    return
+                if self._lock_handle is not None:
+                    release_runtime_lock(self._lock_handle)
+                    self._lock_handle = None
+                self._runtime_closed = True
+                self._lifecycle_state = "stopped"
+            # A surviving worker keeps its DB/tools and runtime lock. Releasing
+            # ownership here would permit another daemon to overlap that writer.
 
     def serve_forever(self, *, install_signal_handlers: bool = True) -> None:
-        self._acquire_process_lock()
-        self._server = self._open_socket()
-        if self.capture_core is not None:
-            self.capture_core.start()
-        self.search_preparation.start()
-        self._claim_resource_leases()
-        self._claim_voice_leases()
-        self.source_worker.start()
-        self.derived_worker.start()
-        self.semantic_worker.start()
-        self.resource_worker.start()
-        self.voice_worker.start()
-        self._start_storage_history()
-        if install_signal_handlers:
-            signal.signal(signal.SIGTERM, lambda _signum, _frame: self.shutdown())
-            signal.signal(signal.SIGINT, lambda _signum, _frame: self.shutdown())
+        with self._lifecycle_lock:
+            if self._serving or self._runtime_closed:
+                raise RuntimeError("runtime already served or closed")
+            self._serving = True
+            self._lifecycle_state = "starting"
         try:
+            with self._lifecycle_lock:
+                self._acquire_process_lock()
+                self._server = self._open_socket()
+                self._socket_owned = True
+                self._start_runtime_workers()
+                self._lifecycle_state = "ready"
+            if install_signal_handlers:
+                signal.signal(signal.SIGTERM, lambda _signum, _frame: self.shutdown())
+                signal.signal(signal.SIGINT, lambda _signum, _frame: self.shutdown())
             while not self._stopping.is_set():
                 try:
                     connection, _address = self._server.accept()
@@ -1551,42 +1698,25 @@ class SightglassDaemon:
                         break
                 else:
                     thread = threading.Thread(
-                        target=self._serve_connection,
-                        args=(connection,),
-                        name="sightglass-ipc",
-                        daemon=True,
-                    )
+                        target=self._serve_connection, args=(connection,),
+                        name="sightglass-ipc", daemon=True)
                     with self._connection_threads_lock:
                         self._connection_threads.add(thread)
-                    thread.start()
+                    try:
+                        thread.start()
+                    except BaseException:
+                        with self._connection_threads_lock:
+                            self._connection_threads.discard(thread)
+                        self._connection_slots.release()
+                        connection.close()
+                        raise
                     continue
                 break
         finally:
-            if self.capture_core is not None:
-                self.capture_core.close()
-            preparation_stopped = self.search_preparation.stop()
-            semantic_stopped = self.semantic_worker.stop()
-            self.derived_worker.stop()
-            self._stop_storage_history()
-            self._close_resource_worker()
-            self._close_voice_worker()
-            self.source_worker.stop()
-            if semantic_stopped and preparation_stopped:
-                self.tools.close()
-            if self._server is not None:
-                self._server.close()
-            deadline = time.monotonic() + IPC_HANDLER_SHUTDOWN_TIMEOUT_SECONDS
-            with self._connection_threads_lock:
-                connection_threads = tuple(self._connection_threads)
-            for thread in connection_threads:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                thread.join(timeout=remaining)
-            self.config.socket_path.unlink(missing_ok=True)
-            if self._lock_handle is not None:
-                release_runtime_lock(self._lock_handle)
-                self._lock_handle = None
+            self._stopping.set()
+            with self._lifecycle_lock:
+                self._serving = False
+                self._finish_runtime()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1601,10 +1731,13 @@ def main(argv: list[str] | None = None) -> None:
     config = store.load()
     runtime_lock = acquire_runtime_lock(config.socket_path.parent / "sightglassd.lock")
     try:
-        SightglassDaemon(config_store=store, runtime_lock=runtime_lock).serve_forever()
-    finally:
-        if not runtime_lock.closed:
-            release_runtime_lock(runtime_lock)
+        daemon = SightglassDaemon(config_store=store, runtime_lock=runtime_lock)
+    except BaseException:
+        release_runtime_lock(runtime_lock)
+        raise
+    # Ownership transfers to the constructed daemon, including failed-start
+    # cleanup. Never unlock a generation whose worker could not be stopped.
+    daemon.serve_forever()
 
 
 if __name__ == "__main__":

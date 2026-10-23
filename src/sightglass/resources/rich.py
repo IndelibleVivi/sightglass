@@ -141,26 +141,35 @@ def _local_name(value: str) -> str:
 def _xml_root(data: bytes) -> tuple[ET.Element, int, int]:
     if len(data) > MAX_XML_BYTES:
         raise _too_large("xml_bytes")
-    folded = data.lower()
-    if b"<!doctype" in folded or b"<!entity" in folded:
-        raise _blocked("xml_dtd_or_entity")
+    class BoundedTreeBuilder(ET.TreeBuilder):
+        nodes = 0
+        depth = 0
+        maximum_depth = 0
+
+        def doctype(self, name: str, pubid: str | None, system: str | None) -> None:
+            # Expat decodes the document encoding before invoking this hook.
+            raise _blocked("xml_dtd_or_entity")
+
+        def start(self, tag: str, attrs: dict[str, str]) -> ET.Element:
+            self.nodes += 1
+            self.depth += 1
+            self.maximum_depth = max(self.maximum_depth, self.depth)
+            if self.nodes > MAX_XML_NODES:
+                raise _too_large("xml_nodes")
+            if self.depth > MAX_XML_DEPTH:
+                raise _too_large("xml_depth")
+            return super().start(tag, attrs)
+
+        def end(self, tag: str) -> ET.Element:
+            self.depth -= 1
+            return super().end(tag)
+
+    builder = BoundedTreeBuilder()
     try:
-        root = ET.fromstring(data)
+        root = ET.fromstring(data, parser=ET.XMLParser(target=builder))
     except ET.ParseError as exc:
         raise SightglassError(ErrorCode.RESOURCE_DECODE_FAILED) from exc
-    nodes = 0
-    maximum_depth = 0
-    stack = [(root, 1)]
-    while stack:
-        element, depth = stack.pop()
-        nodes += 1
-        maximum_depth = max(maximum_depth, depth)
-        if nodes > MAX_XML_NODES:
-            raise _too_large("xml_nodes")
-        if depth > MAX_XML_DEPTH:
-            raise _too_large("xml_depth")
-        stack.extend((child, depth + 1) for child in reversed(list(element)))
-    return root, nodes, maximum_depth
+    return root, builder.nodes, builder.maximum_depth
 
 
 def _json_value(data: bytes) -> tuple[Any, int, int]:
@@ -834,6 +843,10 @@ def _slide_notes_text(package: _OfficePackage, target: str) -> str | None:
     return _slide_text(package, notes_target)
 
 
+_HTML_VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img",
+                        "input", "link", "meta", "param", "source", "track", "wbr"})
+
+
 class _VisibleHtmlParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -845,7 +858,8 @@ class _VisibleHtmlParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
         self.elements += 1
-        self.depth += 1
+        if tag.casefold() not in _HTML_VOID:
+            self.depth += 1
         if self.elements > MAX_XML_NODES:
             raise _too_large("html_nodes")
         if self.depth > MAX_XML_DEPTH:
@@ -854,6 +868,8 @@ class _VisibleHtmlParser(HTMLParser):
             self.hidden_depth += 1
 
     def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() in _HTML_VOID:
+            return
         if tag.casefold() in {"script", "style", "template", "noscript"} and self.hidden_depth:
             self.hidden_depth -= 1
         self.depth = max(0, self.depth - 1)

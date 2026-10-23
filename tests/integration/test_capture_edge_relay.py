@@ -631,8 +631,8 @@ class CaptureEdgeRelayTests(unittest.TestCase):
         replay_done = threading.Event()
 
         class InspectReplay(FramedStream):
-            def receive(self):
-                value = super().receive()
+            def receive(self, **kwargs):
+                value = super().receive(**kwargs)
                 if isinstance(value, SealedCapture):
                     replayed.append(value.to_bytes())
                 if isinstance(value, dict) and value.get("kind") == "poll":
@@ -766,8 +766,8 @@ class CaptureEdgeRelayTests(unittest.TestCase):
                 raise RuntimeError("synthetic edge revoked")
 
         class RevokingAck(FramedStream):
-            def receive(self):
-                value = super().receive()
+            def receive(self, **kwargs):
+                value = super().receive(**kwargs)
                 if isinstance(value, dict) and value.get("kind") == "ack":
                     owned[0] = False
                 return value

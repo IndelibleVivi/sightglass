@@ -301,6 +301,62 @@ class ResidencyTests(unittest.TestCase):
         with self.repository.database.connection() as connection:
             self.assertFalse(connection.execute("SELECT 1 FROM body_release_jobs").fetchone())
 
+    def test_real_single_update_publication_pins_inclusive_range_for_every_reclaim(self):
+        for query in (None, "保留"):
+            with self.subTest(query=query):
+                page = self.service.read_messages(
+                    mode="updates",
+                    conversation_id=self.group,
+                    query=query,
+                    limit=1,
+                    projection="detail",
+                    view="fresh",
+                )
+                delivery = self.repository.delivery(page["page"]["delivery_id"])
+                assert delivery is not None
+                self.assertEqual(delivery["from_observation_seq"], delivery["to_observation_seq"])
+                pinned = page["messages"][0]["message_id"]
+                with self.repository.database.transaction() as connection:
+                    self.assertTrue(self.store._pinned(connection, pinned))
+                    connection.execute(
+                        "UPDATE message_body_residency SET owner='on_demand',"
+                        "expires_at='2000-01-01T00:00:00+00:00' WHERE conversation_id=?",
+                        (self.group,),
+                    )
+                self.store.reclaim_expired(now=datetime.now(UTC) + timedelta(days=100))
+                self.assertTrue(
+                    next(row for row in self.rows() if row["message_id"] == pinned)[
+                        "body_available"
+                    ]
+                )
+                self.store.set_settings(ResidencySettings(lease_max_bytes=1, global_max_bytes=1))
+                with self.assertRaises(SightglassError) as caught:
+                    self.store.enforce_caps(
+                        self.store.resolve_decision(self.group, authorized=True), protect=()
+                    )
+                self.assertEqual(caught.exception.code, ErrorCode.STORAGE_PRESSURE)
+                self.assertTrue(
+                    next(row for row in self.rows() if row["message_id"] == pinned)[
+                        "body_available"
+                    ]
+                )
+                self.release()
+                self.assertTrue(
+                    next(row for row in self.rows() if row["message_id"] == pinned)[
+                        "body_available"
+                    ]
+                )
+                self.store.set_settings(ResidencySettings())
+                # Retire just this actual publication before the independent filter case.
+                self.repository.acknowledge_delivery(
+                    delivery_id=delivery["delivery_id"],
+                    reader_id=self.service.reader.reader_id,
+                    conversation_id=self.group,
+                    scope_kind=delivery["scope_kind"],
+                    scope_key=delivery["scope_key"],
+                    acknowledged_at=datetime.now(UTC).isoformat(),
+                )
+
     def test_exact_pending_replay_and_resource_voice_dependencies_survive_release(self):
         self.read()
         rows = self.rows()

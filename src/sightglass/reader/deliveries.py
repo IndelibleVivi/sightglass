@@ -23,9 +23,20 @@ class DeliveryPayloadStore:
         self.storage = storage
         if self.root.is_symlink():
             raise RuntimeError("delivery spool directory cannot be a symlink")
+        created = not self.root.exists()
         self.root.mkdir(mode=0o700, exist_ok=True)
+        if created:
+            self._sync_directory(parent)
         if self.root.is_symlink() or stat.S_IMODE(self.root.stat().st_mode) & 0o077:
             raise RuntimeError("delivery spool directory must be private (mode 0700)")
+
+    @staticmethod
+    def _sync_directory(path: Path) -> None:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     @staticmethod
     def serialize(payload: dict[str, Any]) -> bytes:
@@ -52,6 +63,7 @@ class DeliveryPayloadStore:
                     handle.write(body)
                     handle.flush()
                     os.fsync(handle.fileno())
+                self._sync_directory(self.root)
             finally:
                 if self.storage is not None:
                     self.storage.track(path)

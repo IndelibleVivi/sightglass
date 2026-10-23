@@ -7,12 +7,15 @@ module contract, and the macOS Keychain / Apple `SpeechAnalyzer` / `sips` paths 
 default on Darwin. It contains no real paths, host names, accounts, credentials or
 transcripts.
 
-Status: **candidate only, verified on the Linux target with generated inputs.** An
-isolated noneditable wheel has run actual libvips rendering, Poppler PDF rendering,
-FFmpeg video processing and SILK decode/WAV/whisper.cpp recognition. Controlled cgroup OOM
-checks preserved a separately running reader daemon. Real-account quality, production
-activation and ordinary-client acceptance remain separate. Content-free results are
-recorded below; private receipts and synthesized media stay outside Git.
+Linux processing is a supported backend of the explicitly configured Mac-edge /
+Linux-core mode. Each enabled processor requires its declared installed binaries;
+optional speech also requires a bound local recognizer and whole-job systemd isolation. [Current state](current-state.md) owns
+which source/artifacts and installations are active; this document does not infer
+activation from capability or repeat installation-specific history. Generated-input
+checks have exercised libvips, Poppler, FFmpeg and SILK/WAV/whisper.cpp, including
+controlled cgroup OOM with a surviving separate reader. Real-account quality and
+ordinary-client acceptance remain separate evidence; private receipts and synthesized
+media stay outside Git.
 
 ## Secret store (`runtime/secrets.py`)
 
@@ -111,6 +114,22 @@ the same one the macOS helper uses, extended for whisper.cpp:
      consumes WAV, not raw PCM, which is why the wrap step exists.
 3. **Verify** — the helper returns a single bounded report; provenance records the observed
    decode facts (real decoder/envelope/byte/frame counts) and the recognizer provenance.
+
+### Parent-owned attempt workspace
+
+The parent creates each private job tree under `<data_dir>/voice-work/linux-jobs/`
+and passes its path plus an inherited, locked lease descriptor to the child. PCM,
+WAV, recognizer JSON and `TMPDIR` stay in that tree; the child does not own a system
+temporary directory whose cleanup depends on its `finally` executing. The attempt
+name also binds the exact nonce `.scope` and system manager used for cleanup.
+
+The parent reaps after the runner has stopped its owned scope. Startup/setup runs
+the same reaper even when voice is disabled or decoder/helper readiness is blocked.
+A held lease protects active work, including an inherited live child after a parent
+crash. Abandoned attempts are validated for owner/private/single-link safety before
+their scope is stopped and their tree removed; a manager mismatch or failed cleanup
+blocks recognition. Captured SILK, bounded PCM, WAV and recognizer-output workspace
+are reserved through the shared StorageBudget, and leftover inventory is tracked.
 
 ### Isolation (not a daemon-wide limit; fail closed)
 
@@ -242,7 +261,7 @@ rather than falling back to the incomplete pure-Python source build. No hand-inv
 and no vendored SILK code are added; the metadata is the upstream published wheel.
 
 The functional upstream Linux artifact recorded here is **CPython 3.12, x86_64**.
-Use Python 3.12 for this Linux voice candidate; other Python/architecture combinations
+Use Python 3.12 for this Linux voice backend; other Python/architecture combinations
 have not been established by this wheel. Base synthetic/core support remains Python
 3.11+. Portable CI selects 3.12 and includes the voice extra; the macOS gate retains its
 existing runtime and native fixtures.
@@ -307,5 +326,6 @@ top-level import alone as decoder evidence.
   installed Linux wheel gate completed 836 tests with four platform/optional-test
   skips. The final public candidate's 135 installed Python modules and five
   license/provenance files match its verified wheel; `pip check`, CLI help and the
-  installed synthetic example passed. Production transfer, activation and
-  ordinary-client acceptance remain unverified.
+  installed synthetic example passed. These results describe that candidate;
+  subsequent production transfer, activation and client acceptance are recorded in
+  [current state](current-state.md), not inferred from this historical test run.

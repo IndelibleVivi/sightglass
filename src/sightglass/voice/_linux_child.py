@@ -28,11 +28,11 @@ import json
 import os
 import resource
 import sys
-import tempfile
 import wave
+from pathlib import Path
 from typing import Any
 
-from . import _decode_child
+from . import _decode_child, workspace
 from .subprocess import BoundedProcessError, run_bounded
 
 EXIT_USAGE = 4
@@ -63,21 +63,21 @@ def _read_silk(descriptor: int, *, limit: int) -> bytes:
 
 
 def _decode_to_pcm(
-    data: bytes, *, sample_rate: int, max_pcm_bytes: int, directory: str,
+    data: bytes,
+    *,
+    sample_rate: int,
+    max_pcm_bytes: int,
+    directory: str,
 ) -> tuple[str, int, int, str]:
     """Decode inside this child; return (pcm_path, pcm_bytes, frames, envelope)."""
 
     payload, envelope = _decode_child.normalize_envelope(data)
     soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
     del soft
-    capped = (
-        max_pcm_bytes if hard == resource.RLIM_INFINITY else min(max_pcm_bytes, hard)
-    )
+    capped = max_pcm_bytes if hard == resource.RLIM_INFINITY else min(max_pcm_bytes, hard)
     resource.setrlimit(resource.RLIMIT_FSIZE, (capped, hard))
     pcm_path = os.path.join(directory, "decoded.pcm")
-    descriptor = os.open(
-        pcm_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
-    )
+    descriptor = os.open(pcm_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
             pcm_bytes = _decode_child._decode(handle, payload, sample_rate)
@@ -96,7 +96,12 @@ def _decode_to_pcm(
 
 def _wrap_wav(pcm_path: str, wav_path: str, *, sample_rate: int, max_bytes: int) -> None:
     total = 0
-    with open(pcm_path, "rb") as reader, wave.open(wav_path, "wb") as writer:
+    descriptor = os.open(wav_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with (
+        open(pcm_path, "rb") as reader,
+        os.fdopen(descriptor, "wb") as output,
+        wave.open(output, "wb") as writer,
+    ):
         writer.setnchannels(_decode_child.PCM_CHANNELS)
         writer.setsampwidth(PCM_SAMPLE_BYTES)
         writer.setframerate(sample_rate)
@@ -170,6 +175,8 @@ def _last_error(stderr: bytes) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sightglass-voice-linux-job")
+    parser.add_argument("--workspace", required=True)
+    parser.add_argument("--workspace-lease-fd", type=int, required=True)
     parser.add_argument("--silk-fd", type=int, required=True)
     parser.add_argument("--sample-rate", type=int, default=16_000)
     parser.add_argument("--max-input-bytes", type=int, required=True)
@@ -191,20 +198,27 @@ def main(argv: list[str] | None = None) -> int:
         _fail("invalid_limits", exit_code=EXIT_USAGE)
 
     data = _read_silk(arguments.silk_fd, limit=arguments.max_input_bytes)
-    with tempfile.TemporaryDirectory(prefix="sightglass-linux-job-") as directory:
-        os.chmod(directory, 0o700)
-        pcm_path, pcm_bytes, frames, envelope = _decode_to_pcm(
-            data,
-            sample_rate=arguments.sample_rate,
-            max_pcm_bytes=arguments.max_pcm_bytes,
-            directory=directory,
-        )
-        wav_path = os.path.join(directory, "input.wav")
-        _wrap_wav(
-            pcm_path, wav_path, sample_rate=arguments.sample_rate, max_bytes=arguments.max_wav_bytes
-        )
-        os.unlink(pcm_path)
-        transcript = _run_whisper(arguments, wav_path, directory)
+    try:
+        workspace.validate_child(Path(arguments.workspace), arguments.workspace_lease_fd)
+    except (OSError, RuntimeError):
+        _fail("workspace_unsafe", exit_code=EXIT_USAGE)
+    directory = arguments.workspace
+    pcm_path, pcm_bytes, frames, envelope = _decode_to_pcm(
+        data,
+        sample_rate=arguments.sample_rate,
+        max_pcm_bytes=arguments.max_pcm_bytes,
+        directory=directory,
+    )
+    _, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (arguments.max_wav_bytes + 44, hard))
+    wav_path = os.path.join(directory, "input.wav")
+    _wrap_wav(
+        pcm_path, wav_path, sample_rate=arguments.sample_rate, max_bytes=arguments.max_wav_bytes
+    )
+    os.unlink(pcm_path)
+    # Whisper output is a separate bounded file, in the same parent-owned tree.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_WRAPPER_STDOUT_BYTES, hard))
+    transcript = _run_whisper(arguments, wav_path, directory)
 
     _emit(
         sys.stdout,

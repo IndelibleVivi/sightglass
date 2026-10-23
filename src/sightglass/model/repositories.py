@@ -2958,6 +2958,7 @@ class WindowRepository:
         requested_before: str | None,
         max_messages: int,
         created_at: str,
+        cursor_token: str | None = None,
     ) -> None:
         with self.database.transaction() as connection:
             connection.execute(
@@ -2967,7 +2968,7 @@ class WindowRepository:
                     requested_after, requested_before, max_messages,
                     processed_messages, cursor_token, state, created_at,
                     started_at, updated_at, completed_at, last_error_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, 'queued', ?, NULL, ?, NULL, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'queued', ?, NULL, ?, NULL, NULL)
                 """,
                 (
                     job_id,
@@ -2977,10 +2978,18 @@ class WindowRepository:
                     requested_after,
                     requested_before,
                     int(max_messages),
+                    cursor_token,
                     created_at,
                     created_at,
                 ),
             )
+
+    def backfill_job(self, job_id: str) -> sqlite3.Row | None:
+        with self.database.connection() as connection:
+            return connection.execute(
+                "SELECT * FROM source_backfill_jobs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
 
     def next_backfill_job(
         self, conversation_ids: tuple[str, ...] | None = None
@@ -3012,9 +3021,12 @@ class WindowRepository:
         processed_messages: int,
         updated_at: str,
         error_code: str | None = None,
+        cursor_token: str | None = None,
+        inventory_epoch: str | None = None,
+        expected_job: Any | None = None,
     ) -> None:
         with self.database.transaction() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE source_backfill_jobs
                 SET state = ?, processed_messages = ?,
@@ -3026,8 +3038,12 @@ class WindowRepository:
                         WHEN ? IN ('completed', 'failed') THEN ?
                         ELSE completed_at
                     END,
-                    last_error_code = ?, updated_at = ?
+                    last_error_code = ?, updated_at = ?,
+                    cursor_token = COALESCE(?,cursor_token),
+                    source_inventory_epoch = COALESCE(?,source_inventory_epoch)
                 WHERE job_id = ?
+                  AND (? IS NULL OR (processed_messages=? AND cursor_token IS ?
+                       AND source_inventory_epoch IS ? AND state IN ('queued','running')))
                 """,
                 (
                     state,
@@ -3038,9 +3054,18 @@ class WindowRepository:
                     updated_at,
                     error_code,
                     updated_at,
+                    cursor_token,
+                    inventory_epoch,
                     job_id,
+                    expected_job["job_id"] if expected_job is not None else None,
+                    expected_job["processed_messages"] if expected_job is not None else None,
+                    expected_job["cursor_token"] if expected_job is not None else None,
+                    expected_job["source_inventory_epoch"] if expected_job is not None else None,
                 ),
             )
+
+            if expected_job is not None and cursor.rowcount != 1:
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
 
     def set_backfills_paused(self, paused: bool, *, updated_at: str) -> int:
         with self.database.transaction() as connection:

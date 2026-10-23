@@ -252,6 +252,89 @@ class CoreCaptureTests(unittest.TestCase):
                 self.core.broker._receive_capture(envelope)
             self.assertIsNone(self.core.receiver.lookup_terminal(envelope))
 
+    def _assert_tightened_policy_replay(self, *, legacy: bool) -> None:
+        from sightglass.runtime.capture_journal import CAPTURE_REQUEST_TOOL, _identity
+
+        ticket = self._unfinalized_catalog_ticket()
+        self.spool.store(ticket.envelope)
+        if legacy:
+            with self.core.database.transaction() as connection:
+                row = connection.execute(
+                    "SELECT warning_codes_json FROM access_receipts WHERE receipt_id=?",
+                    (_identity("request", ticket.request.request_id),),
+                ).fetchone()
+                binding = json.loads(row[0])
+                del binding["expectation"]
+                connection.execute(
+                    "UPDATE access_receipts SET warning_codes_json=? WHERE receipt_id=?",
+                    (json.dumps(binding), _identity("request", ticket.request.request_id)),
+                )
+        with self.core.database.connection() as connection:
+            before = tuple(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("messages", "message_observations", "reader_update_cursors"))
+            reader_state = [tuple(row) for row in connection.execute(
+                "SELECT * FROM reader_update_cursors ORDER BY rowid")]
+        self.core.close()
+        self.service.reader.policy = replace(
+            self.service.reader.policy, denied_conversation_ids=frozenset({self.group}))
+        self.core = CoreCapture(self.service, self.config)
+        self.core.start()
+        self.addCleanup(self.core.close)
+        with self.assertRaises(SightglassError):
+            self.core._authorize(ticket.request)
+        with self.core.database.transaction(maintenance=True):
+            self.core._recover(ticket)
+            self.assertIsNone(ticket.durable_ack, "ACK escaped before outer commit")
+        ack = ticket.durable_ack
+        assert ack is not None
+        self.assertEqual(ack.terminal, "rejected")
+        # Simulate losing that ACK and restarting the Core once more. Exact
+        # durable terminal replay remains valid under today's denied scope.
+        self.core.close()
+        self.core = CoreCapture(self.service, self.config)
+        self.core.start()
+        self.addCleanup(self.core.close)
+        self.assertEqual(self.core.broker._receive_capture(ticket.envelope), ack)
+        self.assertIsNotNone(self.spool.pending())
+        self.spool.acknowledge(ack)
+        self.assertIsNone(self.spool.pending())
+        with self.core.database.connection() as connection:
+            after = tuple(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("messages", "message_observations", "reader_update_cursors"))
+            outcome = connection.execute(
+                "SELECT outcome FROM access_receipts WHERE receipt_id=? AND tool_name=?",
+                (_identity("request", ticket.request.request_id), CAPTURE_REQUEST_TOOL),
+            ).fetchone()[0]
+            self.assertEqual(reader_state, [tuple(row) for row in connection.execute(
+                "SELECT * FROM reader_update_cursors ORDER BY rowid")])
+        self.assertEqual(before, after)
+        self.assertEqual(outcome, "rejected")
+        self.assertEqual(self.spool.next_sequence, 2)
+        self.start_edge()
+        result = self.call("wechat_find_conversations", query="Synthetic")
+        self.assertNotEqual(result.get("ok"), False, result)
+        self.stop_edge()
+
+    def test_policy_tightening_restart_and_lost_ack_reject_only(self) -> None:
+        self._assert_tightened_policy_replay(legacy=False)
+
+    def test_installed_legacy_request_policy_tightening_rejects_only(self) -> None:
+        self._assert_tightened_policy_replay(legacy=True)
+
+    def test_recovery_rejects_conflicting_exact_request_without_terminal(self) -> None:
+        ticket = self._unfinalized_catalog_ticket()
+        document = ticket.envelope.document()
+        conflict = PreparedRemoteCapture(SealedCapture.seal(replace(
+            document, request=replace(document.request, limit=document.request.limit + 1))))
+        with self.assertRaisesRegex(CaptureProtocolError, "binding_mismatch"):
+            self.core._recover(conflict)
+        self.assertIsNone(conflict.durable_ack)
+        self.assertIsNone(self.core.receiver.lookup_terminal(conflict.envelope))
+        self.assertIsNone(self.core.journal.stream_position(
+            self.settings.source_instance_id, self.settings.account_id))
+
     def test_replay_recovery_checks_current_owner_before_terminal_write(self) -> None:
         ticket = self._unfinalized_catalog_ticket()
         self.core.broker.abandon(ticket)

@@ -120,6 +120,21 @@ Rebind 只探测配置中的 source root，不枚举其他账号；使用原 Key
 
 ## Lifecycle and policy
 
+Daemon status includes `lifecycle_state` (`starting`, `reloading`, `ready`,
+`degraded`, `stopping`, or `stopped`). Reload first stops every old worker and
+confirms quiescence before replacing its owner. A partial stop/start failure
+attempts to restore the previous runtime; failed recovery reports `ready=false`
+and ordinary tools return `SERVICE_UNAVAILABLE / runtime_not_ready`. Status and
+operator control remain available. A paused, healthy daemon can have lifecycle
+`ready=true` while `wechat_status.ready=false`. Failed shutdown retains the runtime
+lock and DB resources if a worker is still alive; do not force a second owner.
+
+The 16 IPC handlers admit at most 12 authenticated ordinary reader calls,
+including single-flight followers, leaving four slots for status/control.
+Excess reader calls return retryable `SERVICE_BUSY / ipc_reader_capacity`.
+An incomplete request frame has one absolute two-second receive deadline, so a
+partial or slowly trickled frame cannot indefinitely consume a handler.
+
 Reader 的显示时区保存在 config 的 `reader.timezone`，使用 IANA 名称。`uv run sightglassctl timezone status` 只读配置；修改时执行 `daemon stop` → `timezone set Asia/Shanghai` → `daemon start`。无效 timezone 或尚存 daemon socket 会拒绝修改；不需要重导入 source/key，也不改变 policy。旧 config 缺字段时兼容 `Asia/Singapore`，保存后显式持久化。这个设置只改变新消息页/search 的显示，UTC instant、排序、cursor、source 附件月份目录及未 ACK 的 immutable delivery 不受影响。
 
 `runtime.source_worker.backfill_error_reason` 与 `backfill_error_elapsed_ms` 分别记录最近失败 backfill phase 的 reason 和耗时；`SERVICE_TIMEOUT / operation_deadline` 表示 backfill 自己用尽预算。前台抢占只增加 `foreground_yield_count`，保留已有 backfill 状态，不把 cancellation 写成新的 backfill error。一次成功 backfill phase 会清空这两个错误字段；旧错误在被前台频繁打断时仍可能可见。
@@ -157,6 +172,17 @@ uv run sightglassctl backfill resume
 ```
 
 Account backfill queues one bounded durable job per policy-authorized keep conversation；`--max-messages` 是每个 conversation 的明确上限，不是“无限历史”。Worker 始终先做 live tail，再做至多一个 backfill batch；restart 从 durable resume cursor 继续。一个 live batch 遇到 WAL drift 或 exact operation-deadline timeout，会在同一 20 秒总预算内用 fresh 50 / 20 / 1 batch attempts；最后一条消息也无法在其 attempt 内读取时保留原 processed position，下一轮继续，不要求关闭微信。`backfill status` 只应报告 job/count/state/error code，不输出标题、正文、filename、source path 或 cursor body。Search receipt 在 jobs 完成前可以合法报告 `history_not_fully_indexed`；这不是空搜索结果的全局无匹配证明。
+
+显式 job 从自己的 requested time window 开始，按独立 signed position 向旧消息遍历；
+此前观察过或释放正文的区间也会重新读取并按当前 keep/policy 驻留。Job position、
+processed count 和这一批 admission 原子提交，restart 不依赖全局 history floor。
+Cursor 绑定 job scope、source account/conversation、interpretation epoch 与实际读取的
+logical shard generations；普通 append 可继续，selected-shard replacement 拒绝继续。
+达到消息上限仅表示该 job 完成，不证明整个历史完整；expiry 仍不自动排队或补回正文。
+升级时，尚未处理的旧 job 仅在 fresh catalog 精确匹配原 inventory 后初始化；
+已经部分处理但没有独立 cursor，或 inventory 不匹配的旧 job 会保留数据与计数并失败。
+此时检查 `backfill status`，为所需范围显式创建新 job（`legacy_backfill_requeue_required`），
+不要修改旧进度或把失败视作全部读完。
 
 Resource／voice／derived workers 现在先读 durable 状态，只有实际到期或可 claim 的工作
 才取得短 writer transaction；空 resource lease recovery 不取得 writer。每种 worker 有自己的
@@ -324,6 +350,33 @@ sightglassctl residency set recent wxconv_SELECTED --recent-window-days 30 --rec
 sightglassctl residency set on_demand wxconv_SELECTED wxconv_ANOTHER
 sightglassctl residency configure --lease-ttl-seconds 86400 --lease-max-bytes 268435456 --global-max-bytes 1073741824
 ```
+
+### Single-conversation history and semantic setup
+
+以下只对已授权、已发现的一个会话排队历史读取。使用当前 installation 的 installed CLI
+或 stable pair wrapper；`INSTALLED_CTL` 与 `SELECTED_CONVERSATION_ID` 都由 operator 从既有
+私有配置／catalog 选择，不将实际值写入公共文档。Reader policy 和 Mac edge 的 account／
+conversation egress ceiling 必须已经允许该会话；修改驻留 mode 不扩大任何权限。
+
+```bash
+"$INSTALLED_CTL" residency set keep "$SELECTED_CONVERSATION_ID" --keep-backfill
+"$INSTALLED_CTL" backfill conversation "$SELECTED_CONVERSATION_ID" \
+  --after 2025-01-01T00:00:00Z --before 2026-01-01T00:00:00Z --max-messages 10000
+"$INSTALLED_CTL" backfill status
+"$INSTALLED_CTL" residency list --sort conversation --limit 200
+```
+
+Local source 与已配置的 remote core 共用这项 job contract；remote 的排队 catalog 与每次
+历史 batch 沿现有 sealed capture path 执行，Mac edge 必须可用。Job 是有时间／消息上限的
+有界读取；`completed` 可能只表示到达该上限，resident span 与 indexed 数也不证明 full history。
+不需要重复 fresh updates 来主动制造 backfill，也不因正文 expiry 自动重新抓历史。
+
+需要 semantic recall 时，再按 [BGE-M3 / Vectorize setup](#optional-bge-m3--vectorize-lane)
+为同一 local account、同一 conversation ID 单独配置 index、token 与 exact-scope 外发同意。
+停止／enroll／重启沿该节的现有步骤，不扩大为 account-wide scope。之后用 installed CLI 的
+`retrieval status` 检查当前 scope/generation 的 capture、pending 与 publication evidence；
+历史 admission、semantic publication、source completeness 和安装 activation 分别确认。
+这些命令是可复用流程，不是本次 installation 已执行或 full-history 已完成的证明。
 
 On-demand idle sync 不打开正文，也不为 expired history 安排 refill。前台 range／context／refresh
 只 admission 该有界页；搜索的 source scan 与 resident admission 分开，只保留 literal／speaker
@@ -540,9 +593,9 @@ uv run sightglassctl retrieval import-semantic-token --token-file "$PRIVATE_TOKE
 uv run sightglassctl retrieval import-semantic-token --stdin
 ```
 
-两个 enrollment commands 都要求 daemon stopped；返回 `activated=false`，保存 config/Keychain 不是启动或切换 runtime。Settings/token file 必须 owner-private、regular、single-link、no-follow；token 不进 config 或 Git。按本 runbook 的原有 daemon 启动流程显式启动后，`retrieval status` 和 `wechat_status(summary).runtime.semantic_worker` 才能确认 live state；缺 credential 时 deterministic retrieval 仍可用，semantic 报 `credential_unavailable`。
+两个 enrollment commands 都要求 daemon stopped；返回 `activated=false`，保存 config/secret 不是启动或切换 runtime。Token 导入使用 macOS 的 in-process Keychain 或 Linux 已配置的 owner-private FileSecretStore，不把 token 放入 argv。Settings/token file 必须 owner-private、regular、single-link、no-follow；token 不进 config 或 Git。按本 runbook 的原有 daemon 启动流程显式启动后，`retrieval status` 和 `wechat_status(summary).runtime.semantic_worker` 才能确认 live state；缺 credential 时 deterministic retrieval 仍可用，semantic 报 `credential_unavailable`。
 
-独立 worker 用 bounded capture/checkpoints、至多 16 条 encoder batch 与独立 storage reservations 推进。`data_dir/semantic/index.db` 是 private SQLite sidecar，保存确切 input/version identity、原始 float32 vectors、send intents 与 verified manifest。先持久化 intent 再 upsert；接受请求不等于查询可用，只有完整 values/metadata/namespace readback 和本地 canonical fence 通过才 publication。超时或缺 readback 保留 pending/degraded，重启只读确认既有 intent，不盲目 re-encode/re-upload。当前 policy、pause、projection epoch、source account、model/recipe 和 generation 都限制候选，查询 time/sender/kind/watermark 在 ANN 前过滤并在本地重检。
+独立 worker 用 bounded capture/checkpoints、至多 16 条 encoder batch 与独立 storage reservations 推进。`data_dir/semantic/index.db` 是 private SQLite sidecar，保存确切 input/version identity、原始 float32 vectors、send intents 与 verified manifest。先持久化 intent 再 upsert；接受请求不等于查询可用，只有完整 values/metadata/namespace readback 和本地 canonical fence 通过才 publication。超时或缺 readback 保留 pending/degraded。恢复先 readback exact stored intent，每轮最多 32 条并持久轮转检查顺序，避免旧 pending 阻塞后续 intent。只有 readback 确认远端 object absent、且已到 durable retry deadline 时，才重送相同 remote ID／namespace／vector bytes／metadata；初次等待 30 秒，后续退避增长至 600 秒上限，下一次 deadline 在发送前提交，重启不清零。Present 但 values／metadata／namespace 冲突时不覆盖；此 intent 的恢复不重新 encode。每次发送前再次复核 current canonical observation/input、当前 policy／外发同意、projection epoch／generation 和 exact index 配置；变更后的当前消息须走新的 canonical capture/intent。重送后仍须完整 readback 才能 publication。当前 policy、pause、projection epoch、source account、model/recipe 和 generation 都限制候选，查询 time/sender/kind/watermark 在 ANN 前过滤并在本地重检。
 
 Sidecar 同时绑定 exact Cloudflare account/index 和 local source account。Projection epoch 改变时先禁止旧候选，再自动开启新的 derivative generation；旧远端 namespace 不会被删除。更换 store/source 或发现 sidecar recipe 不匹配时，semantic 报 `sidecar_unavailable`，普通 reads 继续可用。先停止 daemon，保留整个旧 `data_dir/semantic/`（包含 DB/WAL/SHM）到另一个 private 目录，再按正确 config 从新的空 sidecar 重建；不要复制旧 manifest 到另一 index，也不要用删除 `window.db` 解决。`pending` 只统计当前可访问 scope/generation 的 intents，`pending_total` 保留本地全部 intent 数；远端异步发布没有固定完成时间。
 
@@ -565,6 +618,12 @@ uv run sightglassctl correction rebind wxsourcekey_... wxperson_target
 uv run sightglassctl correction rollback wxcorrection_...
 uv run sightglassctl correction list
 ```
+
+CAS publication 先持有 objects-directory 的跨进程锁，写完并 fsync 私有 staging file 后以
+atomic rename 发布，整个过程保持 single-link；返回可注册 object 前同步 objects 与 staging
+两个目录。相同 digest 的并发 publisher 复用已经完整验证的 object，不能观察到 hardlink
+publication 的中间态。XML／Office XML 在 decoded parser 的 doctype hook 拒绝 DTD，
+UTF-16 也不能绕过；node/depth 在解析时限额，HTML void tags 不误算 nesting depth。
 
 Cache cleanup 默认 dry-run；`--apply` 只删除 `resource-cache/objects/` 内 liveness 检查确认无任何引用的对象：活跃引用覆盖 `resource_bindings.object_digest`、`resource_derivations.derived_digest`、`voice_jobs.input_digest`/`result_digest` 与 `voice_batch_events.result_digest` 全部 FK 列。删除在事务内逐行复检后先 commit row；最终 inode/path revalidation、row-absence check 与 unlink 位于一个不承担 DELETE 的短 maintenance writer transaction 中，使 unlink 与 voice/resource object registration 串行化。普通 resource staging 仍在 writer transaction 外完成 source/processor/CAS 工作；admission 在同一 registration fence 内复检已验证的 private inode，若 cleanup 已回收它，才用已经有界的 staged bytes 重建并再次验证，然后提交 row/binding。嵌套 transaction 中拒绝执行 cleanup。无 DB row 的孤儿对象仅在 regular、single-link、digest-named 且 mtime 早于 24h 时被非递归清扫，新 staged 文件受宽限保护；unlink 失败的残留由后续轮次老化收敛。`status` 的 unbound 统计覆盖上述全部引用；cleanup 候选 `object_count`/`reclaimable_bytes` 是初选统计，实际删除看 `removed_count`，残留孤儿看 `orphan_count`/`orphan_bytes`。Identity correction 只更新当前 projection，并写 append-only ledger；`message_observations` 不被改写。`cache cleanup` 在同一次调用内还会顺带回收 terminal delivery spool：它一次最多处理 500 个 spool 文件（`batch_limit=500`，`has_more` 指示是否还有下一批），在 pending-publication writer fence 内逐条复核 `reader_deliveries.payload_ref`，保留任何仍有 `pending` 引用的 spool（`pending_preserved`），只删除已 `acknowledged`/`expired` 的 terminal spool 或早于 24 小时宽限（`orphan_grace_seconds`）且无引用的孤儿，并在删除后 fsync spool 目录。`cache cleanup` 的返回体里带 `deliveries` 子块。既有 pending delivery 是 immutable snapshot，继续 exact replay；message IDs/anchors 保持稳定。
 
@@ -649,6 +708,13 @@ uv run sightglassctl voice retry-blocked
 
 Production 的 decoder extra 使用 frozen wheel environment，不执行上面的 development `uv sync`。先确认 helper 确实位于 active pair 解析出的路径，再 reload daemon 并检查 `voice_read.readiness.ready` 与 `voice_worker.enabled/running`。`ready` 仅证明 decoder/helper 可用；资产安装结果与一次合成语音识别分别验证语言资产和真实 recognizer，既有 cached transcript 不证明本轮重新识别过音频。
 
+Linux recognizer 的 PCM／WAV／JSON／TMPDIR 使用 parent-owned `voice-work/linux-jobs/`
+attempt；继承的 locked lease 保护 active child，nonce scope 与 manager 必须相同。
+Runner 完成 owned-scope cleanup 后由 parent reaper 删除经过安全验证的树；startup/setup
+即使 voice disabled 或 helper 不 ready，也处理 abandoned attempts。SILK、PCM、WAV 与
+recognizer output workspace 共同计入 StorageBudget；cleanup 无法证明时报告 blocked，
+不要手工删除可能仍持 lease 的目录。完整边界见 [Linux processing](LINUX-PROCESSING.md#parent-owned-attempt-workspace)。
+
 ## MCP and ChatGPT tunnel
 
 本地 MCP entrypoint 是 stdio：
@@ -723,11 +789,24 @@ uv export --frozen --no-dev --extra macos-wechat --extra voice --no-emit-project
 uv venv "$RELEASE_DIR/.venv"
 uv pip sync --python "$RELEASE_DIR/.venv/bin/python" "$RELEASE_DIR/requirements.txt"
 uv build --wheel --out-dir "$RELEASE_DIR/artifacts"
+uv run python scripts/check-installed-wheel.py \
+  --wheel "$RELEASE_DIR/artifacts/sightglass-0.1.0.dev1-py3-none-any.whl"
 uv pip install --python "$RELEASE_DIR/.venv/bin/python" --no-deps \
   "$RELEASE_DIR/artifacts/sightglass-0.1.0.dev1-py3-none-any.whl"
-"$RELEASE_DIR/.venv/bin/python" -c 'import sightglass; print(sightglass.__file__)'
-"$RELEASE_DIR/.venv/bin/python" examples/synthetic_read.py
+"$RELEASE_DIR/.venv/bin/python" -I -c 'import sightglass; print(sightglass.__file__)'
+"$RELEASE_DIR/.venv/bin/python" -I examples/synthetic_read.py
 ```
+
+`scripts/check-installed-wheel.py` 是两个 CI jobs 共用的 canonical artifact gate，可在 repository
+root 用 `uv build` 后直接运行（`dist/` 只能有一个 wheel），或用上面的 `--wheel` 选择 artifact。
+它逐项比较 checkout 与 wheel 的 Python source、metadata、四个 console entrypoints 和五份
+license/provenance，拒绝额外 payload；随后从 frozen lock 导出 runtime-only extras，在独立
+临时 noneditable venv 中安装，不同步开发 `.venv`。四个 imports 必须来自 installed
+site-packages；从 empty cwd 执行三个真实 `--help`、MCP stdio initialize/list-tools 和 copied
+generated synthetic read example，isolated Python 不接受 checkout／PYTHONPATH 辅助。
+JSON 输出标识确切 wheel、runtime/extras、平台与 smoke 结果；临时环境会清理。该 gate
+验证 candidate artifact，不替代当前 release environment、native processor、账号权限或
+production activation 的各自验收；source 在 build 后变化会拒绝旧 wheel。
 
 Import path 必须属于 release environment，不能指向 checkout 的 `src/`。在 private manifest 记录实际 source commit、Python、extras、wheel 和 `editable=false`；wheel/native fixture verification 与真实账号 activation 分别记录。Production interpreter/base Python 也须保持可用；清理时不能删除它依赖的 interpreter。
 
@@ -808,5 +887,6 @@ tunnel-client runtimes status "$TUNNEL_ALIAS" --json
 - source worker 的慢 catalog/page read 不应长期持有 `window.db` writer lock；若 operator/read call 得到 `database is locked`，先停止 daemon、确认没有第二进程，再使用包含 concurrency regression 的 current build 重启，不要只放大 SQLite timeout。
 - `SERVICE_BUSY` 表示该调用所属的 bounded lane 已满；`details.work_class` 指明 `local_read`、`source_read` 或其他分类，caller 应按 `retry_after_ms` 有界重试。相同参数的并发请求仍会 join single-flight；耗时 resource derivation 可返回带 `reading_token` 的 ordinary `processing` 状态，由 durable worker 接手，而不是挤占 source/local lane。`SERVICE_TIMEOUT` 可来自 server cooperative deadline 或 client IPC response deadline，不等同于 daemon 已退出；正常 server timeout 后 operation 应从 `runtime.operations.active_count` 消失，下一次调用无需 restart 即可继续。`SERVICE_UNAVAILABLE` 才表示 bridge 无法连接本地 daemon。三者都不得被 host 合并成无来源的 `INTERNAL_ERROR`。若连续出现 timeout，先调用 fast `wechat_status(summary, response_profile="diagnostic")` 或 `sightglassctl status` 查看 lanes、per-tool latency/outcome、resource worker/job、writer/receipt/source-worker diagnostics，再检查 tunnel `/readyz`，不要靠重复刷新 plugin 猜测。
 - source worker 的 retryable generation/key/shard 错误会 back off 并保留 durable tail/backfill position；修复 source admission 后 restart/resume，不删除 `window.db` 或 job rows。
-- 未 ACK update payload 已物化在 private spool；daemon restart 后先 exact replay，再接受 ACK。
+- 未 ACK update payload 已物化在 private spool；file 与 spool directory fsync 成功后才提交 DB 引用，daemon restart 后先 exact replay，再接受 ACK。ACK 消费 frozen delivery sort facts，interpretation epoch 升级或已 admission 的 sort correction 不会令它 stale；v2 frontier 保留 current reader/scope/policy revision 检查，旧 v1 通过 durable delivery scope/expiration 兼容消费。Revoke→restore 不恢复已 expired 的 pending delivery。观察区间是 inclusive `[from_observation_seq, to_observation_seq]`，TTL／cap／manual release 都保留首尾 active dependency。
+- Local fresh updates 与 remote captured updates 复用最多 200 条候选验证／range traversal；local 使用 typed conversation session，不整会话 hydrate，历史大小不再触发旧 10k 上限。独立 reconciliation scan 会在完成后重开一轮，发现旧位置 arrivals/corrections；扫描进度不等于 ACK 或一份跨页 global snapshot。ACK、新 admission／delivery／request outcome 保持原事务边界，source failure 回滚 ACK；storage-only failure 仍按已有 `ack_committed=true` 分支处理。
 - daemon 无法启动时查看 mode-`0600` `sightglassd.log`，再运行 `sightglassctl doctor`；不要把 log 或 private state 提交到 Git。

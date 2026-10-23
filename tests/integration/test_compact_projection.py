@@ -515,6 +515,17 @@ class CompactProjectionScaleTests(unittest.TestCase):
             projection="compact",
             limit=100,
         )
+        # Fresh updates reconcile bounded source pages. An initial smaller
+        # verified prefix may precede the page that actually exercises cropping.
+        for _ in range(8):
+            self.assertNotIn("code", first, first)
+            if first["page"].get("message_rows_complete") is False:
+                break
+            self.assertTrue(first["page"]["has_more_after"])
+            first = tools.wechat_read_messages(
+                mode="updates", conversation_id=group_id, projection="compact", limit=100,
+                ack_delivery_id=first["page"]["delivery_id"],
+            )
         self.assertNotIn("code", first, first)
         self.assertGreater(len(first["messages"]), 0)
         self.assertLess(len(first["messages"]), 100)

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
 from argparse import Namespace
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from sightglass.cli import _read_semantic_file, _semantic_command
 from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.runtime.config import ConfigStore, SightglassConfig
 from sightglass.runtime.lanes import RuntimeLanes, WorkClass
+from sightglass.runtime.secrets import FileSecretStore, semantic_secret_account
 from sightglass.runtime.semantic_worker import SemanticWorker
 from sightglass.runtime.service import build_daemon_tools
 from sightglass.semantic.settings import SemanticSettings
@@ -148,6 +151,60 @@ class SemanticRuntimeTests(unittest.TestCase):
             alias.symlink_to(path)
             with self.assertRaises(OSError):
                 _read_semantic_file(str(alias))
+
+    def test_linux_token_import_uses_private_file_store_without_keychain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = ConfigStore(root / "state" / "config.json")
+            config = replace(
+                SightglassConfig.create(root / "state", root / "source"),
+                semantic=SemanticSettings(cf_account_id="a" * 32),
+            )
+            store.save(config)
+            secrets = FileSecretStore(root / "secrets")
+            args = Namespace(retrieval_command="import-semantic-token", token_file=None)
+            with (
+                patch("sightglass.cli.sys.platform", "linux"),
+                patch("sightglass.cli.sys.stdin", SimpleNamespace(buffer=io.BytesIO(
+                    b"generated-semantic-token\n"))),
+                patch("sightglass.cli.default_secret_store", return_value=secrets),
+                patch("sightglass.source.macos_wechat.keys.write_keychain_secret") as keychain,
+            ):
+                result = _semantic_command(args, store)
+            keychain.assert_not_called()
+            self.assertEqual(result, {"semantic_token_enrolled": True, "activated": False})
+            account = semantic_secret_account("a" * 32)
+            self.assertEqual(secrets.get(account), "generated-semantic-token")
+            self.assertEqual((root / "secrets").stat().st_mode & 0o777, 0o700)
+            self.assertEqual(next((root / "secrets").iterdir()).stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("generated-semantic-token", store.path.read_text())
+
+    def test_macos_token_import_retains_in_process_keychain_and_stopped_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = ConfigStore(root / "state" / "config.json")
+            store.save(replace(
+                SightglassConfig.create(root / "state", root / "source"),
+                semantic=SemanticSettings(cf_account_id="a" * 32),
+            ))
+            token = root / "token"
+            token.write_text("generated-semantic-token")
+            token.chmod(0o600)
+            args = Namespace(retrieval_command="import-semantic-token", token_file=str(token))
+            with (
+                patch("sightglass.cli.sys.platform", "darwin"),
+                patch("sightglass.cli.default_secret_store") as other,
+                patch("sightglass.source.macos_wechat.keys.write_keychain_secret") as keychain,
+            ):
+                with patch("sightglass.cli._daemon_must_be_stopped", side_effect=RuntimeError(
+                    "running")):
+                    with self.assertRaisesRegex(RuntimeError, "running"):
+                        _semantic_command(args, store)
+                keychain.assert_not_called()
+                _semantic_command(args, store)
+                other.assert_not_called()
+                keychain.assert_called_once_with(
+                    semantic_secret_account("a" * 32), "generated-semantic-token")
 
     def test_semantic_saturation_preserves_local_read_capacity(self):
         lanes = RuntimeLanes()

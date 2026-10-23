@@ -174,7 +174,8 @@ readback-only recovery after two bounded waits. These findings support the CF
 experiment route; the owner subsequently selected **only BGE-M3 + Vectorize**
 for the optional source lane. The Qwen comparison remains historical evidence,
 not an active model branch. These measurements do not settle 100k-scale cost or
-real-corpus acceptance. The installed production lane remains disabled. See [the generated evidence](benchmarks/README.md).
+real-corpus acceptance. The lane remains disabled by default; installation-specific
+activation is recorded separately in [current state](current-state.md). See [the generated evidence](benchmarks/README.md).
 
 The conditional source lane uses message units with deterministic local link/reply
 context expansion. Recipe v2 encodes distinct nonempty canonical fields and
@@ -193,11 +194,18 @@ The optional lane stores durable encoded vectors, send intents, versioned
 manifest and bounded capture checkpoints in a separate private SQLite sidecar;
 remote namespace binds source account, projection epoch, model/recipe and
 generation. Full float32/metadata/namespace readback plus current canonical
-admission is required before publication; ambiguous uploads resume read-only.
+admission is required before publication. Ambiguous uploads retain their exact
+durable send intent and resume with readback first. A confirmed-absent remote object
+may be resent with the identical stored ID, namespace, vector bytes and metadata
+after durable backoff (initially 30 seconds, capped at 600 seconds). Recovery does
+not re-encode, overwrite a present conflict, or send after a failed readback.
+Rotating bounded checks prevent an older pending intent from starving later ones;
+every send rechecks current canonical input/version, policy/consent, projection
+epoch, generation and index configuration. Only full readback can publish it.
 Hard scope/time/sender/kind/watermark are remote pre-filters and local fences;
 network work never holds the canonical writer transaction. An independent worker
 and read capacity preserve deterministic reads. Exact account/conversation egress
-consent and a Keychain token are operator configuration, not MCP inputs.
+consent and a platform-secret-store token are operator configuration, not MCP inputs.
 
 A supported lane remains optional and disabled by default, degraded on failure, fenced
 by input/model/recipe generation and subject to ordinary policy/current canonical

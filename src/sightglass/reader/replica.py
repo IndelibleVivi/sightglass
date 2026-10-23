@@ -31,7 +31,7 @@ UPDATE_REQUEST_TOOL = "_sightglass_updates_request.v1"
 UPDATE_REQUEST_SCHEMA = "sightglass.updates-request.v1"
 UPDATE_REQUEST_REPLAY_DAYS = 30
 UPDATE_FRONTIER_TOOL = "_sightglass_updates_frontier.v1"
-UPDATE_FRONTIER_SCHEMA = "sightglass.updates-frontier.v1"
+UPDATE_FRONTIER_SCHEMA = "sightglass.updates-frontier.v2"
 UPDATE_RECONCILE_SCHEMA = "sightglass.updates-reconcile.v1"
 REPLICA_SEARCH_BUDGET = 2_000
 
@@ -528,7 +528,7 @@ class ReplicaReader:
     def _frontier_digest(self, conversation_id: str, scope_kind: str, scope_key: str) -> str:
         return self.service._scope_digest({
             "conversation_id": conversation_id, "scope_kind": scope_kind, "scope_key": scope_key,
-            **self._request_policy_scope(),
+            **{key: value for key, value in self._request_policy_scope().items() if key != "epoch"},
         })
 
     def record_update_frontier(
@@ -549,10 +549,15 @@ class ReplicaReader:
         receipt = self.repository.update_delivery_frontier(self._frontier_id(delivery_id))
         if receipt is None:
             return None
-        if receipt["scope_digest"] != self._frontier_digest(conversation_id, scope_kind, scope_key):
-            raise SightglassError(ErrorCode.CURSOR_STALE)
+        # Pending delivery expiration owns revocation, including revoke/restore.
+        # Legacy v1 digests contain an epoch that cannot be recovered after upgrade.
+        self._delivery_scope(delivery_id, conversation_id, scope_kind, scope_key)
         metadata = json.loads(receipt["warning_codes_json"])
-        if metadata.get("schema") != UPDATE_FRONTIER_SCHEMA:
+        if metadata.get("schema") == UPDATE_FRONTIER_SCHEMA:
+            if receipt["scope_digest"] != self._frontier_digest(
+                    conversation_id, scope_kind, scope_key):
+                raise SightglassError(ErrorCode.CURSOR_STALE)
+        elif metadata.get("schema") != "sightglass.updates-frontier.v1":
             raise SightglassError(ErrorCode.CURSOR_STALE)
         return SourceSortKey(*metadata["position"])
 
@@ -564,10 +569,11 @@ class ReplicaReader:
         if frontier is None:
             return
         context = self.service._conversation_context(arguments["conversation_id"])
+        # ACK records delivered facts independently of subsequent corrections.
         identity = opaque_id("wxmsg", str(context["account_id"]), frontier.source_message_id)
-        row = self.repository.message_position_row(identity)
-        if row is None or self.service._row_sort_key(row) != frontier:
-            raise SightglassError(ErrorCode.CURSOR_STALE)
+        row = {"message_id": identity, "source_message_id": frontier.source_message_id,
+               "sort_primary": frontier.as_tuple()[0], "sort_seq": frontier.as_tuple()[1],
+               "sort_tie": frontier.as_tuple()[2]}
         self.repository.commit_timeline_position(
             reader_id=self.service.reader.reader_id, conversation_id=arguments["conversation_id"],
             scope_kind=arguments["scope_kind"], scope_key=arguments["scope_key"], row=row,

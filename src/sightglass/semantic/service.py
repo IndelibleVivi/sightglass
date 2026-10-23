@@ -7,8 +7,8 @@ The lane owns a private sidecar (its own SQLite database) holding:
   canonical version, the encoder input hash and the *real* float32 vector bytes.
 
 A durable *send intent* is written before any network mutation. An interrupted or
-ambiguous submission is only ever resolved by readback against the stored bytes;
-it is never re-encoded or re-submitted. Every remote id is read back and fenced
+ambiguous submission is read back first, then retried after bounded backoff using
+the identical stored bytes when still absent; it is never re-encoded. Every remote id is fenced
 against the *current* canonical window.db observation before it can enter a
 candidate set.
 
@@ -34,6 +34,7 @@ import sqlite3
 import stat
 import struct
 import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -71,6 +72,8 @@ _TOP_K = 20
 # Remote query sub-budget for one retrieval call, separate from the configured
 # per-request timeout. Operator reload must be able to cancel between requests.
 QUERY_BUDGET_SECONDS = 8.0
+INTENT_RETRY_SECONDS = 30.0
+INTENT_RETRY_MAX_SECONDS = 600.0
 
 # Metadata indexes the operator must pre-provision on the dedicated index. Nothing
 # here is auto-created; ``verify_index`` fails closed if any is missing/typed wrong.
@@ -151,6 +154,14 @@ CREATE TABLE IF NOT EXISTS semantic_intents (
 );
 CREATE INDEX IF NOT EXISTS semantic_intents_fence
     ON semantic_intents(generation, namespace);
+CREATE TABLE IF NOT EXISTS semantic_intent_retry (
+    remote_id TEXT PRIMARY KEY REFERENCES semantic_intents(remote_id) ON DELETE CASCADE,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at REAL NOT NULL DEFAULT 0,
+    checked_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS semantic_intent_retry_order
+    ON semantic_intent_retry(checked_order);
 CREATE TABLE IF NOT EXISTS semantic_capture_checkpoint (
     conversation_id TEXT PRIMARY KEY,
     last_message_id TEXT NOT NULL,
@@ -701,7 +712,7 @@ class SemanticService:
         if not conversations:
             return self._result("disabled", 0, 0, 0, None)
         generation = self._generation()
-        # 1. Resolve any durable, previously-submitted intent by readback only.
+        # 1. Read back durable intents; retry absent objects with their stored payload.
         resumed = self._resume_intents(conversations, generation)
         outstanding = self._outstanding_intents(generation)
         # 2. Advance the capture cursor fairly across conversations.
@@ -978,7 +989,25 @@ class SemanticService:
         # Durable intent (with the real vector bytes) before the network mutation.
         if not self._write_intents(records, generation):
             return 0, "generation_changed"
-        remote_rows = [
+        remote_rows = self._remote_rows(records)
+        try:
+            if len(self._current_publication_records(records)) != len(records):
+                return 0, "canonical_drift"
+            capable = set(self._capable_conversations())
+            if any(record["conversation_id"] not in capable for record in records):
+                return 0, "scope_changed"
+            if not self._epoch_current() or self._generation() != generation:
+                return 0, "generation_changed"
+            self._call(lambda _t: self._backend().upsert(remote_rows))
+        except SightglassError:
+            # Ambiguous/transport failure: preserve exact intents for readback and
+            # bounded, currently authorized retry; never encode them again.
+            return 0, "upsert_ambiguous"
+        return self._readback(records, generation)
+
+    @staticmethod
+    def _remote_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
             {
                 "id": record["remote_id"],
                 "namespace": record["namespace"],
@@ -987,16 +1016,6 @@ class SemanticService:
             }
             for record in records
         ]
-        try:
-            capable = set(self._capable_conversations())
-            if any(record["conversation_id"] not in capable for record in records):
-                return 0, "scope_changed"
-            self._call(lambda _t: self._backend().upsert(remote_rows))
-        except SightglassError:
-            # Ambiguous/transport failure: intents stay durable and are only ever
-            # resolved by readback, never re-encoded or re-submitted.
-            return 0, "upsert_ambiguous"
-        return self._readback(records, generation)
 
     def _write_intents(self, records: list[dict[str, Any]], generation: int) -> bool:
         with self._lock, self._storage_reservation(max(64 * 1024, len(records) * 8192)):
@@ -1027,29 +1046,46 @@ class SemanticService:
                         _now(),
                     ),
                 )
+                connection.execute(
+                    "INSERT OR REPLACE INTO semantic_intent_retry"
+                    "(remote_id, attempts, next_attempt_at) VALUES (?,1,?)",
+                    (record["remote_id"], time.time() + INTENT_RETRY_SECONDS),
+                )
             connection.commit()
         self._track_sidecar()
         return True
 
     def _resume_intents(self, conversations: tuple[str, ...], generation: int) -> int:
-        """Read back durable intents for the current generation; never re-submits."""
+        """Fair readback, then bounded identical-payload retry for absent objects."""
         if not conversations:
             return 0
         epoch = self._epoch_factory()
-        namespaces = tuple(
-            _namespace(self.settings.source_account_id, epoch, generation) for _ in conversations
-        )
-        with self._lock:
+        namespace = _namespace(self.settings.source_account_id, epoch, generation)
+        with self._lock, self._storage_reservation(64 * 1024):
             intents = (
                 self._db()
                 .execute(
-                    f"SELECT * FROM semantic_intents WHERE generation=?"
-                    f" AND namespace IN ({','.join('?' for _ in namespaces)})"
-                    f" AND conversation_id IN ({','.join('?' for _ in conversations)}) LIMIT 32",
-                    (generation, *namespaces, *conversations),
+                    "SELECT i.* FROM semantic_intents i LEFT JOIN semantic_intent_retry r"
+                    " ON r.remote_id=i.remote_id WHERE i.generation=? AND i.namespace=?"
+                    f" AND i.conversation_id IN ({','.join('?' for _ in conversations)})"
+                    " ORDER BY COALESCE(r.checked_order,0), i.rowid LIMIT 32",
+                    (generation, namespace, *conversations),
                 )
                 .fetchall()
             )
+            if intents:
+                connection = self._db()
+                order = int(connection.execute(
+                    "SELECT COALESCE(MAX(checked_order),0)+1 FROM semantic_intent_retry"
+                ).fetchone()[0])
+                # Legacy intents have no retry row. Readback still happens first;
+                # they may then retry without rewriting their payload or identity.
+                connection.executemany(
+                    "INSERT INTO semantic_intent_retry(remote_id,checked_order) VALUES (?,?)"
+                    " ON CONFLICT(remote_id) DO UPDATE SET checked_order=excluded.checked_order",
+                    [(str(intent["remote_id"]), order) for intent in intents],
+                )
+                connection.commit()
         if not intents:
             return 0
         ids = tuple(str(intent["message_id"]) for intent in intents)
@@ -1101,7 +1137,94 @@ class SemanticService:
             )
         except SightglassError:
             return 0
-        return self._accept_readback(records, actual, generation)
+        accepted = self._accept_readback(records, actual, generation)
+        # A conflicting present object is never overwritten as a recovery shortcut.
+        present = {str(row.get("id")) for row in actual}
+        missing = [record for record in records if record["remote_id"] not in present]
+        return accepted + self._retry_intents(missing, generation)
+
+    def _retry_intents(self, records: list[dict[str, Any]], generation: int) -> int:
+        if not records or not self._epoch_current() or self._generation() != generation:
+            return 0
+        capable = set(self._capable_conversations())
+        live = {str(row["message_id"]): row for row in self.repository.frozen_message_rows(
+            tuple(record["message_id"] for record in records)
+        )}
+        now = time.time()
+        retry: list[dict[str, Any]] = []
+        with self._lock, self._storage_reservation(64 * 1024):
+            connection = self._db()
+            if self._generation() != generation:
+                return 0
+            for record in records:
+                row = live.get(record["message_id"])
+                if (
+                    record["conversation_id"] not in capable
+                    or row is None
+                    or row["current_state"] != "present"
+                    or str(row["projection_epoch"]) != self._epoch_factory()
+                    or int(row["current_observation_seq"])
+                    != int(record["row"]["current_observation_seq"])
+                    or _input_hash(row) != record["input_hash"]
+                    or _unpack_vector(record["vector_bytes"]) is None
+                ):
+                    continue
+                state = connection.execute(
+                    "SELECT r.attempts,r.next_attempt_at FROM semantic_intent_retry r"
+                    " JOIN semantic_intents i USING(remote_id)"
+                    " WHERE r.remote_id=? AND i.generation=?",
+                    (record["remote_id"], generation),
+                ).fetchone()
+                if state is None or float(state["next_attempt_at"]) > now:
+                    continue
+                attempts = int(state["attempts"])
+                delay = min(INTENT_RETRY_MAX_SECONDS, INTENT_RETRY_SECONDS * 2 ** min(attempts, 5))
+                # Persist the next attempt BEFORE sending, including on transport failure.
+                connection.execute(
+                    "UPDATE semantic_intent_retry SET attempts=attempts+1,next_attempt_at=?"
+                    " WHERE remote_id=?", (now + delay, record["remote_id"]),
+                )
+                retry.append(record)
+            connection.commit()
+        self._track_sidecar()
+        if not retry:
+            return 0
+        try:
+            self._backend().verify_index(required_metadata=REQUIRED_METADATA_INDEXES)
+        except SightglassError:
+            return 0
+        # Bookkeeping/index checks can yield to corrections. Fence the current
+        # canonical version and consent again immediately before external mutation.
+        retry = self._current_publication_records(retry)
+        capable = set(self._capable_conversations())
+        if not self._epoch_current() or self._generation() != generation:
+            return 0
+        retry = [record for record in retry if record["conversation_id"] in capable]
+        if not retry:
+            return 0
+        try:
+            self._call(lambda _t: self._backend().upsert(self._remote_rows(retry)))
+        except SightglassError:
+            return 0
+        accepted, _ = self._readback(retry, generation)
+        return accepted
+
+    def _current_publication_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        live = {
+            str(row["message_id"]): row for row in self.repository.frozen_message_rows(
+                tuple(record["message_id"] for record in records)
+            )
+        }
+        epoch = self._epoch_factory()
+        return [
+            record for record in records
+            if (row := live.get(record["message_id"])) is not None
+            and row["current_state"] == "present"
+            and str(row["projection_epoch"]) == epoch
+            and int(row["current_observation_seq"])
+            == int(record["row"]["current_observation_seq"])
+            and _input_hash(row) == record["input_hash"]
+        ]
 
     def _readback(self, records: list[dict[str, Any]], generation: int) -> tuple[int, str | None]:
         try:
@@ -1127,7 +1250,7 @@ class SemanticService:
         ]
         if not accepted:
             # Partial/missing readback stays pending: intents are retained and the
-            # next call resolves them read-only. It does not become "ready".
+            # next call reads them back before any bounded retry. It is not "ready".
             return 0
         return self._commit_published(accepted, generation)
 

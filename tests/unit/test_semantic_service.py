@@ -1022,6 +1022,190 @@ class SemanticServiceTests(unittest.TestCase):
         self.assertEqual(len(backend.upsert_calls), submissions)
         self.assertEqual(len(backend.encode_calls), encodes)
 
+    def test_before_send_failure_retries_exact_intent_after_restart_and_backoff(self) -> None:
+        backend = FakeBackend()
+        original_upsert = backend.upsert
+
+        def fail_before_send(rows):
+            backend.upsert_calls.append([dict(row) for row in rows])
+            raise SightglassError(ErrorCode.SERVICE_UNAVAILABLE)
+
+        backend.upsert = fail_before_send
+        with patch("time.time", return_value=2_000_000_000.0):
+            service = self._service(backend=backend)
+            first = service.index_once(limit=8)
+        self.assertGreater(first["pending"], 0)
+        frozen = backend.upsert_calls[0]
+        encodes = len(backend.encode_calls)
+        service.close()
+        backend.upsert = original_upsert
+        reopened = self._service(backend=backend)
+        self.addCleanup(reopened.close)
+        with patch("time.time", return_value=2_000_000_001.0):
+            reopened.index_once(limit=8)
+        self.assertEqual(len(backend.upsert_calls), 1)
+        with patch("time.time", return_value=2_000_000_061.0):
+            recovered = reopened.index_once(limit=8)
+        self.assertEqual(recovered["pending"], 0)
+        self.assertGreater(recovered["indexed"], 0)
+        self.assertEqual(backend.upsert_calls[1], frozen)
+        self.assertEqual(len(backend.encode_calls), encodes)
+
+    def test_intent_readback_rotates_beyond_first_32_missing_rows(self) -> None:
+        self._admit_many(70)
+        backend = FakeBackend()
+        original_upsert = backend.upsert
+        backend.upsert = lambda rows: backend.upsert_calls.append([dict(r) for r in rows])
+        service = self._service(backend=backend)
+        self.addCleanup(service.close)
+        with patch("time.time", return_value=2_000_000_000.0):
+            service.index_once(limit=100)
+            # Make only the last intent visible; unresolved earlier intents must
+            # not prevent this already-published object being acknowledged.
+            intents = service._db().execute(
+                "SELECT remote_id FROM semantic_intents ORDER BY rowid"
+            ).fetchall()
+            last_id = str(intents[-1][0])
+            rows = [r for batch in backend.upsert_calls for r in batch if r["id"] == last_id]
+            original_upsert(rows)
+            for _ in range(4):
+                service.index_once(limit=1)
+        self.assertEqual(service.status()["indexed"], 1)
+
+    def test_retry_rechecks_policy_after_readback_before_egress(self) -> None:
+        backend = FakeBackend()
+        backend.upsert = lambda rows: backend.upsert_calls.append([dict(r) for r in rows])
+        service = self._service(backend=backend)
+        self.addCleanup(service.close)
+        with patch("time.time", return_value=2_000_000_000.0):
+            service.index_once(limit=8)
+        submissions = len(backend.upsert_calls)
+
+        def revoke_during_readback(ids):
+            service.reader = replace(service.reader, paused=True)
+            return []
+
+        backend.get_by_ids = revoke_during_readback
+        with patch("time.time", return_value=2_000_000_061.0):
+            service.index_once(limit=8)
+        self.assertEqual(len(backend.upsert_calls), submissions)
+
+    def test_legacy_intent_without_retry_state_recovers_without_encoding(self) -> None:
+        backend = FakeBackend()
+        upsert = backend.upsert
+        backend.upsert = lambda rows: backend.upsert_calls.append([dict(r) for r in rows])
+        service = self._service(backend=backend)
+        service.index_once(limit=8)
+        encodes = len(backend.encode_calls)
+        service._db().execute("DROP TABLE semantic_intent_retry")
+        service._db().commit()
+        service.close()
+        backend.upsert = upsert
+        reopened = self._service(backend=backend)
+        self.addCleanup(reopened.close)
+        recovered = reopened.index_once(limit=8)
+        self.assertEqual(recovered["pending"], 0)
+        self.assertGreater(recovered["indexed"], 0)
+        self.assertEqual(len(backend.encode_calls), encodes)
+
+    def test_retry_rechecks_canonical_version_after_backoff_bookkeeping(self) -> None:
+        backend = FakeBackend()
+        backend.upsert = lambda rows: backend.upsert_calls.append([dict(r) for r in rows])
+        service = self._service(backend=backend)
+        self.addCleanup(service.close)
+        with patch("time.time", return_value=2_000_000_000.0):
+            service.index_once(limit=8)
+        target = service._db().execute(
+            "SELECT message_id,remote_id FROM semantic_intents ORDER BY rowid LIMIT 1"
+        ).fetchone()
+        self.assertIsNotNone(target)
+        encodes = len(backend.encode_calls)
+        track = service._track_sidecar
+
+        def correct_during_bookkeeping():
+            track()
+            with self.repository.database.transaction() as connection:
+                connection.execute(
+                    "UPDATE messages SET current_observation_seq=current_observation_seq+1"
+                    " WHERE message_id=?", (str(target["message_id"]),),
+                )
+
+        with (
+            patch("time.time", return_value=2_000_000_061.0),
+            patch.object(service, "_track_sidecar", side_effect=correct_during_bookkeeping),
+        ):
+            service._resume_intents((self.group_id,), service._generation())
+        resent = {row["id"] for batch in backend.upsert_calls[1:] for row in batch}
+        self.assertNotIn(str(target["remote_id"]), resent)
+        self.assertEqual(len(backend.encode_calls), encodes)
+
+    def test_retry_requires_current_index_contract(self) -> None:
+        backend = FakeBackend()
+        backend.upsert = lambda rows: backend.upsert_calls.append([dict(r) for r in rows])
+        service = self._service(backend=backend)
+        self.addCleanup(service.close)
+        with patch("time.time", return_value=2_000_000_000.0):
+            service.index_once(limit=8)
+        backend.fail_index = True
+        with patch("time.time", return_value=2_000_000_061.0):
+            service._resume_intents((self.group_id,), service._generation())
+        self.assertEqual(len(backend.upsert_calls), 1)
+
+    def test_initial_send_rechecks_version_after_intent_commit(self) -> None:
+        backend = FakeBackend()
+        service = self._service(backend=backend)
+        self.addCleanup(service.close)
+        write = service._write_intents
+
+        def write_then_correct(records, generation):
+            result = write(records, generation)
+            with self.repository.database.transaction() as connection:
+                connection.execute(
+                    "UPDATE messages SET current_observation_seq=current_observation_seq+1"
+                    " WHERE message_id=?", (records[0]["message_id"],),
+                )
+            return result
+
+        with patch.object(service, "_write_intents", side_effect=write_then_correct):
+            result = service.index_once(limit=8)
+        self.assertEqual(result["failure"], "canonical_drift")
+        self.assertEqual(backend.upsert_calls, [])
+
+    def test_failed_readback_never_triggers_retry(self) -> None:
+        backend = FakeBackend()
+        backend.upsert = lambda rows: backend.upsert_calls.append([dict(r) for r in rows])
+        service = self._service(backend=backend)
+        self.addCleanup(service.close)
+        with patch("time.time", return_value=2_000_000_000.0):
+            service.index_once(limit=8)
+        backend.fail_readback = True
+        with patch("time.time", return_value=2_000_001_000.0):
+            service.index_once(limit=8)
+        self.assertEqual(len(backend.upsert_calls), 1)
+
+    def test_retry_backoff_survives_restart_and_present_conflict_is_not_overwritten(self) -> None:
+        backend = FakeBackend()
+        backend.upsert = lambda rows: backend.upsert_calls.append([dict(r) for r in rows])
+        service = self._service(backend=backend)
+        self.addCleanup(service.close)
+        with patch("time.time", return_value=2_000_000_000.0):
+            service.index_once(limit=8)
+        with patch("time.time", return_value=2_000_000_031.0):
+            service.index_once(limit=8)
+        self.assertEqual(len(backend.upsert_calls), 2)
+        service.close()
+        reopened = self._service(backend=backend)
+        self.addCleanup(reopened.close)
+        with patch("time.time", return_value=2_000_000_060.0):
+            reopened.index_once(limit=8)
+        self.assertEqual(len(backend.upsert_calls), 2)
+        for row in backend.upsert_calls[0]:
+            backend.stored[row["id"]] = dict(row, values=[0.0] * ACTIVE_DIMENSIONS)
+        with patch("time.time", return_value=2_000_001_000.0):
+            reopened.index_once(limit=8)
+        self.assertEqual(len(backend.upsert_calls), 2)
+        self.assertEqual(reopened.status()["indexed"], 0)
+
     def test_restart_rejects_wrong_or_partial_readback_values(self) -> None:
         sidecar = self.root / "state" / "semantic" / "sidecar.db"
         backend = FakeBackend()

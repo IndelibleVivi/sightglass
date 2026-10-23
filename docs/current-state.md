@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-22. This page owns current source, candidate and publication status.
+Updated: 2026-10-23. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -12,7 +12,34 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Current reliability repair
+## Reliability and retrieval repair candidate
+
+The current candidate addresses the reliability review across broker restart and
+cancellation, exact terminal replay after policy tightening, frozen delivery ACKs,
+runtime reload recovery, inclusive residency pins, durable single-link CAS/delivery
+publication, bounded updates, absent semantic-intent retry, Linux voice workspace
+recovery, and XML/HTML parser limits. CI now builds and exercises an isolated,
+noneditable wheel through `scripts/check-installed-wheel.py`.
+
+Explicit history jobs use their own signed traversal position instead of an old
+global coverage floor, so an operator can reacquire previously released bodies.
+The existing schema-v10 job cursor holds scope, interpretation and selected logical
+generation bindings; committed progress survives restart. Bounded completion does
+not certify full history, and expiry does not automatically refill it. The
+[operations guide](OPERATIONS.md) covers selected residency, bounded history jobs,
+legacy requeue and separately consented semantic configuration.
+
+The source candidate passed 1,545 full generated/native-fixture tests, full
+Pyright, Ruff and compileall. Its isolated installed-wheel gate verified 137
+package modules, five license/provenance files, four actual command entrypoints,
+thirteen stdio tools and a generated three-message read. Hosted CI, the exact
+Linux/macOS installation candidates and production activation remain separate
+gates. The previously accepted `a5a70cb` core and `4aa8d23` edge remain the last
+recorded active installation.
+Semantic support remains disabled by default; real-content permission, remote
+publication progress and live installation acceptance are private operator facts.
+
+## Earlier reliability acceptance (2026-10-21–22)
 
 The current source adds an exact 4.1.15 profile and a stopped-only verified
 same-account edge rebind, retaining native settings v2 and the existing

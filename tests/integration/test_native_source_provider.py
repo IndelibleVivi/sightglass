@@ -1052,7 +1052,9 @@ class NativeSourceProviderTests(unittest.TestCase):
         service.queue_backfill(conversation_id=conversation_id, max_messages=20)
         step = service.process_backfill_once(batch_limit=20)
         self.assertEqual(step["state"], "completed")
-        self.assertEqual(step["message_count"], 1)
+        # An explicit unbounded-time job revalidates all three source rows,
+        # including its already-resident recent tail.
+        self.assertEqual(step["message_count"], 3)
         state = service.repository.source_conversation_state(conversation_id)
         assert state is not None
         self.assertTrue(state["history_complete"])

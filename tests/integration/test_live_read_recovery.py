@@ -683,9 +683,15 @@ class SlowTailDegradationTests(unittest.TestCase):
             for row in self.repository.account_conversations(account_id)
             if str(row["source_conversation_id"]) == GROUP
         )
+        history_state = self.repository.source_conversation_state(
+            str(conversation["conversation_id"]))
+        assert history_state is not None
         self.service.queue_backfill(
             conversation_id=str(conversation["conversation_id"]),
             max_messages=50,
+            # Explicit jobs now own their range instead of implicitly skipping
+            # resident tails. Select only older history for this admission probe.
+            before=json.loads(str(history_state["contiguous_floor_position"]))[0],
         )
         before = self.message_count()
 

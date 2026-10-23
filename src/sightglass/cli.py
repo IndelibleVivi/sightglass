@@ -1334,10 +1334,14 @@ def _semantic_command(args: argparse.Namespace, store: ConfigStore) -> dict[str,
             raise ValueError("invalid token")
     except (UnicodeError, ValueError):
         raise RuntimeError("semantic token must be a bounded UTF-8 token") from None
-    # Reuse Security.framework storage; the token never enters subprocess argv.
-    from sightglass.source.macos_wechat.keys import write_keychain_secret
+    account = semantic_secret_account(config.semantic.cf_account_id)
+    if sys.platform.startswith("linux"):
+        default_secret_store().set(account, token)
+    else:
+        # Keep the Security.framework path: token material must never enter argv.
+        from sightglass.source.macos_wechat.keys import write_keychain_secret
 
-    write_keychain_secret(semantic_secret_account(config.semantic.cf_account_id), token)
+        write_keychain_secret(account, token)
     return {"semantic_token_enrolled": True, "activated": False}
 
 

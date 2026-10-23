@@ -263,7 +263,15 @@ without message admission or reader ACK advancement. Cancellation/loss terminals
 retain their own terminal kind so the sender can match and release them.
 
 The exact durable request binding includes the core activation generation. Its
-terminal outcome is claimed with a compare-and-set in the same WindowDB writer as
+new records also retain the original capture expectation. A previously authorized
+pending request can be rejected after reader policy tightening using that exact
+original binding, without opening its frozen provider, admitting a body or
+advancing reader ACKs. Installed legacy records without an expectation retain
+their exact request/generation binding; only its recorded policy revision may
+differ, while current account/source/origin/egress and enrolled stream must still
+match. Unknown or conflicting requests require operator recovery. This terminal
+recovery path does not authorize fresh admission under a revoked policy.
+Its terminal outcome is claimed with a compare-and-set in the same WindowDB writer as
 admission. If rejection already won, a competing foreground writer rolls back its
 bodies, reader ACK, delivery/request outcome and transport state. If accepted
 admission won, a later rejection returns the original terminal ACK instead of
@@ -357,6 +365,10 @@ origin epoch before accepting `hello`. `hello` and `ready` also carry the exact
 enrolled `core_generation`, which must equal the core configuration's
 `activation_generation`. An old core generation is rejected before work or replay.
 There is no HTTP/TCP/public listener.
+Startup, under the daemon's exclusive process lock, probes a pre-existing broker
+socket and removes it only if it is an owner-private, unchanged, refused listener.
+Active listeners, foreign/unsafe nodes and replacement races fail closed. Failed
+startup and shutdown unlink only the socket inode this server actually bound.
 Only one edge connection may serve the ordered stream. `broker.connected` is
 true after authenticated hello and clears when that connection ends. Foreground
 orchestration can fail promptly when the edge is offline.
@@ -385,8 +397,10 @@ identical pending replay
 uses the same authorized recovery hook; a still-active ticket is not recovered
 before that deadline. Recovery runs outside the broker lock with one attempt per
 work item at a time. A failed or unfinished attempt clears that in-flight marker
-so another exact replay can retry. Current ownership, request binding, policy,
-batch digest and stream sequence still apply. An expired complete capture may be
+so another exact replay can retry. Current ownership, exact durable source/request
+binding, batch digest and stream sequence still apply. Fresh admission always
+checks current reader policy; exact terminal-only rejection uses the original
+authorized binding described above. An expired complete capture may be
 durably rejected without admitting its body, and only an outer-committed terminal
 ACK may release the edge spool.
 
@@ -402,6 +416,15 @@ in-memory work is pruned; the core journal retains exact deduplication. An ACK
 write failure retains pending work and permits replay. Connection failures use
 bounded stop-aware reconnect backoff; protocol/edge-capability failures require
 correction rather than an unchecked retry loop.
+
+Framed fd I/O uses nonblocking raw short reads/writes with stop/cancel checks and
+one absolute frame deadline, including send-lock waits and write backpressure:
+30 seconds for handshake, 60 seconds for idle/work response, and 180 seconds for
+capture/ACK transfer. Partial input does not reset the deadline. Broker shutdown
+cancels finalization waits without an early ACK, and joins its listener and
+connection owners before releasing the runtime;
+failure to quiesce aborts replacement. The outgoing SSH connector owns a dedicated
+process group and terminates its descendants even if the SSH leader already exited.
 
 A failure before immutable spool publication sends a fixed `failed` control with
 only the exact request ID and one reason: `capture_unsealed`,

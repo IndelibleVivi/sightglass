@@ -3,7 +3,8 @@
 The lane is disabled unless an operator explicitly enables it *and* consents to
 external data egress *and* names one exact source account and an explicit set of
 conversations. Persisted settings never carry credentials; the Cloudflare API
-token lives only in process memory (Keychain at the runtime boundary).
+token is loaded into process memory from the platform secret store (macOS
+Keychain or the owner-private Linux file store).
 """
 
 from __future__ import annotations

@@ -58,10 +58,15 @@ Fresh updates reconcile independently of the ACK position, eventually restarting
 completed scan to find old-position arrivals/corrections; pages never claim one global
 change snapshot. Missing source prefixes fail closed. A scoped `request_id` retains
 an exact completed update response for 30 days, subject to current policy and pause.
+Local-source updates use the same bounded verification/reconciliation path: at most
+200 message candidates or source-page messages per step, without hydrating the whole conversation.
+ACK consumes the frozen delivery position even after an interpretation upgrade or an
+admitted sort correction. Current authorization still applies, and revoking then
+restoring a scope does not revive its expired deliveries.
 
 Native source support still means the exact macOS profile above. `remote-capture` is
 an offline core binding, not a Linux WeChat adapter. Linux processing prerequisites
-and candidate evidence are in [Linux processing](docs/LINUX-PROCESSING.md); ownership,
+and platform evidence are in [Linux processing](docs/LINUX-PROCESSING.md); ownership,
 loss recovery and wire limits are in [Capture protocol](docs/CAPTURE-PROTOCOL.md).
 
 ## What you can read
@@ -100,7 +105,10 @@ complete current snapshot. See the [cold discovery lifecycle](docs/MCP-CONTRACT.
 Retention is an independent operator setting. New configurations and conversations
 default to `on_demand`: idle polling opens no message bodies, and foreground search
 retains matching candidates rather than every scanned source row. `keep` collects
-future messages continuously; historical backfill must be explicitly selected.
+future messages continuously; historical backfill must be explicitly selected with
+`keep --keep-backfill` and a bounded job. This also works through the configured remote
+capture path; [single-conversation setup](docs/OPERATIONS.md#single-conversation-history-and-semantic-setup)
+distinguishes retained history from optional semantic indexing and its separate egress consent.
 `recent` defaults to 30 days and 512 MiB per conversation. On-demand reads cache
 bounded pages/context for 24 hours and at most 256 MiB per conversation; the shared
 temporary-body cap is 1 GiB. These caps cover resident body copies, while the outer
@@ -163,6 +171,11 @@ The separately authorized [semantic benchmarks](docs/benchmarks/README.md) can s
 
 Optional account-backed semantic retrieval has a separate [operator setup](docs/OPERATIONS.md#optional-bge-m3--vectorize-lane): one dedicated index, exact conversation scope, explicit external-data consent and a token in the platform secret store. Background indexing and query failures report their coverage; disabling the lane retains local/remote derivatives and does not erase previously uploaded data. Semantic recipe v2 deduplicates identical canonical text/card fields and excludes empty inputs and unknown-message placeholders; those messages remain available through context neighbors. Upgrading a v1 sidecar requires the stopped-only derivative replacement procedure in the operator guide.
 
+Pending semantic publication reads back the exact stored intent first. An absent
+remote object may be retried after durable backoff using the same vector bytes;
+a present conflicting object is never overwritten. Canonical version and current
+consent still gate every publication; deterministic reading remains available.
+
 ## Connect a local account
 
 The native runtime requires macOS on Apple Silicon, the exact supported WeChat profile, and a complete key map for the selected account. Optional voice recognition additionally needs **macOS 26**, a Swift toolchain and installed speech assets for the selected language.
@@ -223,6 +236,8 @@ uv run python -m unittest discover -s tests -t . -p 'test_*.py'
 uv run python -m compileall -q src tests examples
 uv run ruff check src tests examples
 uv run pyright
+uv build
+uv run python scripts/check-installed-wheel.py
 git diff --check
 ```
 
@@ -231,6 +246,12 @@ pushes, PRs, or manual `Synthetic source gates` dispatch; a feature-branch push
 alone does not run macOS. Documentation-only changes skip automatic CI. GitHub
 requires the workflow on the default branch before enabling manual dispatch;
 until promotion, use a PR for hosted macOS coverage.
+
+Both CI jobs run the same [installed-wheel gate](scripts/check-installed-wheel.py)
+after building. It checks exact source/license payload, installs frozen runtime extras
+in a fresh noneditable environment, runs the four real entrypoints from an empty cwd,
+and reads generated messages using installed imports. It does not activate an installation.
+Use `--wheel /path/to/candidate.whl` to select a separate candidate artifact.
 
 The suite uses generated fixtures, including encrypted SQLCipher databases when the native extra is installed. Hosted gates separate portable Linux synthetic daemon/bridge checks from the full macOS fixture suite; native WeChat access remains macOS-only. Full macOS resource coverage also needs `sips` and Poppler. Real Apple speech testing is opt-in and uses synthesized audio; no real conversations or recordings belong in Git. [Current state](docs/current-state.md) records the verified source scope and remaining limits.
 

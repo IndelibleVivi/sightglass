@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from sightglass.contracts.errors import SightglassError
 from sightglass.voice.apple import (
     DEFAULT_HELPER_TIMEOUT_SECONDS,
     HELPER_NAME,
@@ -184,6 +185,18 @@ def build_voice_setup(config: Any, service: Any) -> VoiceSetup:
             helper_name=helper_name,
         )
 
+    # Recovery is independent of readiness: disabled/missing helpers can still leave
+    # a previous killed job's private WAV/output behind.
+    if _is_linux():
+        recovery_helper = LinuxWhisperHelper(
+            helper_path, language=language, model=model,
+            storage=service.repository.database.storage,
+        )
+        try:
+            recovery_helper.reap_workspaces(_staging_root(config))
+        except SightglassError:
+            return VoiceSetup(None, record("helper_workspace_cleanup_failed"))
+
     if not enabled:
         return VoiceSetup(None, record("voice_disabled"))
     if not decoder_available:
@@ -221,6 +234,7 @@ def build_voice_setup(config: Any, service: Any) -> VoiceSetup:
                 language=language,
                 model=model,
                 timeout_seconds=helper_timeout,
+                storage=storage,
                 max_silk_bytes=decoder.max_silk_bytes,
                 max_pcm_bytes=decoder.max_pcm_bytes,
             ),

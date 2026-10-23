@@ -50,6 +50,7 @@ from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.contracts.voice import VoiceTranscription
 from sightglass.storage import StorageBudget
 
+from . import workspace
 from .capture import CapturedVoice, VoiceCapture
 from .decoder import (
     MAX_PCM_BYTES,
@@ -75,7 +76,7 @@ MAX_HELPER_STDERR_BYTES = 64 * 1024
 MAX_TRANSCRIPT_CHARS = 200_000
 MAX_WAV_BYTES = 32 * 1024 * 1024
 # One bounded conversion workspace, matching a small WAV plus residue.
-_CONVERSION_WORKSPACE_BYTES = MAX_WAV_BYTES + 1024 * 1024
+_CONVERSION_WORKSPACE_BYTES = MAX_WAV_BYTES + MAX_HELPER_STDOUT_BYTES + 1024 * 1024
 # Fixed, explicit thread count.  whisper's hardware-default thread count is
 # nondeterministic across hosts and can oversubscribe a shared VPS; two threads keeps
 # one job's CPU footprint predictable and is what the isolated unit is sized for.
@@ -345,6 +346,7 @@ class DirectRunner(HelperRunner):
             max_stderr_bytes=MAX_HELPER_STDERR_BYTES,
             env=dict(env),
             pass_fds=pass_fds,
+            reap_orphans=True,
         )
 
 
@@ -498,7 +500,11 @@ class SystemdRunner(HelperRunner):
         env: Mapping[str, str],
         pass_fds: tuple[int, ...] = (),
     ) -> ProcessOutcome:
-        unit_name = self.unit_name(self.unit_prefix)
+        unit_name = (
+            Path(argv[argv.index("--workspace") + 1]).name + ".scope"
+            if "--workspace" in argv
+            else self.unit_name(self.unit_prefix)
+        )
         try:
             outcome = run_bounded(
                 self.command(argv, unit_name=unit_name, runtime_max_seconds=timeout_seconds),
@@ -617,7 +623,9 @@ class LinuxWhisperHelper:
         max_pcm_bytes: int = MAX_PCM_BYTES,
         python_executable: str | None = None,
         runner: HelperRunner | None = None,
+        storage: StorageBudget | None = None,
     ) -> None:
+        self.storage = storage
         self.helper_path = Path(helper_path)
         self.language = language
         self.model = model if model is not None else resolve_model_binding(self.helper_path)
@@ -712,6 +720,23 @@ class LinuxWhisperHelper:
             raise
         return descriptor
 
+    def reap_workspaces(self, staging_root: Path) -> int:
+        runner = self.runner
+        tracked: list[Path] = []
+        try:
+            root = staging_root / "linux-jobs"
+            tracked = workspace.inventory(root) if self.storage is not None else []
+            return workspace.reap(
+                root,
+                manager=runner.systemctl if isinstance(runner, SystemdRunner) else None,
+                stop=runner._cleanup_unit if isinstance(runner, SystemdRunner) else None,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise _blocked("helper_workspace_cleanup_failed") from exc
+        finally:
+            if self.storage is not None:
+                self.storage.track(*tracked)
+
     def transcribe_silk(
         self, silk_path: Path, *, deadline: float | None = None
     ) -> HelperTranscript:
@@ -721,19 +746,30 @@ class LinuxWhisperHelper:
         if not self.runner.available():
             raise _blocked("helper_runner_unavailable")
         timeout = self._budgeted_timeout(deadline)
+        root = silk_path.parent / "linux-jobs"
+        self.reap_workspaces(silk_path.parent)
+        manager = self.runner.systemctl if isinstance(self.runner, SystemdRunner) else None
         descriptor = self._open_private_silk(silk_path)
         try:
-            try:
-                outcome = self.runner.run(
-                    self._command(descriptor, timeout_seconds=timeout),
-                    timeout_seconds=timeout,
-                    env=helper_environment(),
-                    pass_fds=(descriptor,),
-                )
-            except BoundedProcessError as exc:
-                raise _blocked("helper_spawn_failed") from exc
+            with workspace.attempt(
+                root, "sightglass-whisper-" + secrets.token_hex(16), manager=manager
+            ) as (directory, lease):
+                command = self._command(descriptor, timeout_seconds=timeout)
+                command.extend(["--workspace", str(directory), "--workspace-lease-fd", str(lease)])
+                environment = helper_environment()
+                environment["TMPDIR"] = str(directory)
+                try:
+                    outcome = self.runner.run(
+                        command,
+                        timeout_seconds=timeout,
+                        env=environment,
+                        pass_fds=(descriptor, lease),
+                    )
+                except BoundedProcessError as exc:
+                    raise _blocked("helper_spawn_failed") from exc
         finally:
             os.close(descriptor)
+            self.reap_workspaces(silk_path.parent)
         if outcome.timed_out:
             raise _timeout("helper_timeout")
         if outcome.limit_exceeded is not None:
@@ -865,7 +901,10 @@ class LinuxSilkTranscriber:
     ) -> VoiceTranscription:
         budget = self.storage
         reservation = (
-            budget.reserve(self.capture.max_bytes + self.helper.max_pcm_bytes, background=True)
+            budget.reserve(
+                self.capture.max_bytes + self.helper.max_pcm_bytes + _CONVERSION_WORKSPACE_BYTES,
+                background=True,
+            )
             if budget is not None
             else nullcontext()
         )

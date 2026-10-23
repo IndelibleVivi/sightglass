@@ -650,7 +650,7 @@ Source traversal cursor、timeline pagination cursor、reader update cursor 是�
 - timeline cursor：按消息时间线前后翻页；
 - reader update cursor：按 Sightglass 的单调 `observation_seq` 交付“新观察到的变化”。
 
-连续 sync frontier 与独立 observed windows 分开：已有 1–100 后，foreground recent 观察 181–200，不能把 frontier 改成 200；后台仍从 100 后逐批恢复 101–180。Historical backfill 从 contiguous floor 前继续，不能被一个更早的独立岛误导到全局 earliest 前。History 与 forward complete 分别须有 exhaustion proof，内部 gap／legacy unverified 仍存在时不得 claim complete；已有完整 proof 且 recent 上界不越过 frontier 时保留 complete。Physical source 未改变也不能跳过待重验证或未完成的 forward recovery。
+连续 sync frontier 与独立 observed windows 分开：已有 1–100 后，foreground recent 观察 181–200，不能把 frontier 改成 200；后台仍从 100 后逐批恢复 101–180。显式 historical job 按 requested time window 与自身 signed backward position 遍历，包含此前释放正文的区间；其 position、processed count 与 admission 原子持久化。全局 contiguous floor 仅在新验证窗口确实连接现有 frontier 时延伸，不能被更早的独立岛误导而跳过 gap，也不能代替 job progress。History 与 forward complete 分别须有 exhaustion proof，达到 job 消息上限不等于完整历史；内部 gap／legacy unverified 仍存在时不得 claim complete；已有完整 proof 且 recent 上界不越过 frontier 时保留 complete。Physical source 未改变也不能跳过待重验证或未完成的 forward recovery。正文 expiry 不自动排队或恢复历史，重新读取须显式 job 或获准 foreground read。
 
 若 provider 无法证明 source traversal key 严格单调，必须使用 bounded overlap + stable message dedupe，并安排 reconciliation；不能只按 `sent_at` 前进。在有效 retained update scope 内，晚到、补录或恢复出来的旧时间消息必须能以 `late_arrival=true` 进入 updates，而不能被 timeline cursor 静默跳过；§8.7 的有限缓存若已不足以维持该 scope，明确 expire/rebaseline。
 

@@ -28,17 +28,19 @@ class HeldTranscriber:
 
     def __init__(self) -> None:
         self.release = threading.Event()
+        self.entered = threading.Event()
 
     def transcribe(
         self, job: dict[str, Any], *, duration_ms: int, deadline: float | None
     ) -> str:
+        self.entered.set()
         while not self.release.wait(timeout=0.05):
             pass
         return "Synthetic transcript"
 
 
 class VoiceTranscriptWaiterPolicyTests(unittest.TestCase):
-    """Exercise the daemon's real three-phase transcript path without IPC sockets."""
+    """Exercise the running daemon's real three-phase transcript path."""
 
     def setUp(self) -> None:
         self.temp = TemporaryDirectory()
@@ -70,12 +72,24 @@ class VoiceTranscriptWaiterPolicyTests(unittest.TestCase):
             secret_store=self.secrets,
             voice_transcriber=self.transcriber,
         )
+        self.serve_errors = []
+
+        def serve():
+            try:
+                self.daemon.serve_forever(install_signal_handlers=False)
+            except BaseException as error:
+                self.serve_errors.append(error)
+
+        self.server_thread = threading.Thread(target=serve, daemon=True)
+        self.server_thread.start()
+        self.wait_until(lambda: self.daemon._lifecycle_state == "ready")
 
     def tearDown(self) -> None:
         self.transcriber.release.set()
-        self.daemon.voice_worker.stop()
-        self.daemon.source_worker.stop()
-        self.daemon.tools.close()
+        self.daemon.shutdown()
+        self.server_thread.join(POLL_TIMEOUT_SECONDS)
+        self.assertFalse(self.server_thread.is_alive())
+        self.assertEqual(self.serve_errors, [])
         self.temp.cleanup()
 
     def wait_until(self, predicate, *, timeout: float = POLL_TIMEOUT_SECONDS) -> None:
@@ -110,10 +124,19 @@ class VoiceTranscriptWaiterPolicyTests(unittest.TestCase):
 
     def test_policy_revoked_while_a_transcript_waiter_is_parked_is_rechecked(self) -> None:
         token = self._reading_token()
+        # Let the running worker commit its processing event before choosing the
+        # cursor to park at; a newly committed event should legitimately return.
+        self.assertTrue(self.transcriber.entered.wait(POLL_TIMEOUT_SECONDS))
         initial = self._dispatch(
             {"reading_token": token, "cursor": None, "wait_ms": 0}
         )
+        for _ in range(4):
+            if not initial.get("has_more_results_now"):
+                break
+            initial = self._dispatch(
+                {"reading_token": token, "cursor": initial["next_cursor"], "wait_ms": 0})
         self.assertEqual(initial["schema"], "sightglass.voice-page.v2")
+        self.assertFalse(initial["has_more_results_now"])
         cursor = initial["next_cursor"]
         assert cursor is not None
         result: dict[str, Any] = {}

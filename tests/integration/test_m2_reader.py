@@ -596,6 +596,17 @@ class M2ReaderTests(unittest.TestCase):
             query="needle",
             limit=100,
         )
+        # A fresh bounded verification can first examine an older zero-hit
+        # prefix. ACK advances only this filter and permits source reconciliation.
+        for _ in range(5):
+            if delivery["messages"]:
+                break
+            self.assertTrue(delivery["page"]["has_more_after"])
+            delivery = self.tools.wechat_read_messages(
+                mode="updates", conversation_id=self.group_id,
+                participant_ids=[demo_member["participant_id"]], query="needle", limit=100,
+                ack_delivery_id=delivery["page"]["delivery_id"],
+            )
         self.assertEqual([item["text"] for item in delivery["messages"]], ["needle update"])
         self.tools.wechat_read_messages(
             mode="updates",
