@@ -346,6 +346,24 @@ class CaptureBroker:
         with self._condition:
             return self._connected and not self._closed
 
+    def diagnostics(self) -> dict[str, Any]:
+        """Content-free queue/phase snapshot; performs no transport or recovery work."""
+        with self._condition:
+            work = self._inflight
+            ticket = work.ticket if work is not None else None
+            return {
+                "queued": len(self._queue),
+                "detached_queued": sum(work.detached for work in self._queue),
+                "inflight": {
+                    "operation": work.request.operation,
+                    "captured": ticket is not None,
+                    "detached": work.detached,
+                    "recovering": work.recovering,
+                    "waiters": work.waiters,
+                    "durable_terminal": ticket is not None and ticket.durable_ack is not None,
+                } if work is not None else None,
+            }
+
     def submit(self, request: CaptureRequest, *, timeout: float = 120.0) -> PreparedRemoteCapture:
         from sightglass.contracts.capture import CaptureCeiling
 
@@ -382,10 +400,16 @@ class CaptureBroker:
             with self._condition:
                 work.waiters -= 1
                 if not completed and work.waiters == 0:
-                    # A cancelled caller releases foreground ownership promptly.
-                    # Receipt arrival/replay retains exact terminal recovery; it
-                    # must not reissue the source read or fabricate an ACK.
                     work.detached = True
+                    # Selection and removal share this lock. An unissued request
+                    # with no remaining callers must never start source work or
+                    # keep a pending slot; an already selected request retains its
+                    # exact late-terminal recovery without reissue or early ACK.
+                    if (self._inflight is not work and work.ticket is None
+                            and self._by_request.get(request.request_id) is work):
+                        self._queue.remove(work)
+                        del self._by_request[request.request_id]
+                        self._condition.notify_all()
         if not completed:
             self._recover_work(work)
             # Do not fabricate a terminal ACK or release an in-flight source read.

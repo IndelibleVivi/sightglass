@@ -383,10 +383,12 @@ edge egress ceiling, ReaderPolicy or independent edge capability.
 
 The broker bounds pending requests. Waiting checks the caller's existing
 cancellation/deadline cooperatively, including a background source worker's
-foreground-yield signal. Cancellation releases the waiter and detaches its exact
-request; a later receipt still requires terminal recovery and never resumes the
-cancelled caller or reissues the source read. A submit timeout detaches the waiter and
-retains the exact authorized work. A late capture enters the configured recovery
+foreground-yield signal. When the last waiter departs before selection, the broker
+removes that unissued queued request under the selection lock and releases its
+pending slot. Another joined waiter keeps the request eligible. Cancellation or
+timeout after selection detaches the exact work; a later receipt still requires
+terminal recovery and never resumes the cancelled caller or reissues the source
+read. A late capture enters the configured recovery
 hook even when its request is already known. If a returned ticket has no durable
 ACK when its finalization wait expires, or its caller cannot commit rejection,
 the broker marks that exact work abandoned. An explicitly abandoned returned
@@ -403,6 +405,19 @@ checks current reader policy; exact terminal-only rejection uses the original
 authorized binding described above. An expired complete capture may be
 durably rejected without admitting its body, and only an outer-committed terminal
 ACK may release the edge spool.
+
+Every captured Core invocation must settle its ticket on normal return as well as
+failure. If a history step becomes idle or paused after its capture, it commits
+exact rejection immediately rather than leaving the ordered stream occupied until
+the orphan finalization timeout. No source admission or history progress is
+fabricated by that rejection.
+
+Core status includes `capture.relay`, an in-memory content-free snapshot with
+queued/detached-queued counts and an optional in-flight operation, capture,
+detachment, recovery, waiter and durable-terminal state. It contains no request or
+conversation identity, arguments, content, paths or stacks, and probes no source,
+database or transport. A phase snapshot is diagnostic evidence, not confirmation
+of current source facts.
 
 After a core restart, an unknown
 pending capture needs an exact durable request binding and an authorized recovery

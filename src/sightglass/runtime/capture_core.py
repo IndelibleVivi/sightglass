@@ -99,6 +99,7 @@ class CoreCapture:
             "interpretation_epoch_preserved": (
                 self.expected.origin_epoch == self.service._projection_inventory_epoch()
             ),
+            "relay": self.broker.diagnostics(),
         }
 
     def transport_evidence(self) -> str:
@@ -767,7 +768,13 @@ class CoreCapture:
             with self.service.captured_provider(
                 ticket.provider, before_commit=before, after_commit=after
             ):
-                return self.service.process_backfill_once(batch_limit=199)
+                result = self.service.process_backfill_once(batch_limit=199)
+            # Operator/storage changes can make the reader return idle/paused
+            # without admitting this already-captured page. Release its ordered
+            # slot through exact terminal rejection, never the orphan timeout.
+            if ticket.durable_ack is None:
+                self._reject(ticket)
+            return result
         except BaseException:
             if ticket.durable_ack is None:
                 self._reject(ticket)

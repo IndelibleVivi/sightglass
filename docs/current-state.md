@@ -52,14 +52,26 @@ remains `91e0a16`. The test-only `6872929` follow-up preserves all 137 package
 modules and passed both jobs in hosted CI
 [39882055429](https://github.com/IndelibleVivi/sightglass/actions/runs/39882055429).
 
-The current capture-wait follow-up consumes the caller's remaining operation
+The installed Core `c271155` consumes the caller's remaining operation
 budget instead of applying an earlier fixed cutoff while ordered background work
 finishes. Original reader/worker deadlines, cancellation and exact terminal
 recovery remain in force. A real-relay regression verifies that an in-budget
 capture can still be admitted after the unbudgeted fallback interval; deadline
-and cancellation regressions retain their existing limits. This follow-up remains
-a candidate until installed verification, activation and fresh paging acceptance
-complete.
+and cancellation regressions retain their existing limits. Its 72 adjacent source
+tests, 133 installed tests and isolated wheel gate passed, and hosted CI
+[39883146938](https://github.com/IndelibleVivi/sightglass/actions/runs/39883146938)
+passed both jobs. Activation preserved the existing database/configuration/grants
+and retained the Mac edge. A subsequent fresh signed-page continuation still
+exceeded the original reader deadline, so stable live paging remains unaccepted.
+
+The current source retires unselected queued requests when their last waiter
+cancels or times out, preserving joined waiters and exact recovery for work already
+selected. A captured history step that returns idle/paused now commits exact
+rejection immediately. Core status adds content-free in-memory relay phases for
+diagnosis. The combined 103 adjacent regressions and scoped Ruff/Pyright passed;
+this follow-up remains a candidate until installed verification, activation and
+fresh paging acceptance complete. These regression fixes alone do not establish
+the cause of the remaining live timeout.
 
 ## Earlier reliability acceptance (2026-10-21–22)
 

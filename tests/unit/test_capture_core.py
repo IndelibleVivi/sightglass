@@ -671,6 +671,41 @@ class CoreCaptureTests(unittest.TestCase):
         self.assertEqual(page["source_receipt"]["view"], "fresh")
         self.assertEqual(len(page["messages"]), 2)
 
+    def test_backfill_paused_after_capture_rejects_without_waiting_for_finalization(self) -> None:
+        self.start_edge()
+        self.service.residency.set(self.group, mode="keep", keep_backfill=True)
+        queued = self.core.catalog_call(
+            lambda: self.service.queue_backfill(conversation_id=self.group, max_messages=10)
+        )
+        self.assertEqual(queued["queued_job_count"], 1)
+        watermark = self.repository.observation_watermark()
+        submit = self.core._submit
+        tickets = []
+
+        def pause_after_capture(values):
+            ticket = submit(values)
+            tickets.append(ticket)
+            self.service.set_backfill_paused(True)
+            return ticket
+
+        with mock.patch.object(self.core, "_submit", side_effect=pause_after_capture):
+            result = self.core.backfill_once()
+        self.assertEqual(result["state"], "idle")
+        self.assertEqual(len(tickets), 1)
+        ack = tickets[0].durable_ack
+        self.assertIsNotNone(ack)
+        self.assertEqual(ack.terminal, "rejected")
+        self.assertEqual(self.core.receiver.lookup_terminal(tickets[0].envelope), ack)
+        self.assertEqual(self.repository.observation_watermark(), watermark)
+        # The next real relay request must proceed without the 30-second orphan
+        # ticket timeout, and pausing history must not pause ordinary fresh reads.
+        with operation_budget(2):
+            page = self.call(
+                "wechat_read_messages", mode="recent", conversation_id=self.group,
+                refresh=True, limit=1, voice="off", include_resources="none",
+            )
+        self.assertEqual(page["source_receipt"]["view"], "fresh")
+
     def test_capture_wait_timeout_advances_rotation_before_source_work(self) -> None:
         self.start_edge()
         self.core.sync_once()

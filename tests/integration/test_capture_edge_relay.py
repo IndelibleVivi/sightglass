@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+import json
+import socket
 import subprocess
 import sys
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -45,6 +48,246 @@ class CaptureEdgeRelayTests(unittest.TestCase):
     setUp = fixtures.CaptureBoundaryTests.setUp
     request = fixtures.CaptureBoundaryTests.request
     capture = fixtures.CaptureBoundaryTests.capture
+
+    @contextmanager
+    def _live_channel(self, broker):
+        server = CaptureBrokerServer(broker, self.root / "live-broker.sock")
+        server.start()
+        try:
+            with socket.socket(socket.AF_UNIX) as connection:
+                connection.connect(str(server.socket_path))
+                with connection.makefile("rb") as reader, connection.makefile("wb") as writer:
+                    channel = FramedStream(reader, writer)
+                    channel.send({
+                        "schema": CAPTURE_VERSION, "kind": "hello", "role": "edge",
+                        "token": "synthetic-token",
+                        "source_instance_id": self.expected.source_instance_id,
+                        "account_id": self.expected.account_id,
+                        "origin_epoch": self.expected.origin_epoch,
+                        "stream_epoch": "fixture-stream", "next_sequence": 1,
+                        "core_generation": "",
+                    })
+                    self.assertEqual(channel.receive(timeout=2), {
+                        "schema": CAPTURE_VERSION, "kind": "ready", "core_generation": "",
+                    })
+                    yield channel
+        finally:
+            server.close()
+
+    def test_unissued_queued_cancel_and_timeout_never_reach_relay_and_release_capacity(self):
+        for reason in ("cancelled", "broker_timeout", "operation_deadline"):
+            with self.subTest(reason=reason):
+                broker = CaptureBroker(
+                    self.expected, token_hash=edge_token_hash("synthetic-token"),
+                    lookup_terminal=lambda _: None, max_pending_requests=1,
+                )
+                cancelled = threading.Event()
+                request = self.request()
+
+                def wait():
+                    with operation_budget(
+                        .05 if reason == "operation_deadline" else 5, cancelled=cancelled
+                    ):
+                        return broker.submit(
+                            request, timeout=.05 if reason == "broker_timeout" else 3
+                        )
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    waiter = pool.submit(wait)
+                    try:
+                        with broker._condition:
+                            self.assertTrue(broker._condition.wait_for(
+                                lambda: bool(broker._queue), 1))
+                            original = broker._queue[0]
+                            self.assertIsNone(broker._inflight)
+                        if reason == "cancelled":
+                            cancelled.set()
+                        error = (
+                            CaptureWaitTimeout if reason == "broker_timeout" else SightglassError
+                        )
+                        with self.assertRaises(error):
+                            waiter.result(timeout=1)
+                        self.assertEqual(original.waiters, 0)
+                        self.assertIsNone(original.ticket)
+                        with self._live_channel(broker) as channel:
+                            channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+                            self.assertEqual(channel.receive(timeout=2), {
+                                "schema": CAPTURE_VERSION, "kind": "idle", "retry_seconds": 1,
+                            }, "an abandoned queued request escaped to the edge")
+                            self.assertEqual(broker._by_request, {})
+                            self.assertEqual(len(broker._queue), 0)
+                            self.assertIsNone(broker._inflight)
+                            fresh = replace(request, request_id="synthetic-fresh-after-cancel")
+                            next_waiter = pool.submit(broker.submit, fresh, timeout=2)
+                            with broker._condition:
+                                self.assertTrue(broker._condition.wait_for(
+                                    lambda: bool(broker._queue), 1))
+                            channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+                            work = channel.receive(timeout=2)
+                            assert isinstance(work, dict)
+                            self.assertEqual(work["kind"], "work")
+                            self.assertEqual(work["request"]["request_id"], fresh.request_id)
+                            channel.send({
+                                "schema": CAPTURE_VERSION, "kind": "failed",
+                                "request_id": fresh.request_id, "reason": "capture_unsealed",
+                            })
+                            with self.assertRaises(CaptureProtocolError):
+                                next_waiter.result(timeout=1)
+                    finally:
+                        broker.close()
+
+    def test_cancelled_queued_waiter_keeps_joined_waiter_and_one_relay_capture(self):
+        journal = fixtures.FixtureReceiveJournal(self.root / "joined-receive.sqlite")
+        receiver = CaptureReceiver(journal, self.expected, stream_epoch="fixture-stream")
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=receiver.lookup_terminal, max_pending_requests=1,
+        )
+        cancelled = threading.Event()
+        request = self.request()
+
+        def wait():
+            with operation_budget(5, cancelled=cancelled):
+                return broker.submit(request, timeout=3)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(wait)
+            second = pool.submit(broker.submit, request, timeout=3)
+            try:
+                with broker._condition:
+                    self.assertTrue(broker._condition.wait_for(
+                        lambda: (request.request_id in broker._by_request
+                                 and broker._by_request[request.request_id].waiters == 2), 1))
+                    work = broker._by_request[request.request_id]
+                cancelled.set()
+                with self.assertRaises(SightglassError):
+                    first.result(timeout=1)
+                self.assertEqual(work.waiters, 1)
+                self.assertFalse(work.detached)
+                self.assertIs(broker._queue[0], work)
+                with self._live_channel(broker) as channel:
+                    channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+                    frame = channel.receive(timeout=2)
+                    assert isinstance(frame, dict)
+                    self.assertEqual(frame["kind"], "work")
+                    self.assertEqual(frame["request"]["request_id"], request.request_id)
+                    envelope = self.capture(request)
+                    channel.send(envelope)
+                    ticket = second.result(timeout=1)
+                    self.assertIs(work.ticket, ticket)
+                    self.assertIsNone(ticket.durable_ack)
+                    self.assertIsNone(receiver.lookup_terminal(envelope))
+                    ack = receiver.admit(
+                        receiver.prepare(envelope), journal.append,
+                        receipt_id="synthetic-joined-commit",
+                    )
+                    ticket.complete(ack)
+                    self.assertEqual(channel.receive(timeout=2), {
+                        "schema": CAPTURE_VERSION, "kind": "ack", "ack": json_value(ack),
+                    })
+                    channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+                    self.assertEqual(channel.receive(timeout=2), {
+                        "schema": CAPTURE_VERSION, "kind": "idle", "retry_seconds": 1,
+                    })
+                    self.assertEqual(broker._by_request, {})
+                    self.assertIsNone(broker._inflight)
+            finally:
+                broker.close()
+
+    def test_content_free_diagnostics_distinguish_queue_capture_and_terminal_recovery(self):
+        journal = fixtures.FixtureReceiveJournal(self.root / "diagnostics-receive.sqlite")
+        receiver = CaptureReceiver(journal, self.expected, stream_epoch="fixture-stream")
+        recovering = threading.Event()
+        commit = threading.Event()
+        committed = threading.Event()
+        finish = threading.Event()
+
+        def recover(ticket):
+            recovering.set()
+            if not commit.wait(3):
+                raise RuntimeError("synthetic diagnostics commit barrier expired")
+            ack = receiver.admit(
+                receiver.prepare(ticket.envelope), None,
+                receipt_id="synthetic-diagnostics-reject", reject=True,
+            )
+            ticket.complete(ack)
+            committed.set()
+            if not finish.wait(3):
+                raise RuntimeError("synthetic diagnostics finish barrier expired")
+
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=receiver.lookup_terminal, recover=recover,
+        )
+        snapshots = [broker.diagnostics()]
+        self.assertEqual(snapshots[0], {"queued": 0, "detached_queued": 0, "inflight": None})
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiter = pool.submit(broker.submit, self.request(), timeout=3)
+            try:
+                with broker._condition:
+                    self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+                snapshots.append(broker.diagnostics())
+                self.assertEqual(snapshots[-1], {
+                    "queued": 1, "detached_queued": 0, "inflight": None,
+                })
+                with self._live_channel(broker) as channel:
+                    channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+                    frame = channel.receive(timeout=2)
+                    assert isinstance(frame, dict)
+                    self.assertEqual(frame["kind"], "work")
+                    phase = {
+                        "operation": self.request().operation, "captured": False,
+                        "detached": False, "recovering": False, "waiters": 1,
+                        "durable_terminal": False,
+                    }
+                    snapshots.append(broker.diagnostics())
+                    self.assertEqual(snapshots[-1], {
+                        "queued": 0, "detached_queued": 0, "inflight": phase,
+                    })
+                    channel.send(self.capture())
+                    ticket = waiter.result(timeout=1)
+                    phase = {**phase, "captured": True, "waiters": 0}
+                    snapshots.append(broker.diagnostics())
+                    self.assertEqual(snapshots[-1]["inflight"], phase)
+                    broker.abandon(ticket)
+                    self.assertTrue(recovering.wait(1))
+                    phase = {**phase, "detached": True, "recovering": True}
+                    snapshots.append(broker.diagnostics())
+                    self.assertEqual(snapshots[-1]["inflight"], phase)
+                    commit.set()
+                    self.assertTrue(committed.wait(1))
+                    snapshots.append(broker.diagnostics())
+                    self.assertEqual(snapshots[-1]["inflight"], {
+                        **phase, "durable_terminal": True,
+                    })
+                    finish.set()
+                    ack = channel.receive(timeout=2)
+                    assert isinstance(ack, dict)
+                    self.assertEqual(ack["kind"], "ack")
+                    channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+                    self.assertEqual(channel.receive(timeout=2), {
+                        "schema": CAPTURE_VERSION, "kind": "idle", "retry_seconds": 1,
+                    })
+                    snapshots.append(broker.diagnostics())
+                    self.assertEqual(snapshots[-1], snapshots[0])
+            finally:
+                commit.set()
+                finish.set()
+                broker.close()
+        for snapshot in snapshots:
+            self.assertEqual(set(snapshot), {"queued", "detached_queued", "inflight"})
+            if snapshot["inflight"] is not None:
+                self.assertEqual(set(snapshot["inflight"]), {
+                    "operation", "captured", "detached", "recovering", "waiters",
+                    "durable_terminal",
+                })
+        encoded = json.dumps(snapshots)
+        for sensitive in (
+            self.request().request_id, self.ceiling.account_id,
+            self.executor.source_instance_id, "conv_group", str(self.root), "synthetic-token",
+            "synthetic-diagnostics-reject",
+        ):
+            self.assertNotIn(sensitive, encoded)
 
     def test_cancelled_waiter_yields_and_late_capture_is_rejected_exactly(self) -> None:
         journal = fixtures.FixtureReceiveJournal(self.root / "cancelled-receive.sqlite")
@@ -686,29 +929,31 @@ class CaptureEdgeRelayTests(unittest.TestCase):
             lookup_terminal=receiver.lookup_terminal,
             recover=recover,
         )
-        with self.assertRaises(CaptureWaitTimeout):
-            broker.submit(self.request(), timeout=0.001)
-        self.assertFalse(broker.connected)
-        wire = io.BytesIO()
-        channel = FramedStream(io.BytesIO(), wire)
-        channel.send(
-            {
-                "schema": CAPTURE_VERSION,
-                "kind": "hello",
-                "role": "edge",
-                "token": "synthetic-token",
-                "source_instance_id": self.executor.source_instance_id,
-                "account_id": self.ceiling.account_id,
-                "origin_epoch": self.executor.origin_epoch,
-                "stream_epoch": "fixture-stream",
-                "next_sequence": 2,
-                "core_generation": "",
-            }
-        )
-        channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
-        channel.send(self.capture())
-        with self.assertRaises(RelayDisconnected):
-            broker.serve_connection(FramedStream(io.BytesIO(wire.getvalue()), io.BytesIO()))
+        with ThreadPoolExecutor(max_workers=1) as pool, self._live_channel(broker) as channel:
+            waiter = pool.submit(broker.submit, self.request(), timeout=2)
+            with broker._condition:
+                self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+            channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+            frame = channel.receive(timeout=1)
+            assert isinstance(frame, dict)
+            self.assertEqual(frame["kind"], "work")
+            with self.assertRaises(CaptureWaitTimeout):
+                waiter.result(timeout=3)
+            work = broker._inflight
+            assert work is not None
+            self.assertEqual(work.waiters, 0)
+            self.assertTrue(work.detached)
+            self.assertIs(broker._by_request[self.request().request_id], work)
+            self.assertEqual(len(broker._queue), 0)
+            channel.send(self.capture())
+            ack = channel.receive(timeout=2)
+            assert isinstance(ack, dict)
+            self.assertEqual(ack["kind"], "ack")
+            self.assertEqual(ack["ack"]["terminal"], "rejected")
+            channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
+            self.assertEqual(channel.receive(timeout=2), {
+                "schema": CAPTURE_VERSION, "kind": "idle", "retry_seconds": 1,
+            })
         self.assertEqual(len(recovered), 1)
         durable_ack = recovered[0].durable_ack
         assert durable_ack is not None
@@ -805,13 +1050,22 @@ class CaptureEdgeRelayTests(unittest.TestCase):
             lookup_terminal=lambda _capture: None,
             max_pending_requests=1,
         )
-        with self.assertRaises(CaptureWaitTimeout):
-            broker.submit(self.request(), timeout=0.001)
-        with self.assertRaisesRegex(CaptureProtocolError, "queue_full"):
-            broker.submit(replace(self.request(), request_id="second-request"), timeout=0.001)
-        wire = io.BytesIO()
-        FramedStream(io.BytesIO(), wire).send(
-            {"schema": CAPTURE_VERSION, "kind": "hello", "role": "reader"}
-        )
-        with self.assertRaisesRegex(CaptureProtocolError, "capability_rejected"):
-            broker.serve_connection(FramedStream(io.BytesIO(wire.getvalue()), io.BytesIO()))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(broker.submit, self.request(), timeout=5)
+            try:
+                with broker._condition:
+                    self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
+                with self.assertRaisesRegex(CaptureProtocolError, "queue_full"):
+                    broker.submit(
+                        replace(self.request(), request_id="second-request"), timeout=0.001
+                    )
+                wire = io.BytesIO()
+                FramedStream(io.BytesIO(), wire).send(
+                    {"schema": CAPTURE_VERSION, "kind": "hello", "role": "reader"}
+                )
+                with self.assertRaisesRegex(CaptureProtocolError, "capability_rejected"):
+                    broker.serve_connection(FramedStream(io.BytesIO(wire.getvalue()), io.BytesIO()))
+            finally:
+                broker.close()
+            with self.assertRaises(RelayDisconnected):
+                waiting.result(timeout=1)
