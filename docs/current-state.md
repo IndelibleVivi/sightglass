@@ -52,7 +52,7 @@ remains `91e0a16`. The test-only `6872929` follow-up preserves all 137 package
 modules and passed both jobs in hosted CI
 [39882055429](https://github.com/IndelibleVivi/sightglass/actions/runs/39882055429).
 
-The installed Core `c271155` consumes the caller's remaining operation
+The `c271155` follow-up consumes the caller's remaining operation
 budget instead of applying an earlier fixed cutoff while ordered background work
 finishes. Original reader/worker deadlines, cancellation and exact terminal
 recovery remain in force. A real-relay regression verifies that an in-budget
@@ -61,17 +61,40 @@ and cancellation regressions retain their existing limits. Its 72 adjacent sourc
 tests, 133 installed tests and isolated wheel gate passed, and hosted CI
 [39883146938](https://github.com/IndelibleVivi/sightglass/actions/runs/39883146938)
 passed both jobs. Activation preserved the existing database/configuration/grants
-and retained the Mac edge. A subsequent fresh signed-page continuation still
-exceeded the original reader deadline, so stable live paging remains unaccepted.
+and retained the Mac edge. A subsequent fresh signed-page continuation on that
+version still exceeded the original reader deadline; that failure is retained
+alongside the later acceptance evidence.
 
 The current source retires unselected queued requests when their last waiter
 cancels or times out, preserving joined waiters and exact recovery for work already
 selected. A captured history step that returns idle/paused now commits exact
 rejection immediately. Core status adds content-free in-memory relay phases for
-diagnosis. The combined 103 adjacent regressions and scoped Ruff/Pyright passed;
-this follow-up remains a candidate until installed verification, activation and
-fresh paging acceptance complete. These regression fixes alone do not establish
-the cause of the remaining live timeout.
+diagnosis. The combined 103 adjacent regressions and scoped Ruff/Pyright passed.
+The test-only `d936dde` follow-up synchronizes the Unix relay's independently
+published connection state and reaps its proxy on failure; all 137 production
+modules match `1dda940`. Hosted CI
+[39886041425](https://github.com/IndelibleVivi/sightglass/actions/runs/39886041425)
+passed 1,551 full macOS tests (four skips), 901 portable tests (16 skips), full
+Pyright, Ruff and both installed-wheel gates. The frozen Linux artifact passed
+137 installed tests (15 platform skips) before activation.
+
+Core `d936dde` is installed and active; the compatible Mac edge remains
+`91e0a16`. Promotion preserved the current database, schema, configuration,
+authorization, interpretation epoch and semantic setting, and verified thirteen
+installed stdio tools and the original tunnel. The original MCP then completed
+fresh recent and signed continuation reads, a 200-plus-199-message traversal with
+399 unique IDs, and a seven-message context containing its original anchor. All
+five reads returned complete rows and fresh receipts without errors or retries
+while background history work remained enabled. Content-free relay sampling had
+no diagnostic errors. This bounded acceptance does not establish which recovered
+branch caused the earlier timeout or a long-term latency guarantee.
+
+The separately authorized installation also verified semantic candidate recall
+and resident historical reads through the original MCP. Background history and
+remote semantic publication remain partial; no full-history or whole-index
+completion is claimed. Exact consent scope, progress, credentials and live
+receipts remain private operator records. Unattended macOS App Data access is
+still unverified.
 
 ## Earlier reliability acceptance (2026-10-21–22)
 
