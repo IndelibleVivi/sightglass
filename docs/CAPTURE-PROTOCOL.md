@@ -404,6 +404,26 @@ the core recovery plan; the core must independently verify its durable ledger.
 Whole spool loss needs an explicit operator declaration because there is no
 cached identity to recover or guess.
 
+A stopped operator may explicitly call
+`EdgeSpool.rebind_origin(expected_state=..., core_position=..., new_origin_epoch=...)`
+for an authorized interpretation upgrade. Open the existing spool with its old
+origin binding; its exclusive `edge.lock` and the object's lock remain held.
+The exact before-image must equal `recovery_state()`, pending must be absent,
+epoch loss must be clear, and the independently verified committed Core
+`CaptureStreamPosition` must exactly match the spool's stream epoch and next
+sequence. The new origin must be a different valid nonempty identity. One owned
+FULL-synchronous transaction compares the complete stream row and changes only
+`origin_epoch`; source/account, stream epoch, next sequence, last ACK and previous
+transition/receipt fields remain unchanged. The in-memory binding changes only
+after commit. The API returns content-free `before`/`after` recovery snapshots
+for the operator to persist privately. A stale snapshot, outstanding pending/loss,
+Core-position mismatch or repeated applied change is explicitly rejected; failure
+does not authorize resetting the stream or rewriting a capture. This internal API
+never runs on normal startup, creates no spool, accesses no source and updates no
+Core/Edge configuration or activation guard. Settle old pending under its exact
+old origin first; the operator owns coordinated settings/activation changes and
+receipt durability. This is separate from stream epoch-loss recovery.
+
 The public control entry points remain stopped-only operator procedures:
 
 | Command | Private output or effect |

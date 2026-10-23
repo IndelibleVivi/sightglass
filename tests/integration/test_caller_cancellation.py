@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import sys
 import threading
 import time
@@ -16,7 +17,11 @@ from mcp.client.stdio import stdio_client
 from mcp.types import CancelledNotification, CancelledNotificationParams, ClientNotification
 
 from sightglass.contracts.errors import SightglassError
-from sightglass.operations import check_operation_budget, operation_budget
+from sightglass.operations import (
+    check_operation_budget,
+    operation_budget,
+    operation_budget_snapshot,
+)
 from sightglass.runtime.config import ConfigStore
 from sightglass.runtime.daemon import SightglassDaemon
 from sightglass.runtime.ipc import IPCClient, IPCTimeoutError
@@ -210,34 +215,137 @@ class CallerCancellationTests(unittest.TestCase):
 
     def test_200_last_callers_cancel_without_thread_or_fd_growth(self):
         params = self.prepare()
-        baseline_threads = {t.ident for t in threading.enumerate()}
+        # A thread already alive at baseline may finish independently of these
+        # cancellations. Reproduce that transition without relying on suite order.
+        release_baseline = threading.Event()
+        departing = threading.Thread(target=release_baseline.wait, daemon=True)
+        self.addCleanup(release_baseline.set)
+        departing.start()
+        baseline_threads = set(threading.enumerate())
+        self.assertIn(departing, baseline_threads)
+        release_baseline.set()
+        departing.join(1)
+        self.assertFalse(departing.is_alive())
         fd_dir = "/dev/fd" if sys.platform == "darwin" else "/proc/self/fd"
         baseline_fds = len(os.listdir(fd_dir))
-        entered = threading.Event()
+        entered, entry_changed = threading.Event(), threading.Event()
+        caller_deadline: list[float] = []
+        invocations = []
+        created_sockets: list[socket.socket] = []
+        socket_lock = threading.Lock()
+        original_socket = socket.socket
+
+        def record_socket(*args, **kwargs):
+            connection = original_socket(*args, **kwargs)
+            if connection.family == socket.AF_UNIX:
+                with socket_lock:
+                    created_sockets.append(connection)
+            return connection
 
         def slow(**kwargs):
+            invocations.append(1)
             entered.set()
+            entry_changed.set()
             while True:
                 check_operation_budget()
                 time.sleep(.001)
 
         def call(cancelled):
             with operation_budget(3, cancelled=cancelled):
+                budget = operation_budget_snapshot()
+                assert budget is not None and budget.deadline is not None
+                caller_deadline.append(budget.deadline)
+                entry_changed.set()
                 return self.client().call("tools.call", params)
 
-        with patch.object(self.daemon.tools, "wechat_read_messages", side_effect=slow):
-            with ThreadPoolExecutor(1) as pool:
-                for _ in range(200):
+        # Wrap actual constructors, including socket.accept's real AF_UNIX socket
+        # objects. Retaining the objects distinguishes close from fd-number reuse.
+        with patch("sightglass.runtime.ipc.socket.socket", side_effect=record_socket):
+            with (patch.object(self.daemon.tools, "wechat_read_messages", side_effect=slow),
+                  ThreadPoolExecutor(1) as pool):
+                for iteration in range(200):
                     entered.clear()
+                    entry_changed.clear()
+                    caller_deadline.clear()
                     cancelled = threading.Event()
+                    submitted_at = time.monotonic()
                     future = pool.submit(call, cancelled)
-                    self.assertTrue(entered.wait(1))
+                    future.add_done_callback(lambda _: entry_changed.set())
+                    # Entry is not an independent latency SLO. Wait for entry or
+                    # early completion within this same caller's existing budget.
+                    while True:
+                        entry_changed.clear()
+                        if entered.is_set() or future.done():
+                            break
+                        deadline = (caller_deadline[0] if caller_deadline
+                                    else submitted_at + 3)
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        entry_changed.wait(remaining)
+                    if not entered.is_set() or future.done():
+                        diagnostics = {
+                            "iteration": iteration, "invocations": len(invocations),
+                            "future_done": future.done(),
+                            "operations": self.daemon._operation_status(include_stack=True),
+                            "source_worker": self.daemon.source_worker.status(),
+                            "lanes": self.daemon._lane_status(),
+                        }
+                        worker = self.daemon.source_worker
+                        with worker._foreground_lock:
+                            diagnostics["source_owner"] = {
+                                "background_active": worker._background_active,
+                                "background_idle": worker._background_idle.is_set(),
+                                "foreground_count": worker._foreground_count,
+                                "cancel_pending": worker._foreground_cancel_pending,
+                                "cancel_work": worker._cancel_work.is_set(),
+                            }
+                        with self.daemon._connection_threads_lock:
+                            diagnostics["connection_count"] = len(
+                                self.daemon._connection_threads
+                            )
+                        if future.done():
+                            try:
+                                result = future.result()
+                            except Exception as exc:
+                                diagnostics["future_outcome"] = type(exc).__name__
+                            else:
+                                diagnostics["future_outcome"] = {
+                                    key: result.get(key) for key in ("schema", "code", "details")
+                                }
+                        cancelled.set()
+                        self.fail(f"entry barrier: {diagnostics}")
                     cancelled.set()
                     with self.assertRaises(SightglassError):
                         future.result(1)
                     self.settled()
-        self.assertEqual({t.ident for t in threading.enumerate()}, baseline_threads)
-        self.assertLessEqual(len(os.listdir(fd_dir)), baseline_fds)
+            self.assertEqual(len(invocations), 200)
+            fresh = self.client().call("tools.call", params)
+            self.assertEqual(fresh["schema"], "sightglass.message-batch.v1")
+            self.assertEqual(fresh["source_receipt"]["view"], "fresh")
+            self.settled()
+        # Keep the objects alive so reused OS thread identifiers cannot hide a
+        # replacement. Allow completed connection threads to finish their final
+        # bookkeeping, then reject any newly created thread that remains alive.
+        for thread in set(threading.enumerate()) - baseline_threads:
+            thread.join(timeout=1)
+        survivors = set(threading.enumerate()) - baseline_threads
+        self.assertFalse(survivors, [thread.name for thread in survivors])
+        self.assertNotIn(departing, threading.enumerate())
+        self.assertEqual(len(created_sockets), 402)  # 201 callers and 201 accepted peers
+        self.assertTrue(all(connection.fileno() == -1 for connection in created_sockets))
+        # Process-wide fd counts can include a receipt/background SQLite open.
+        # Keep a separate bounded convergence check without mistaking that instant
+        # for an owned IPC socket leak or allowing indefinite polling to pass.
+        cleanup_deadline = time.monotonic() + 2
+        current_fds = len(os.listdir(fd_dir))
+        while current_fds > baseline_fds and time.monotonic() < cleanup_deadline:
+            time.sleep(.005)
+            current_fds = len(os.listdir(fd_dir))
+        self.assertLessEqual(current_fds, baseline_fds, {
+            "receipt_writer": self.daemon.tools.receipt_writer_status(),
+            "source_worker": self.daemon.source_worker.status(),
+        })
 
     def test_committed_delivery_survives_unknown_caller_outcome(self):
         params = self.prepare()

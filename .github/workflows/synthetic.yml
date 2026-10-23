@@ -41,6 +41,7 @@ jobs:
           tests.unit.test_capture_boundary tests.unit.test_capture_core tests.unit.test_capture_recovery
           tests.unit.test_activation tests.unit.test_edge_runtime tests.unit.test_frozen_transfer
           tests.unit.test_edge_rebind
+          tests.unit.test_edge_origin_upgrade
           tests.unit.test_linux_platform tests.integration.test_capture_edge_relay
           tests.integration.test_capture_reliability
           tests.integration.test_frozen_installation tests.integration.test_replica_reads

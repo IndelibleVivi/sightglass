@@ -452,6 +452,86 @@ class EdgeSpool:
                 )
             self._recover_owned_files()
 
+    def rebind_origin(
+        self,
+        *,
+        expected_state: dict[str, object],
+        core_position: CaptureStreamPosition,
+        new_origin_epoch: str,
+    ) -> dict[str, object]:
+        """Explicit stopped operator upgrade; preserve every stream/terminal fact.
+
+        The caller independently reads the committed Core position and persists
+        the returned content-free receipt. Holding this object's process lock
+        excludes the managed edge; this method never runs during normal startup.
+        Repeating an applied change is rejected rather than inferred as success.
+        """
+        with self._lock:
+            if self._closed:
+                raise CaptureProtocolError("edge_spool_closed")
+            if (
+                not isinstance(new_origin_epoch, str)
+                or not new_origin_epoch
+                or "\x00" in new_origin_epoch
+            ):
+                raise CaptureProtocolError("invalid_origin_epoch")
+            try:
+                origin_bytes = new_origin_epoch.encode("utf-8")
+            except UnicodeError as exc:
+                raise CaptureProtocolError("invalid_origin_epoch") from exc
+            if len(origin_bytes) > 65_536:
+                raise CaptureProtocolError("invalid_origin_epoch")
+            if not isinstance(expected_state, dict):
+                raise CaptureProtocolError("edge_origin_before_image_mismatch")
+            if (
+                not isinstance(core_position, CaptureStreamPosition)
+                or not isinstance(core_position.stream_epoch, str)
+                or not core_position.stream_epoch
+                or type(core_position.next_sequence) is not int
+                or not 1 <= core_position.next_sequence <= _MAX_SEQUENCE
+            ):
+                raise CaptureProtocolError("edge_origin_core_position_mismatch")
+            if self._connection.in_transaction:
+                raise CaptureProtocolError("edge_origin_rebind_requires_own_transaction")
+            if self._connection.execute("PRAGMA synchronous").fetchone()[0] != 2:
+                raise CaptureProtocolError("edge_origin_rebind_requires_full_sync")
+            with self._connection:
+                self._connection.execute("BEGIN IMMEDIATE")
+                before = self.recovery_state()
+                if new_origin_epoch == before["origin_epoch"]:
+                    raise CaptureProtocolError("edge_origin_rebind_unchanged")
+                if canonical_json(expected_state) != canonical_json(before):
+                    raise CaptureProtocolError("edge_origin_before_image_mismatch")
+                if before["pending"] is not None or before["epoch_lost"]:
+                    raise CaptureProtocolError("edge_origin_rebind_requires_empty_spool")
+                if (
+                    core_position.stream_epoch != before["stream_epoch"]
+                    or core_position.next_sequence != before["next_sequence"]
+                ):
+                    raise CaptureProtocolError("edge_origin_core_position_mismatch")
+                state = self._state()
+                # Compare all raw state, including nullable historical ACK/receipt
+                # fields absent from recovery_state; only origin may change.
+                cursor = self._connection.execute(
+                    "UPDATE stream SET origin_epoch=? WHERE singleton=1"
+                    " AND source_instance_id=? AND account_id=? AND origin_epoch=?"
+                    " AND stream_epoch=? AND next_sequence=? AND epoch_lost=0"
+                    " AND previous_epoch IS ? AND transition_receipt_id IS ?"
+                    " AND last_ack_json IS ?"
+                    " AND NOT EXISTS (SELECT 1 FROM pending)",
+                    (
+                        new_origin_epoch, state["source_instance_id"], state["account_id"],
+                        state["origin_epoch"], state["stream_epoch"], state["next_sequence"],
+                        state["previous_epoch"], state["transition_receipt_id"],
+                        state["last_ack_json"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise CaptureProtocolError("edge_origin_before_image_mismatch")
+            # The durable FULL-synchronous commit precedes the in-memory binding.
+            self._binding = (self._binding[0], self._binding[1], new_origin_epoch)
+            return {"before": before, "after": {**before, "origin_epoch": new_origin_epoch}}
+
     def transition_epoch(self, *, new_epoch: str, next_sequence: int, receipt_id: str) -> None:
         """Apply an already agreed core/edge epoch-loss transition, never reset seq."""
         with self._lock:

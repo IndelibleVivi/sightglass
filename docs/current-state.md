@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-23. This page owns current source, candidate and publication status.
+Updated: 2026-10-24. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -32,8 +32,12 @@ wheel or deleting pending state cannot complete that transition. Old materialize
 currentness and signed history progress will be fenced by a new epoch; semantic
 indexing then uses a new generation/namespace without remote deletion.
 
-The current installation remains Core `d936dde` with Mac edge `91e0a16` until a
-separate activation receipt says otherwise. Source and generated regression
+Core `0bd0759` is now installed and active, preserving the current database,
+configuration, grants, native origin, semantic setting and Mac edge `91e0a16`.
+Its installed stdio catalog, original tunnel, original MCP fresh recent/cursor
+reads and semantic candidate recall passed bounded acceptance. Mac native r1
+and transport-2 execution control still await their coordinated origin transition.
+Source and generated regression
 results do not establish a new installed version, actual native acceptance,
 remote ANN relevance or the proposed 24/72-hour soak. The measured status-latency
 sample is evidence, not a promised 250 ms SLO. Remote cold discovery and a unified
@@ -59,7 +63,25 @@ immediate unlink/recreation reused the inode and all stat facts on that filesyst
 so the test had not guaranteed its intended different-inode trigger. The fixture
 now pins the old inode with an open descriptor and asserts a genuinely different
 replacement before checking stale-token rejection. Production code is unchanged;
-the Linux corrected-fixture acceptance and activation remain separate gates.
+the corrected Linux module then passed all seven cases and ten replacement repeats.
+The other 563 installed results remain separate evidence, not a rerun of that
+whole suite. The installed Linux generated-SILK/real whisper.cpp path completed
+inside an actual systemd scope with 2 GiB, zero swap, OOM group and reclaimed
+workspace; it used no account audio.
+
+The test-only follow-up CI exposed a second fixture criterion error on both
+platforms: its global thread-ID equality assertion rejected a baseline thread
+finishing normally, with no new survivor. The corrected regression explicitly
+exercises that departure, retains Thread objects to prevent ID reuse masking,
+rejects new survivors/FD growth and requires a successful fresh read after 200
+actual cancellations. Neither fixture correction changes production package bytes.
+The subsequent explicit origin-upgrade API is source work with its own ten
+regressions; it never runs during normal startup or implies account activation.
+The final caller resource check additionally tracks all 402 real AF_UNIX socket
+objects through 200 cancellations and a successful fresh call, requiring each to
+be closed. It retains bounded global-FD convergence and the original caller
+budget rather than adding a separate one-second entry SLO. The combined origin,
+capture-boundary/recovery and caller/remote-chain suite passed all 51 tests.
 
 ## Earlier reliability and retrieval repair
 
@@ -127,8 +149,8 @@ passed 1,551 full macOS tests (four skips), 901 portable tests (16 skips), full
 Pyright, Ruff and both installed-wheel gates. The frozen Linux artifact passed
 137 installed tests (15 platform skips) before activation.
 
-Core `d936dde` is installed and active; the compatible Mac edge remains
-`91e0a16`. Promotion preserved the current database, schema, configuration,
+The earlier deployment activated Core `d936dde` with compatible Mac edge
+`91e0a16`. That promotion preserved the current database, schema, configuration,
 authorization, interpretation epoch and semantic setting, and verified thirteen
 installed stdio tools and the original tunnel. The original MCP then completed
 fresh recent and signed continuation reads, a 200-plus-199-message traversal with

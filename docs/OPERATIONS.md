@@ -912,8 +912,15 @@ origin 必须一致；改一处 config 或只换 wheel 会 fail closed。
 pending sealed batches 与 ACK-loss replay。停止两端 owner 后，核对 Core committed stream
 position 与 edge next sequence、pending-empty proof，保留旧 installed releases、private
 config／spool before-images 与可用 recovery。现有 stream epoch-loss recovery 和
-`edge-rebind` 都不迁移 origin；必须先准备经核验的显式 origin／spool transition 与失败恢复
-步骤，不能删除 pending、重置 stream 或伪造旧 capture 的 epoch 来切换。
+`edge-rebind` 都不迁移 origin。显式内部 API `EdgeSpool.rebind_origin` 接受 exact
+`recovery_state()` before-image、独立核实的 Core committed `CaptureStreamPosition` 与目标
+origin；先私有持久化该 intent，再在原 spool／旧 binding 上调用，最后持久化返回的
+before／after receipt。仅无 pending／loss 且两端 stream／next sequence 完全相等时提交。
+API 仅改 spool origin，保留序号、last ACK 与原 stream，不修改 config 或 Core ledger。
+两端 config 由 operator 按各自 exact before-image 原子替换；启用前复核三处 origin 与
+未变的 account／stream／generation。若 commit 后 receipt 发布中断，先比较实际 spool
+与已持久化 intent 的完整 before／after，不能盲重放。失败恢复须在两端停机、无新 capture
+ACK 的阶段作出，不能删除 pending、重置 stream 或伪造旧 capture 的 epoch 来切换。
 
 切换会使旧 epoch 的 materialized currentness／cursors 失效，旧 signed history job failed
 并保留进度；需要历史时按已授权的原 scope 显式创建新 job。Semantic worker 发现新 epoch
