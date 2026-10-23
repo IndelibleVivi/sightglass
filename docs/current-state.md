@@ -12,9 +12,9 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Reliability and retrieval repair candidate
+## Reliability and retrieval repair
 
-The current candidate addresses the reliability review across broker restart and
+The `91e0a16` implementation addresses the reliability review across broker restart and
 cancellation, exact terminal replay after policy tightening, frozen delivery ACKs,
 runtime reload recovery, inclusive residency pins, durable single-link CAS/delivery
 publication, bounded updates, absent semantic-intent retry, Linux voice workspace
@@ -33,11 +33,22 @@ The source candidate passed 1,545 full generated/native-fixture tests, full
 Pyright, Ruff and compileall. Its isolated installed-wheel gate verified 137
 package modules, five license/provenance files, four actual command entrypoints,
 thirteen stdio tools and a generated three-message read. Hosted CI, the exact
-Linux/macOS installation candidates and production activation remain separate
-gates. The previously accepted `a5a70cb` core and `4aa8d23` edge remain the last
-recorded active installation.
+Linux/macOS installation and production activation were verified separately:
+both installed owners advanced to `91e0a16`, preserving the current database,
+configuration, grants and stream. Hosted CI
+[39877969978](https://github.com/IndelibleVivi/sightglass/actions/runs/39877969978)
+passed its portable and macOS jobs. This does not establish unattended macOS
+App Data access or complete history coverage.
 Semantic support remains disabled by default; real-content permission, remote
 publication progress and live installation acceptance are private operator facts.
+
+The subsequent source fix removes conversation-wide body-expiry inventory scans
+from explicit fresh target validation and replica selection. Automatic cache
+selection retains its expiry check; replica pages still enforce per-row resident
+availability. A generated 10,000-body regression bounds each SQL statement during
+fresh classification and execution, alongside the existing cursor, policy and
+residency checks. This follow-up remains a candidate until its own installed
+verification, activation and fresh reader acceptance complete.
 
 ## Earlier reliability acceptance (2026-10-21–22)
 

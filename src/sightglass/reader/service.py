@@ -3955,13 +3955,17 @@ class ReaderService:
             return None
         self.reader.authorize(conversation_id)
         epoch = self._projection_inventory_epoch()
-        with self.repository.database.connection() as connection:
-            expired = connection.execute(
-                "SELECT 1 FROM message_body_residency WHERE conversation_id=? "
-                "AND expires_at<=? LIMIT 1", (conversation_id, datetime.now(UTC).isoformat())
-            ).fetchone()
-        if expired and view != "replica":
-            return None
+        if view == "auto":
+            # Only automatic cache selection needs this inventory check. Fresh
+            # reads acquire source evidence; replica pages apply the bounded
+            # per-message resident predicate when selecting their rows.
+            with self.repository.database.connection() as connection:
+                expired = connection.execute(
+                    "SELECT 1 FROM message_body_residency WHERE conversation_id=? "
+                    "AND expires_at<=? LIMIT 1", (conversation_id, datetime.now(UTC).isoformat())
+                ).fetchone()
+            if expired:
+                return None
         state = self.repository.source_conversation_state(conversation_id)
         if state is not None and (
             str(state["last_error_code"] or "")
@@ -4060,6 +4064,7 @@ class ReaderService:
                     if isinstance(arguments.get("anchor"), str)
                     else None
                 ),
+                view=view,
             )
             # Fresh acquisition needs a source lease only after the canonical
             # arguments, target signature, message identity and policy are valid.
@@ -4978,6 +4983,7 @@ class ReaderService:
                 conversation_id=conversation_id,
                 message_id=message_id,
                 anchor=anchor,
+                view=resolved_view,
             )
         else:
             materialized = self._read_materialized_messages(

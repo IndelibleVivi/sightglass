@@ -19,6 +19,58 @@ from tests.fixtures.factory import build_test_stack
 
 
 class MaterializedReadPlaneTests(unittest.TestCase):
+    def test_fresh_read_does_not_scan_retained_body_stock(self) -> None:
+        with self.repository.database.transaction() as connection:
+            seed = dict(connection.execute(
+                "SELECT * FROM messages WHERE conversation_id=? LIMIT 1", (self.group,)
+            ).fetchone())
+            columns = tuple(seed)
+            rows = []
+            for index in range(10_000):
+                row = dict(seed, message_id=f"wxmsg_synthetic_stock_{index}",
+                           source_message_id=f"synthetic-stock-{index}")
+                rows.append(tuple(row[key] for key in columns))
+            connection.executemany(
+                f"INSERT INTO messages ({','.join(columns)}) VALUES "
+                f"({','.join('?' for _ in columns)})", rows,
+            )
+            connection.executemany(
+                "INSERT INTO message_body_residency VALUES (?,?,'keep',1,?,NULL)",
+                [(f"wxmsg_synthetic_stock_{index}", self.group, "2026-01-01T00:00:00+00:00")
+                 for index in range(10_000)],
+            )
+        database = self.repository.database
+        connect = database.connect
+
+        def bounded_connect() -> sqlite3.Connection:
+            connection = connect()
+            steps = 0
+
+            def reset(_sql: str) -> None:
+                nonlocal steps
+                steps = 0
+
+            def bound() -> int:
+                nonlocal steps
+                steps += 100
+                return int(steps > 20_000)
+
+            connection.set_trace_callback(reset)
+            connection.set_progress_handler(bound, 100)
+            return connection
+
+        arguments: dict[str, Any] = {
+            "mode": "recent", "conversation_id": self.group, "refresh": True,
+            "limit": 2, "voice": "off", "include_resources": "none",
+        }
+        # The same per-statement budget covers classification and execution. A
+        # retained body inventory cannot consume the fresh source read's deadline.
+        with patch.object(database, "connect", side_effect=bounded_connect):
+            self.assertFalse(self.service.local_message_read_ready(arguments))
+            page = self.service.read_messages(**arguments)
+        self.assertEqual(page["source_receipt"]["view"], "fresh")
+        self.assertEqual(len(page["messages"]), 2)
+
     def test_narrow_neighbors_and_unchanged_snapshot_do_not_scan_history(self) -> None:
         epoch = self.service._projection_inventory_epoch()
         watermark = self.repository.observation_watermark()

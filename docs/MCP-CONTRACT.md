@@ -35,6 +35,8 @@ projection。`auto` 是 service 配置，不是 MCP argument。所有十三个 t
 
 读取最新消息使用 `refresh=true`。一个 signed source timeline cursor 会保留其 `fresh` view；continuation 只传该 cursor、保留原 scope 并清除 `refresh` 即可，兼容未暴露 `view` 的既有 host catalog。显式传入不同 view 仍返回 `CURSOR_INVALID`。Signature、reader/account/conversation/filter scope、当前授权、position 与 projection epoch 在获取 source foreground ownership 之前本地验证，执行仍复检。每页是独立 capture，不声明跨页 atomic source snapshot。Brief 的 result-page action 不要求额外 view；fresh detail 和 context-edge actions 使用 `refresh=true`，updates immutable replay 保持原样。
 
+显式 fresh 的 target preflight 不扫描整个 conversation 的驻留正文过期库存；它仍验证本地目标、签名与权限，再获取 bounded source evidence。Replica 在选择每条返回消息时应用 resident predicate；只有 `auto` 的缓存选择需要 conversation 级过期检查。
+
 `replica` 不获取 source lease，也不启动 source preparation。Status、已观察的 conversation
 catalog/alias、participants、resident inbox、messages、links 和 resource discovery 可在 edge/source
 offline 时读取；recent/on-demand residency 与不完整 history 都可用。正文必须处于当前
