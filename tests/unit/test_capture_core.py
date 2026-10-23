@@ -634,6 +634,43 @@ class CoreCaptureTests(unittest.TestCase):
         attempted = [call.args[0].conversation_source_id for call in captured.call_args_list]
         self.assertEqual(attempted, [str(successor["source_conversation_id"])])
 
+    def test_capture_uses_remaining_caller_budget_after_edge_wait(self) -> None:
+        self.start_edge()
+        capture_started = threading.Event()
+        release_capture = threading.Event()
+        capture = self.executor.capture
+
+        def delayed_capture(*args: Any, **kwargs: Any) -> Any:
+            capture_started.set()
+            if not release_capture.wait(3):
+                raise TimeoutError("synthetic edge capture was not released")
+            return capture(*args, **kwargs)
+
+        def read() -> Any:
+            with operation_budget(3):
+                return self.call(
+                    "wechat_read_messages", mode="recent", conversation_id=self.group,
+                    refresh=True, limit=2, voice="off", include_resources="none",
+                    response_profile="diagnostic",
+                )
+
+        with (
+            mock.patch("sightglass.runtime.capture_core.CAPTURE_WAIT_SECONDS", .05),
+            mock.patch.object(self.executor, "capture", side_effect=delayed_capture),
+            ThreadPoolExecutor(max_workers=1) as pool,
+        ):
+            waiter = pool.submit(read)
+            try:
+                self.assertTrue(capture_started.wait(1))
+                # The real relay finishes after the unbudgeted fallback, while
+                # the original caller still has ample time to validate/admit it.
+                time.sleep(.12)
+            finally:
+                release_capture.set()
+            page = waiter.result(timeout=2)
+        self.assertEqual(page["source_receipt"]["view"], "fresh")
+        self.assertEqual(len(page["messages"]), 2)
+
     def test_capture_wait_timeout_advances_rotation_before_source_work(self) -> None:
         self.start_edge()
         self.core.sync_once()

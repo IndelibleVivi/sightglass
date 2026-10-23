@@ -264,10 +264,10 @@ class CoreCapture:
         self._record_request(request, attempted_catalog=attempted_catalog)
         try:
             remaining = operation_remaining_seconds()
-            timeout = (
-                min(CAPTURE_WAIT_SECONDS, remaining)
-                if remaining is not None else CAPTURE_WAIT_SECONDS
-            )
+            # Ordered edge work may still be sealing a detached background
+            # request. That wait consumes the caller's existing budget; a second
+            # fixed cap must not reject a capture that finishes before its deadline.
+            timeout = remaining if remaining is not None else CAPTURE_WAIT_SECONDS
             return self.broker.submit(request, timeout=max(0.1, timeout))
         except SightglassError:
             self._failed_request(request, "failed")

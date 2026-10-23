@@ -76,6 +76,8 @@ Reader 从该 cursor 继承 fresh acquisition。显式 view 或 replica default 
 旧版未带 view 的 auto cursor 继续兼容。本地可判定的 argument、anchor、message identity 与
 policy errors 在 source foreground ownership 前验证；合法 fresh acquisition 仍需要 source lane。
 
+Core broker 的排队与 capture 等待消耗原 caller 的剩余 operation budget，不另加固定的提前截止，也不重置总 deadline。普通 reader 仍受原 25 秒 cooperative deadline 及 cancellation 检查约束；已发出的 detached capture 只允许 exact terminal recovery，不重发、不提前 ACK。
+
 Remote fresh 使用一整个 sealed bounded operation，而不是逐个 provider-method RPC。一个 capture
 最多携带 200 个 canonical messages，source session 在 transfer 前已关闭；transport 保留原
 provider implementation epoch，不能把 native v6 已迁移 rows fence 掉。合法 compact `limit=500`

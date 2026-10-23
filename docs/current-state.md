@@ -42,13 +42,24 @@ App Data access or complete history coverage.
 Semantic support remains disabled by default; real-content permission, remote
 publication progress and live installation acceptance are private operator facts.
 
-The subsequent source fix removes conversation-wide body-expiry inventory scans
-from explicit fresh target validation and replica selection. Automatic cache
-selection retains its expiry check; replica pages still enforce per-row resident
-availability. A generated 10,000-body regression bounds each SQL statement during
-fresh classification and execution, alongside the existing cursor, policy and
-residency checks. This follow-up remains a candidate until its own installed
-verification, activation and fresh reader acceptance complete.
+The installed Core subsequently advanced to `0167749`, removing conversation-wide
+body-expiry inventory scans from explicit fresh target validation and replica
+selection. Automatic cache selection retains its expiry check; replica pages
+still enforce per-row resident availability. Its 10,000-body regression bounds
+each SQL statement during fresh classification and execution. The 112 adjacent
+source tests, 161 installed tests and isolated wheel gate passed; the Mac edge
+remains `91e0a16`. The test-only `6872929` follow-up preserves all 137 package
+modules and passed both jobs in hosted CI
+[39882055429](https://github.com/IndelibleVivi/sightglass/actions/runs/39882055429).
+
+The current capture-wait follow-up consumes the caller's remaining operation
+budget instead of applying an earlier fixed cutoff while ordered background work
+finishes. Original reader/worker deadlines, cancellation and exact terminal
+recovery remain in force. A real-relay regression verifies that an in-budget
+capture can still be admitted after the unbudgeted fallback interval; deadline
+and cancellation regressions retain their existing limits. This follow-up remains
+a candidate until installed verification, activation and fresh paging acceptance
+complete.
 
 ## Earlier reliability acceptance (2026-10-21–22)
 
