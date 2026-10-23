@@ -12,9 +12,9 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Post-repair review: source candidate
+## Post-repair review: source and activation
 
-The next source candidate addresses seven confirmed residual/new findings:
+The current source addresses seven confirmed residual/new findings:
 selection-time budget and cooperative edge cancellation; nonblocking stdio with
 caller leases and unknown-IPC recovery; permanent stale history jobs and fair
 retry; revision-proved semantic coverage; bounded native retained-ID/sentinel
@@ -32,14 +32,18 @@ wheel or deleting pending state cannot complete that transition. Old materialize
 currentness and signed history progress will be fenced by a new epoch; semantic
 indexing then uses a new generation/namespace without remote deletion.
 
-Core `0bd0759` is now installed and active, preserving the current database,
-configuration, grants, native origin, semantic setting and Mac edge `91e0a16`.
-Its installed stdio catalog, original tunnel, original MCP fresh recent/cursor
-reads and semantic candidate recall passed bounded acceptance. Mac native r1
-and transport-2 execution control still await their coordinated origin transition.
-Source and generated regression
-results do not establish a new installed version, actual native acceptance,
-remote ANN relevance or the proposed 24/72-hour soak. The measured status-latency
+Core `0bd0759` first passed bounded acceptance with the old native origin and
+Mac edge `91e0a16`. The separately authorized stopped origin transition is now
+active with Core `89bc612` and Mac edge `066f24e`. The coordinated cut verified an
+empty spool, equal Core/edge stream position and exact last ACK, and retained
+verified encrypted database, sidecar and spool recovery. It preserved sequence,
+stream, configuration scope and ownership guards while changing the origin.
+The installed thirteen-tool stdio catalog, original tunnel, original MCP fresh
+recent/signed continuation reads, a bounded older-time source read and generation-2
+semantic candidate recall passed acceptance. The old history job failed with its
+progress preserved; an explicit same-scope job is running. History and semantic
+coverage remain partial. These bounded checks do not establish remote ANN
+relevance or the proposed 24/72-hour soak. The measured status-latency
 sample is evidence, not a promised 250 ms SLO. Remote cold discovery and a unified
 operator coverage matrix remain separate extensions; remote retrieval presently
 recalls admitted resident candidates and never proves source-wide absence.
@@ -94,7 +98,12 @@ availability revision for that transition, in the same transaction as projection
 currentness. First appends retain their original cursor behavior. The new test
 failed on the old implementation; all 62 semantic and 44 adjacent residency,
 consolidation and fresh-cursor tests passed after the fix. This follow-up is
-source-complete and awaits its own installed and runtime acceptance.
+installed and active on Core `89bc612`. Its hosted CI
+[39988990296](https://github.com/IndelibleVivi/sightglass/actions/runs/39988990296)
+passed 1,611 full macOS tests, 960 portable tests, full Pyright and both installed-wheel
+gates. The frozen Linux candidate passed 565 installed tests (18 platform skips),
+with unchanged frozen dependencies, SQLite and native SILK bytes. This acceptance
+is separate from the retained Mac candidate and the bounded live checks above.
 
 ## Earlier reliability and retrieval repair
 
