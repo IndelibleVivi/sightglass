@@ -37,7 +37,10 @@ wheel passed the isolated frozen noneditable runtime gate: four entrypoints,
 thirteen tools, and the public synthetic example listing two conversations before
 caching bodies, then reading three messages. The wheel source/license inventory
 and sdist Swift/helper/build/contract sources were inspected; neither contains
-private runtime state. These are generated-source and artifact results; hosted CI,
+private runtime state. Source commit `cd82f0b` also passed both jobs in hosted CI
+[40125997642](https://github.com/IndelibleVivi/sightglass/actions/runs/40125997642):
+1,619 full macOS tests, 967 portable tests, typing/lint/build and both isolated
+installed-wheel gates. These are generated-source and artifact results;
 installation and live account acceptance remain separate. The earlier installed
 Core/edge below have not been promoted by this source increment.
 
