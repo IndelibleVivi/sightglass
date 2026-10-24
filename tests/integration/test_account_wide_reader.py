@@ -243,7 +243,7 @@ class AccountWideReaderTests(unittest.TestCase):
     def test_inbox_cursor_keeps_the_original_snapshot_when_a_chat_appends(self) -> None:
         first_sync = self.service.sync_source_once(initial_tail=20, batch_limit=20)
         self.assertEqual(first_sync["conversation_count"], 2)
-        first = self.tools.wechat_read_inbox(limit=1, include_latest="text")
+        first = self.tools.wechat_read_inbox(mode="resident", limit=1, include_latest="text")
         self.assertEqual(first["schema"], "sightglass.inbox-page.v1")
         self.assertEqual(len(first["items"]), 1)
         cursor = first["page"]["next_cursor"]
@@ -262,6 +262,7 @@ class AccountWideReaderTests(unittest.TestCase):
         self.assertGreaterEqual(second_sync["message_count"], 1)
 
         continuation = self.tools.wechat_read_inbox(
+            mode="resident",
             limit=1,
             include_latest="text",
             cursor=cursor,
@@ -271,7 +272,7 @@ class AccountWideReaderTests(unittest.TestCase):
         self.assertIsNone(continuation["page"]["next_cursor"])
         self.assertEqual(continuation["coverage"]["indexed_conversations"], 2)
 
-        fresh = self.tools.wechat_read_inbox(limit=1, include_latest="text")
+        fresh = self.tools.wechat_read_inbox(mode="resident", limit=1, include_latest="text")
         self.assertEqual(fresh["items"][0]["latest"]["text"], "new direct append")
 
     def test_catalog_stale_when_an_unseen_conversation_moves_ahead(self) -> None:
@@ -327,7 +328,7 @@ class AccountWideReaderTests(unittest.TestCase):
         self.service.provider = _UnreadProvider(  # type: ignore[reportAttributeAccessIssue]
             base, {"conv_group": 2, "conv_direct": 1}
         )
-        first = self.tools.wechat_read_inbox(unread_only=True, limit=1)
+        first = self.tools.wechat_read_inbox(mode="resident", unread_only=True, limit=1)
         self.assertEqual(len(first["items"]), 1)
         cursor = first["page"]["next_cursor"]
         self.assertIsInstance(cursor, str)
@@ -337,7 +338,7 @@ class AccountWideReaderTests(unittest.TestCase):
             base, {"conv_group": 2, "conv_direct": 0}
         )
         continuation = self.tools.wechat_read_inbox(
-            unread_only=True, limit=1, cursor=cursor
+            mode="resident", unread_only=True, limit=1, cursor=cursor
         )
         self.assertEqual(continuation["code"], "CURSOR_STALE")
 

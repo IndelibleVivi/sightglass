@@ -708,7 +708,8 @@ class ReplicaReader:
                                                  "live_refresh_confirmed": False}},
             }
 
-    def read_inbox(self, *, account_id: str | None, **arguments: Any) -> dict[str, Any]:
+    def read_inbox(self, *, account_id: str | None, mode: str = "recent",
+                   **arguments: Any) -> dict[str, Any]:
         with self.repository.database.read_snapshot():
             account = self._account(account_id)
             epoch = self.service._projection_inventory_epoch()
@@ -717,13 +718,20 @@ class ReplicaReader:
             degraded = self.repository.degraded_conversation_ids(
                 account, error_code="duplicate_message_identity_conflict"
             )
+            with self.service._status_lock:
+                cached = self.service._cached_status or self.service._cold_status
+                confirmed = cached["source"].get("source_state") == "complete"
+            available, _confirmed, _live, _resources = self.service._live_refresh_states(
+                confirmed=confirmed,
+            )
             result = self.service._read_indexed_inbox(
                 external_account_id=account, catalog_coverage=(
                     str(state["coverage_state"]) if state else "unknown"),
                 active_conversations_only=False,
                 catalog_fresh_as_of=str(state["last_observed_at"]) if state else "",
                 epoch_conversation_ids=ids - degraded, degraded_conversation_ids=degraded,
-                live_refresh_available=False, projection_epoch=epoch, **arguments,
+                live_refresh_available=available,
+                projection_epoch=epoch, activity=mode == "recent", **arguments,
             )
             result["source_receipt"]["view"] = "replica"
             return result

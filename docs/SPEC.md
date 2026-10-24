@@ -11,6 +11,12 @@ v0.4 preflight 修正：冻结 WGO baseline、稳定/可变身份证据分层、
 
 2026-10-05 MCP 界面修订：保留十三项能力，采用默认 brief／显式 diagnostic、保守新请求页量、软 JSON 预算与明确续读动作，详见 [MCP contract](MCP-CONTRACT.md)。Diagnostic 只改变回包详略，仍要求 strict source／policy 验证；updates 的 exact replay 与 ACK 不受 profile 裁剪。
 
+2026-10-25 日常阅读校准：普通 contacts 与 recents 是产品主路径。默认 inbox 从已观察
+catalog 展示最近会话，不依赖正文驻留、历史 backfill 或 semantic index；普通 remote recent
+首读自动使用已连接的 edge，离线与显式 replica 仍说明自己的 resident 范围。
+完整字段、分页及 strict failure 合同见 [Everyday recents](MCP-CONTRACT.md#everyday-recents)。
+大型群聊的历史管理与 IR 继续发展，不得成为日常读取的前置条件。
+
 ---
 
 ## 0. 一句话定义
@@ -2810,7 +2816,8 @@ Gate：WGO selection 不限制原微信阅读；reader policy 始终优先。
 - reader timezone 显式保存，不依赖进程系统时区；
 - 默认同时返回 reader-facing `label` 与可证明的 source `shown_as`，不伪造历史群名片；
 - speaker-filtered reading 默认使用 participant/filter-set cursor，不推进 conversation cursor；
-- 默认 strict validated reads：current semantic epoch 已 admission 时普通 message/inbox 使用带 bounded-stale receipt 的 materialized plane；search、cold miss、stale projection 与 discovery 继续要求 current-source validation；
+- 默认 strict validated reads：current semantic epoch 已 admission 时符合条件的 message 与 resident inbox 使用带 bounded-stale receipt 的 materialized plane；日常 remote recent 的 connected-edge 默认值见下一项；search、cold miss、stale projection 与 discovery 继续要求 current-source validation；
+- 日常 inbox 默认 recent catalog activity，显式 `mode="resident"` 保留正文驻留视图；普通 remote recent 首读在 edge connected 时选择 fresh，显式 replica 与 signed continuation 保持原 plane；
 - 默认无网络资源抓取；
 - 默认不自动写入 OB；
 - 默认 access logs 无正文；

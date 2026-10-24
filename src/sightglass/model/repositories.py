@@ -3151,12 +3151,23 @@ class WindowRepository:
 
     def inbox_rows(
         self, account_id: str, *, observation_seq: int, projection_epoch: str | None = None,
+        include_catalog: bool = False,
     ) -> list[sqlite3.Row]:
         epoch_filter = ("AND candidate.projection_epoch=? "
                         "AND candidate.current_observation_seq<=?" if projection_epoch else "")
         parameters: tuple[Any, ...] = (int(observation_seq),)
         if projection_epoch:
             parameters += (projection_epoch, int(observation_seq))
+        message_join = "LEFT JOIN" if include_catalog else "JOIN"
+        catalog_filter = """
+            AND c.last_message_at IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM source_catalog_state AS catalog
+                WHERE catalog.account_id=c.account_id
+                  AND (c.catalog_observed_at IS NULL
+                       OR c.catalog_observed_at < catalog.last_observed_at)
+            )
+        """ if include_catalog else ""
         with self.database.connection() as connection:
             return connection.execute(
                 f"""
@@ -3173,9 +3184,9 @@ class WindowRepository:
                        p.resolution_state AS latest_sender_resolution_state,
                        p.identity_confidence AS latest_sender_identity_confidence
                 FROM conversations AS c
-                JOIN messages AS r ON r.message_id = (
+                {message_join} messages AS r ON r.message_id = (
                     SELECT candidate.message_id
-                    FROM messages AS candidate
+                    FROM messages AS candidate INDEXED BY message_resident_timeline
                     WHERE candidate.conversation_id = c.conversation_id
                       AND candidate.current_state = 'present'
                       AND {resident_body_predicate('candidate')}
@@ -3193,6 +3204,7 @@ class WindowRepository:
                 )
                 LEFT JOIN participants AS p ON p.participant_id = r.sender_id
                 WHERE c.account_id = ? AND c.visibility_state = 'active'
+                {catalog_filter}
                 ORDER BY r.sent_at_utc DESC, c.kind ASC, c.conversation_id ASC
                 """,
                 (*parameters, account_id),

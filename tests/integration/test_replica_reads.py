@@ -531,7 +531,7 @@ class ReplicaReadTests(unittest.TestCase):
             # Observed conversation catalog remains resolvable without resident bodies.
             catalog = self.service.find_conversations("Synthetic Group")
             self.assertEqual(catalog["candidates"][0]["conversation_id"], self.group)
-            inbox = self.service.read_inbox(account_id=self.account)
+            inbox = self.service.read_inbox(account_id=self.account, mode="resident")
             self.assertEqual(inbox["items"], [])
             self.assertEqual(inbox["coverage"]["message_scope"], "resident")
             self.assertEqual(inbox["coverage"]["catalog"], "complete")
@@ -573,14 +573,15 @@ class ReplicaReadTests(unittest.TestCase):
 
         from sightglass.mcp.projection import project_result
 
-        inbox = self.service.read_inbox(account_id=self.account)
+        inbox = self.service.read_inbox(account_id=self.account, mode="resident")
         self.assertEqual(inbox["items"], [])
         # The guidance itself performs no source work and leaves the reader unchanged.
         with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
             projected = project_result(
                 "wechat_read_inbox", inbox, {"account_id": self.account}, "brief"
             )
-            self.assertEqual(self.service.read_inbox(account_id=self.account)["items"], [])
+            self.assertEqual(self.service.read_inbox(account_id=self.account,
+                                                    mode="resident")["items"], [])
         discover = next(a for a in projected["next_actions"] if a["kind"] == "discover")
         message_read = next(a for a in projected["next_actions"] if a["kind"] == "message_read")
 
@@ -609,7 +610,7 @@ class ReplicaReadTests(unittest.TestCase):
         # The freshly admitted bodies make the conversation resident again, so the same
         # replica inbox is no longer empty and an ordinary replica read succeeds locally.
         with patch.object(self.provider, "snapshot", side_effect=AssertionError("source opened")):
-            recovered = self.service.read_inbox(account_id=self.account)
+            recovered = self.service.read_inbox(account_id=self.account, mode="resident")
             self.assertTrue(recovered["items"])
             replica = self.service.read_messages(
                 mode="recent", conversation_id=conversation_id, limit=1, view="replica"

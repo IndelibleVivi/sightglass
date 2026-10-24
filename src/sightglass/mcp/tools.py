@@ -177,9 +177,14 @@ class ReaderTools:
         include_latest: Literal["metadata", "text"] = "metadata",
         cursor: str | None = None,
         limit: int = 50,
+        mode: Literal["recent", "resident"] = "recent",
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
-        """Read a policy-filtered, cursor-stable account activity inbox."""
+        """List recent contacts/groups, including conversations without cached bodies.
+
+        Open an item's read_action to read its recent messages. mode=resident lists
+        only cached message activity. Catalog recents never import message history.
+        """
         return self._safe(
             "wechat_read_inbox",
             lambda: self.service.read_inbox(
@@ -191,6 +196,7 @@ class ReaderTools:
                 include_latest=include_latest,
                 cursor=cursor,
                 limit=limit,
+                mode=mode,
             ),
             scope_kind="account",
             scope_values=tuple(value for value in (account_id,) if value),
@@ -258,9 +264,10 @@ class ReaderTools:
         request_id: str | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
-        """Read message pages; updates require ACK. Use refresh for latest source messages.
+        """Read a conversation's messages; new remote recents use the connected edge.
 
-        view=replica reads admitted resident bodies offline; fresh requires current source evidence.
+        Ordinary recents need no backfill. Offline recents describe resident bodies only.
+        view=replica stays local; refresh forces current source evidence in either deployment.
         Updates request_id gives bounded durable replay after a committed response is lost.
         Compact columns use fields/people; next_actions gives each continuation slot.
         A signed timeline cursor retains fresh view; clear refresh when continuing it.

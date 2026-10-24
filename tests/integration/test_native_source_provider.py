@@ -1749,7 +1749,7 @@ class NativeSourceProviderTests(unittest.TestCase):
             "snapshot",
             side_effect=AssertionError("cold inbox must not start a live catalog scan"),
         ):
-            cold = tools.wechat_read_inbox(limit=10)
+            cold = tools.wechat_read_inbox(mode="resident", limit=10)
         self.assertEqual(cold["code"], "SOURCE_INCOMPLETE")
         self.assertIn("source_catalog_not_ready", cold["details"]["warning_codes"])
 
@@ -1769,7 +1769,7 @@ class NativeSourceProviderTests(unittest.TestCase):
                 side_effect=AssertionError("warm inbox must not require live health"),
             ),
         ):
-            warm = tools.wechat_read_inbox(limit=10, include_latest="text")
+            warm = tools.wechat_read_inbox(mode="resident", limit=10, include_latest="text")
 
         self.assertEqual(warm["schema"], "sightglass.inbox-page.v1")
         self.assertEqual(len(warm["items"]), 1)
@@ -1777,6 +1777,28 @@ class NativeSourceProviderTests(unittest.TestCase):
         self.assertIsInstance(warm["coverage"]["catalog_fresh_as_of"], str)
         self.assertEqual(warm["source_receipt"]["served_from"], "window_db")
         self.assertFalse(warm["source_receipt"]["freshness"]["live_refresh_confirmed"])
+
+    def test_native_recents_include_on_demand_direct_contacts_before_any_body_read(self):
+        from sightglass.residency.decisions import ResidencySettings
+        from sightglass.residency.repository import ResidencyRepository
+
+        contact = "wxid_synthetic_recent_contact"
+        self._add_contact_history_without_session(contact)
+        tools = self._reader_tools(self.conversation, contact)
+        ResidencyRepository(tools.service.repository.database).set_settings(ResidencySettings())
+        with mock.patch.object(self.provider, "read_recent", side_effect=AssertionError("tail")):
+            tools.service.sync_source_once(conversation_limit=20)
+        with mock.patch.object(self.provider, "snapshot", side_effect=AssertionError("source")):
+            recent = tools.wechat_read_inbox(kinds=["direct"], include_latest="text")
+        self.assertEqual(recent["schema"], "sightglass.inbox-page.v2")
+        self.assertEqual(len(recent["items"]), 1)
+        item = recent["items"][0]
+        self.assertEqual(item["latest_state"], "not_resident")
+        self.assertNotIn("latest", item)  # brief never manufactures a preview
+        self.assertEqual(tools.service.repository.observation_watermark(), 0)
+        read = getattr(tools, item["read_action"]["tool"])(**item["read_action"]["arguments"])
+        self.assertTrue(read["messages"], read)
+        self.assertEqual(read["conversation"]["id"], item["conversation_id"])
 
     def test_on_demand_native_catalog_readiness_needs_no_tail_and_inbox_uses_residents(self):
         from sightglass.residency.decisions import ResidencySettings
@@ -1788,7 +1810,7 @@ class NativeSourceProviderTests(unittest.TestCase):
             self.provider, "read_recent", side_effect=AssertionError("idle body")
         ):
             tools.service.sync_source_once(conversation_limit=20)
-        empty = tools.wechat_read_inbox(limit=10, include_latest="text")
+        empty = tools.wechat_read_inbox(mode="resident", limit=10, include_latest="text")
         self.assertEqual(empty["schema"], "sightglass.inbox-page.v1")
         self.assertEqual(empty["items"], [])
         self.assertEqual(empty["coverage"]["message_scope"], "resident")
@@ -1798,12 +1820,12 @@ class NativeSourceProviderTests(unittest.TestCase):
         with mock.patch.object(
             self.provider, "snapshot", side_effect=AssertionError("warm source")
         ):
-            warm = tools.wechat_read_inbox(limit=10, include_latest="text")
+            warm = tools.wechat_read_inbox(mode="resident", limit=10, include_latest="text")
         self.assertEqual(len(warm["items"]), 1)
         store = ResidencyRepository(tools.service.repository.database)
         approved = store.stock_preview(group)
         store.release_stock(group, plan=approved["plan"])
-        released = tools.wechat_read_inbox(limit=10, include_latest="text")
+        released = tools.wechat_read_inbox(mode="resident", limit=10, include_latest="text")
         self.assertEqual(released["items"], [])
 
     def test_compressed_message_uses_an_independent_decompressor(self) -> None:
@@ -1836,7 +1858,7 @@ class NativeSourceProviderTests(unittest.TestCase):
         def wait_for_latest(expected: str) -> None:
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
-                result = tools.wechat_read_inbox(limit=10, include_latest="text")
+                result = tools.wechat_read_inbox(mode="resident", limit=10, include_latest="text")
                 if result.get("items") and result["items"][0]["latest"].get("text") == expected:
                     return
                 time.sleep(0.01)
@@ -3092,7 +3114,7 @@ class NativeSourceProviderTests(unittest.TestCase):
             limit=10,
         )
         self.assertIn(member_id, {person["id"] for person in compact["people"]})
-        inbox = tools.wechat_read_inbox(include_latest="text", limit=10)
+        inbox = tools.wechat_read_inbox(mode="resident", include_latest="text", limit=10)
         item = next(row for row in inbox["items"] if row["conversation_id"] == conversation_id)
         self.assertEqual(item["latest"]["text"], "member status four")
         self.assertEqual(item["latest"]["sender"]["participant_id"], member_id)
@@ -3143,7 +3165,7 @@ class NativeSourceProviderTests(unittest.TestCase):
                     conversation_id,
                 ),
             )
-        stale = tools.wechat_read_inbox(include_latest="text", limit=10)
+        stale = tools.wechat_read_inbox(mode="resident", include_latest="text", limit=10)
         stale_item = next(
             row for row in stale["items"] if row["conversation_id"] == conversation_id
         )
@@ -3168,7 +3190,7 @@ class NativeSourceProviderTests(unittest.TestCase):
         )
         self.assertEqual(refreshed["conversation_count"], 1)
         self.assertEqual(refreshed["message_count"], 3)
-        repaired = tools.wechat_read_inbox(include_latest="text", limit=10)
+        repaired = tools.wechat_read_inbox(mode="resident", include_latest="text", limit=10)
         repaired_item = next(
             row for row in repaired["items"] if row["conversation_id"] == conversation_id
         )
@@ -3238,7 +3260,7 @@ class NativeSourceProviderTests(unittest.TestCase):
                 batch_limit=20,
                 conversation_limit=conversation_limit,
             )
-        result = tools.wechat_read_inbox(limit=10)
+        result = tools.wechat_read_inbox(mode="resident", limit=10)
         self.assertEqual(result["schema"], "sightglass.inbox-page.v1", result)
 
     def test_degraded_conflict_does_not_block_readiness_or_leak_into_inbox(self) -> None:
@@ -3254,7 +3276,7 @@ class NativeSourceProviderTests(unittest.TestCase):
 
         self._sync_until_ready(tools)
 
-        inbox = tools.wechat_read_inbox(limit=10, include_latest="text")
+        inbox = tools.wechat_read_inbox(mode="resident", limit=10, include_latest="text")
         returned = {item["conversation_id"] for item in inbox["items"]}
         self.assertIn(healthy_id, returned)
         self.assertIn(opaque_id("wxconv", account_id, self.conversation), returned)
@@ -3290,7 +3312,7 @@ class NativeSourceProviderTests(unittest.TestCase):
         direct_id = opaque_id("wxconv", account_id, self.conversation)
 
         self._sync_until_ready(tools)
-        degraded = tools.wechat_read_inbox(limit=1)
+        degraded = tools.wechat_read_inbox(mode="resident", limit=1)
         self.assertEqual(degraded["coverage"]["degraded_conversations"], 1)
         self.assertNotIn(
             conflicted_id, {item["conversation_id"] for item in degraded["items"]}
@@ -3306,7 +3328,7 @@ class NativeSourceProviderTests(unittest.TestCase):
         self.provider._snapshots.clear()  # noqa: SLF001 - fixture snapshot cache
         self._sync_until_ready(tools)
 
-        recovered = tools.wechat_read_inbox(limit=10)
+        recovered = tools.wechat_read_inbox(mode="resident", limit=10)
         recovered_ids = {item["conversation_id"] for item in recovered["items"]}
         self.assertEqual(recovered["coverage"]["degraded_conversations"], 0)
         self.assertEqual(recovered_ids, {direct_id, healthy_id, conflicted_id})
@@ -3318,7 +3340,7 @@ class NativeSourceProviderTests(unittest.TestCase):
             tools.service._projection_inventory_epoch(),
         )
 
-        stale = tools.wechat_read_inbox(limit=1, cursor=cursor)
+        stale = tools.wechat_read_inbox(mode="resident", limit=1, cursor=cursor)
         self.assertEqual(stale["code"], "CURSOR_STALE")
 
     def test_non_conflict_missing_epoch_still_keeps_inbox_closed(self) -> None:
@@ -3331,7 +3353,8 @@ class NativeSourceProviderTests(unittest.TestCase):
             batch_limit=20,
             conversation_limit=20,
         )
-        self.assertEqual(tools.wechat_read_inbox(limit=10)["schema"], "sightglass.inbox-page.v1")
+        self.assertEqual(tools.wechat_read_inbox(mode="resident", limit=10)["schema"],
+                         "sightglass.inbox-page.v1")
 
         # A missing epoch with no conflict degradation is not "handled": the inbox must
         # stay fail-closed until that conversation is actually reprojected.
@@ -3347,7 +3370,7 @@ class NativeSourceProviderTests(unittest.TestCase):
                 (group_id,),
             )
 
-        pending = tools.wechat_read_inbox(limit=10)
+        pending = tools.wechat_read_inbox(mode="resident", limit=10)
         self.assertEqual(pending["code"], "SOURCE_INCOMPLETE")
         self.assertIn(
             "source_projection_refresh_pending",
@@ -3355,7 +3378,8 @@ class NativeSourceProviderTests(unittest.TestCase):
         )
 
         self._sync_until_ready(tools, conversation_limit=1)
-        self.assertEqual(tools.wechat_read_inbox(limit=10)["schema"], "sightglass.inbox-page.v1")
+        self.assertEqual(tools.wechat_read_inbox(mode="resident", limit=10)["schema"],
+                         "sightglass.inbox-page.v1")
 
     def test_projection_promotion_uses_the_current_read_membership(self) -> None:
         first = self._add_group_sender_fixture("-member-a")[0]
@@ -3445,7 +3469,7 @@ class NativeSourceProviderTests(unittest.TestCase):
             conversation_limit=20,
         )
         self._sync_until_ready(tools)
-        ready = tools.wechat_read_inbox(limit=10)
+        ready = tools.wechat_read_inbox(mode="resident", limit=10)
         ready_ids = {item["conversation_id"] for item in ready["items"]}
         self.assertEqual(len(ready_ids), 2)
 
@@ -3554,7 +3578,7 @@ class NativeSourceProviderTests(unittest.TestCase):
             )
 
         self._sync_until_ready(tools)
-        after = tools.wechat_read_inbox(limit=10)
+        after = tools.wechat_read_inbox(mode="resident", limit=10)
         self.assertEqual(after["schema"], "sightglass.inbox-page.v1")
         returned = {item["conversation_id"] for item in after["items"]}
         self.assertEqual(returned, ready_ids)
@@ -3574,7 +3598,8 @@ class NativeSourceProviderTests(unittest.TestCase):
             batch_limit=20,
             conversation_limit=20,
         )
-        self.assertEqual(tools.wechat_read_inbox(limit=10)["schema"], "sightglass.inbox-page.v1")
+        self.assertEqual(tools.wechat_read_inbox(mode="resident", limit=10)["schema"],
+                         "sightglass.inbox-page.v1")
 
         with tools.service.repository.database.transaction() as connection:
             connection.execute(
@@ -3609,7 +3634,7 @@ class NativeSourceProviderTests(unittest.TestCase):
             conversation_limit=1,
         )
         self.assertEqual(first["conversation_count"], 1)
-        pending = tools.wechat_read_inbox(limit=10)
+        pending = tools.wechat_read_inbox(mode="resident", limit=10)
         self.assertEqual(pending["code"], "SOURCE_INCOMPLETE")
         self.assertIn(
             "source_projection_refresh_pending",
@@ -3622,7 +3647,7 @@ class NativeSourceProviderTests(unittest.TestCase):
                 batch_limit=20,
                 conversation_limit=1,
             )
-        repaired = tools.wechat_read_inbox(limit=10)
+        repaired = tools.wechat_read_inbox(mode="resident", limit=10)
         self.assertEqual(repaired["schema"], "sightglass.inbox-page.v1")
 
     def test_generation_change_does_not_skip_a_second_changed_conversation(self) -> None:

@@ -18,10 +18,17 @@ M0 contract/provenance → M1 synthetic reader → M2 context/search/updates
 
 Source completion never authorizes real account access or deployment. Native initialization keeps its one-conversation allowlist; wider scope requires an explicit operator decision.
 
+The [2026-10-25 reading calibration](READING-RELIABILITY.md#2026-10-25先让日常联系人容易读)
+sets the current product order: ordinary recent contacts/messages, context, attachments
+and continued reading must work without retained history or IR. Deep history and
+retrieval serve large-conversation investigation as a separate continuous capability.
+M0–M7 remain the complete coverage structure; their numbering does not make an unused
+adapter or a new cloud lane a prerequisite for the daily reader.
+
 The 2026-10-23 post-repair source increment preserves this programme. Its new
 regressions cover remote caller cancellation across actual stdio/IPC/Unix relay,
 stale backfill jobs, native bounded identity windows, semantic dirty/reacquired
-coverage, voice lease failures and legacy CAS recovery. See [current state](current-state.md#post-repair-review-source-candidate)
+coverage, voice lease failures and legacy CAS recovery. See [current state](current-state.md#post-repair-review-source-and-activation)
 for source versus activation boundaries. Coverage dimensions remain independent:
 validated source intervals, resident bodies, current index publication and
 retrieval relevance. A combined operator matrix, remote cold discovery protocol,
@@ -93,6 +100,7 @@ delivered by this reliability increment; existing partial/M7 outcomes remain ope
 | SG-057 | §16, §19, §23 | Operability & integration: content-free retrieval status/explain/rebuild (operator-only) + storage categories; terminal-delivery spool GC; Linux synthetic CI; fresh full-suite/build; audit PR/main/tag/export/license/live activation | M4/M7 operability | SG-053/SG-054/SG-055; SG-046 storage | Coordinator-owned tests (retrieval/storage/CI) — not independently asserted here | Source operability and fixture recovery gates implemented; publication, rights, exact-root hosted CI, installation and named-host acceptance remain separate gates. No account or installation receipts are published here |
 | SG-058 | §8.5–8.7, §9.2; RETRIEVAL-SPEC SG-058 | Independent access/residency; new on-demand defaults, prospective keep and configurable recent/TTL/byte caps; batch settings and release preview; all-admission integration, resident coverage, no refill, update rebaseline, exact replay and dependency pins | selective local residency | ReaderPolicy unchanged; legacy stock protected; real cleanup separately authorized | Source/synthetic implemented: bounded lifecycle and search literal/speaker scan/admission separation; native resident inbox readiness; cursor/lease, pending/resource/voice and scope regressions | Source and synthetic lifecycle integration implemented; legacy-stock release and real-account activation require exact operator authorization, with receipts outside Git |
 | SG-059 | §9.2; RETRIEVAL-SPEC SG-059 | Bounded content-free storage preview; stopped-only resumable SGOC/contentless-delete/compact candidate with rowid/sequence and runtime/DB pairing, same-filesystem staging and durable recovery | offline storage slimming | SQLite ≥3.43 capability; frozen input + exact recovery; real candidate/migration separately authorized | Source/synthetic implemented: full WindowDB durable byte/rowid/sequence/FK proof, freeze/copy/selection crash recovery, independent replay/CAS/token namespaces, 100k strict lexical parity/churn/footprint | Source and synthetic candidate/recovery implemented; exact durable byte/rowid/sequence/FK checks, interrupted selection and independent rollback namespaces are fixture-covered. Real candidate construction, activation and retirement remain separately authorized operator actions |
+| SG-060 | §0–§2, §13; MCP everyday recents | List recent authorized contacts/groups independently of body residency, open current remote recent messages through the connected edge by default, retain explicit offline/resident views and frozen continuations, and keep ordinary contact reading independent of history/IR | daily reading | Existing catalog, policy, resident body predicate and ordered capture/terminal writer | Daily relay/stdio/IPC fixtures, native SQLCipher on-demand contact fixture, view-transition and policy/preview/cursor checks, body-free installed example | Source implementation; candidate/installation and final verification status in current-state |
 
 ## VPS offload tranche (candidate)
 
@@ -183,6 +191,6 @@ source diagnostics. Core capture waits honor foreground cancellation and promptl
 recover explicitly abandoned returned tickets without releasing the edge spool
 before durable terminal commit. Old-source regressions, generated sustained
 paging, installed artifacts and bounded native/MCP/ordinary-host evidence remain
-distinct in [current state](current-state.md#current-reliability-repair).
+distinct in [current state](current-state.md#earlier-reliability-and-retrieval-repair).
 
 The specification is complete only when each applicable SG-001–SG-030 outcome has evidence at its owning milestone. Source tests, installation, activation, stdio, external transport and host acceptance remain distinct. Later entries harden or extend those outcomes; they do not silently remove unimplemented scope.

@@ -1523,6 +1523,13 @@ class SightglassDaemon:
                 with self._state_gate.read():
                     if self._lifecycle_state != "ready":
                         return self._runtime_unavailable()
+                    if (params.get("name") == "wechat_read_messages"
+                            and isinstance(params.get("arguments"), dict)):
+                        # Transport may reconnect/disconnect while a call waits for
+                        # its lane. Classification and execution must retain one
+                        # selected view, including an offline replica decision.
+                        params = {**params, "arguments": self.tools.service.bind_recent_view(
+                            params["arguments"])}
                     if params.get("name") == "wechat_read_resource":
                         # The resource service changes lanes at the acquisition and
                         # derivation boundaries; keeping a top-level slot here would

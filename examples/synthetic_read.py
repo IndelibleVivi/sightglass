@@ -29,6 +29,13 @@ def main() -> None:
         )
         tools = ReaderTools(service)
         try:
+            service.sync_source_once(conversation_limit=100)
+            recents = tools.wechat_read_inbox()
+            assert recents["schema"] == "sightglass.inbox-page.v2", recents
+            assert len(recents["items"]) == 2, recents
+            cold_contacts = sum(item["latest_state"] == "not_resident"
+                                for item in recents["items"])
+            assert cold_contacts == 2, recents
             catalog = tools.wechat_find_conversations("Synthetic Group")
             conversation_id = catalog["candidates"][0]["conversation_id"]
             page = tools.wechat_read_messages(
@@ -41,6 +48,9 @@ def main() -> None:
                 json.dumps(
                     {
                         "source": "generated synthetic fixture",
+                        "inbox_schema": recents["schema"],
+                        "recent_conversations": len(recents["items"]),
+                        "contacts_without_cached_bodies": cold_contacts,
                         "schema": page["schema"],
                         "returned_messages": len(page["messages"]),
                         "source_page_complete": page["source_receipt"]["complete"],

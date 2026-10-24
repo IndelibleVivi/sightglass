@@ -158,6 +158,10 @@ def installed_probe(root: Path) -> None:
     observed = json.loads(smoke.stdout)
     if observed["returned_messages"] != 3 or observed["source_page_complete"] is not True:
         raise RuntimeError("installed generated read smoke failed")
+    if (observed["inbox_schema"] != "sightglass.inbox-page.v2"
+            or observed["recent_conversations"] != 2
+            or observed["contacts_without_cached_bodies"] != 2):
+        raise RuntimeError("installed generated daily recents smoke failed")
     for name, module in tuple(sys.modules.items()):
         if name == "sightglass" or name.startswith("sightglass."):
             if module.__file__ is None or not Path(module.__file__).resolve().is_relative_to(

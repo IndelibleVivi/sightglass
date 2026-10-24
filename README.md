@@ -12,6 +12,21 @@ Use it when a reader needs to inspect the original conversation, follow one part
 
 > **Development preview · `0.1.0.dev1`.** Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles and requires operator-supplied, verified database keys. Sightglass does not extract those keys. The 4.1.15 profile has no verified sticker-decryption offset; those local stickers report unavailable while ordinary messages remain readable. Try the synthetic example before configuring an account. Publication and licensing status is recorded in [Current state](docs/current-state.md) and [Notices](NOTICE.md).
 
+## Everyday reading
+
+Start with `wechat_read_inbox()`. Its default `mode="recent"` lists recent authorized
+contacts and groups from the observed conversation catalog, including conversations
+with no cached message bodies. `kinds=["direct"]` selects direct contacts. Choose an
+item and follow its `read_action` to `wechat_read_messages(mode="recent")`.
+
+A new ordinary remote recent read uses the connected Mac edge automatically. It
+does not require a history job, retained archive or semantic index. Offline reads
+return only available resident messages with explicit bounded freshness. A missing
+preview is marked `latest_state="not_resident"`; it does not mean the contact has no
+messages. `mode="resident"` on the inbox selects the cached-message activity view.
+`include_latest="text"` adds only available resident previews, with their own time;
+an older cached preview is labelled `older_resident`.
+
 ## Optional Mac edge and Linux core
 
 The optional remote core is part of the development preview. Installation and
@@ -27,14 +42,17 @@ to confirm an App Data prompt for each new edge process, including a managed
 restart. Verify the actual handshake and fresh read after confirmation; see the
 [operating procedure](docs/VPS-MIGRATION.md#owner-activation-与原-tunnel-路由).
 
-Remote configurations default to `view="replica"`: messages, search, links, retrieval,
+Remote configurations default to `view="replica"`: cached messages, search, links, retrieval,
 resource catalog and cached bytes use admitted state while the Mac is offline. Results
 report partial resident coverage and bounded freshness; a zero-hit replica result
 cannot prove source absence. `wechat_list_resources` lists the owning message's current
 resident bindings; an expired or released body returns `SOURCE_INCOMPLETE`, and an
 inactive historical resolver is never restored. Use `view="fresh"` on tools that expose
 it for bounded source verification.
-For the latest messages, use `wechat_read_messages(mode="recent", refresh=true)`.
+The exception is a new ordinary `mode="recent"` read: with a connected edge and no
+explicit view or cursor it selects fresh source evidence. `view="replica"` remains
+explicitly local. Use `refresh=true` to require source evidence even when offline;
+failure after selecting fresh never falls back to cache.
 Read longer spans through the returned cursor and `next_actions`; clear `refresh`
 on continuation. A signed source cursor retains its fresh view even on hosts that
 expose `refresh` without `view`. Each page is independently validated. Exact
@@ -49,7 +67,7 @@ capture, never while paused) while `read_plane.live_refresh_confirmed` reports w
 current capture actually confirmed source facts, and
 `readiness.live_refresh`/`resource_acquisition` report `awaiting_confirmation` until a
 current capture actually confirms source facts, and `degraded` only when that transport
-is disconnected or unobserved. An empty resident inbox likewise means no resident body,
+is disconnected or unobserved. An empty `mode="resident"` inbox means no resident body,
 not a missing observed catalog: its `next_actions` point at `wechat_find_conversations`
 (enumerating the observed catalog under the caller's account/kind scope) and then an
 explicit bounded `wechat_read_messages` fresh read of one chosen `conversation_id`.
@@ -73,8 +91,8 @@ loss recovery and wire limits are in [Capture protocol](docs/CAPTURE-PROTOCOL.md
 
 | Capability | Behavior |
 | --- | --- |
-| Conversations and inbox | Paginated, policy-filtered discovery; a materialized activity inbox that remains readable during live-source degradation and reports explicit freshness and coverage. |
-| Messages and people | Recent, range, context, single-message and participant-focused reads use the admitted `window.db` projection when its semantic epoch is current. Stable identity stays separate from mutable names. |
+| Conversations and inbox | Policy-filtered recent contacts/groups independent of message residency, with direct reading actions and optional cached previews; a separate resident activity view and explicit catalog freshness. |
+| Messages and people | Current-epoch cached messages support local range/context/single-message/participant reads; new ordinary remote recents use the connected edge. Stable identity stays separate from mutable names. |
 | Search | Local-source searches prepare a bounded source page; remote-core replica searches validate resident candidates locally, while explicit fresh searches revalidate bounded candidates through the Mac edge. Continuation resumes the existing scan. Short terms retain the bounded timeline fallback; missing history and partial zero-hit pages remain explicit. |
 | Links and candidate contexts | Find locally observed URLs by exact hostname or approximate hints; retrieve ranked same-conversation contexts with nearby links, explicit replies and replayable anchors. These materialized reads report bounded freshness and never advance updates or ACK. Optional BGE-M3/Vectorize semantic recall uses the same canonical and policy checks; failures leave deterministic recall available. |
 | Updates | Reader-scoped delivery and ACK, including offline replica ACK. Unacknowledged payloads replay exactly after a restart; fresh ACK, admission and the new delivery commit together. |
@@ -85,7 +103,7 @@ The thirteen MCP tools are `wechat_status`, `wechat_find_conversations`, `wechat
 
 MCP responses default to `response_profile="brief"` (`sightglass.mcp.brief.v1`), retaining content, coverage, freshness and continuation while omitting implementation diagnostics. Compact rows still use `fields` and `people`. New compact recent pages default to 30 messages, search/link pages to 20 hits, and retrieval to 3 contexts; bounded pages target about 16 KiB for reading/retrieval and 8 KiB for search/links. Follow `next_actions` for polling, result pagination or further source scanning; each action identifies its own token field. Preparation continuations reuse their original scope and effective limit. Request `response_profile="diagnostic"` for full receipts or the explicit recovery of truncated message text. Updates retain exact pending-delivery replay and ACK semantics.
 
-A successfully admitted native recent page records its observed window for local rereading; it never advances the background continuous sync frontier over a gap. Known current-epoch messages and their indexed context remain readable without waiting for background tail completion; missing history stays explicit. Default `recent` pages can lag the source. Use `read_messages(refresh=true)` without a cursor for the latest source messages, to fill a partial context or explicitly reread current source content; the same policy and bounded source checks apply. Storage-blocked voice preparation reports `not_scheduled` while preserving the text page. Materialized reader progress can use bounded maintenance space, but required writes still respect the filesystem free floor.
+A successfully admitted native recent page records its observed window for local rereading; it never advances the background continuous sync frontier over a gap. Known current-epoch messages and their indexed context remain readable without waiting for background tail completion; missing history stays explicit. Local auto and offline/explicit replica pages can lag the source; a new ordinary remote recent read uses the connected edge. Use `read_messages(refresh=true)` without a cursor to require current source messages, fill a partial context or explicitly reread source content; the same policy and bounded source checks apply. Storage-blocked voice preparation reports `not_scheduled` while preserving the text page. Materialized reader progress can use bounded maintenance space, but required writes still respect the filesystem free floor.
 
 With a local source, ordinary daemon search first returns **preparing** with a signed `reading_token`.
 Repeat identical arguments with that token (or the existing `cursor` parameter)
@@ -159,11 +177,17 @@ uv sync --extra dev
 uv run python examples/synthetic_read.py
 ```
 
-The example creates a disposable source and read model, discovers a synthetic group and reads three messages. It does not inspect WeChat, access Keychain, start a daemon or alter an installed configuration. The temporary files are removed when it exits.
+The example creates a disposable source and read model, lists two recent conversations
+before any body is cached, discovers a synthetic group and reads three messages. It does
+not inspect WeChat, access Keychain, start a daemon or alter an installed configuration.
+The temporary files are removed when it exits.
 
 ```json
 {
   "source": "generated synthetic fixture",
+  "inbox_schema": "sightglass.inbox-page.v2",
+  "recent_conversations": 2,
+  "contacts_without_cached_bodies": 2,
   "schema": "sightglass.message-page.v1",
   "returned_messages": 3,
   "source_page_complete": true,
@@ -224,13 +248,13 @@ uv sync --extra dev --extra macos-wechat --extra voice
 bash scripts/compile-voice-helper.sh
 ```
 
-The helper build only compiles a local executable. It does not start a service, enroll keys or download speech assets. Its default destination belongs to the default data directory. For a paired production installation, pass the active configuration's helper path, or `<data_dir>/voice/sightglass-transcribe` when that setting is empty; a helper in another pair does not make the active pair ready. Missing decoder, helper or language assets produce explicit readiness/blocking states; ordinary reads remain available. See the [voice setup procedure](docs/OPERATIONS.md#local-voice-transcription).
+The helper build only compiles a local executable. It does not start a service, enroll keys or download speech assets. Its default destination belongs to the default data directory. For a paired production installation, pass the active configuration's helper path, or `<data_dir>/voice/sightglass-transcribe` when that setting is empty; a helper in another pair does not make the active pair ready. Missing decoder, helper or language assets produce explicit readiness/blocking states; ordinary reads remain available. See the [voice setup procedure](docs/OPERATIONS.md#voice-transcription-worker).
 
 ## Architecture
 
 [![Sightglass architecture: a thin MCP bridge crosses authenticated local IPC into a policy-enforcing daemon; local mode reads source directly; an optional Mac capture edge feeds one Linux core that owns projection, replay and processing.](docs/assets/architecture.svg)](docs/ARCHITECTURE.md)
 
-The core owns admitted state; local mode owns source access, while remote mode delegates only finite capture to the Mac edge. Providers return evidence; the reader service decides admission and policy. Message bodies in `window.db` are source-derived projections and form the normal foreground read plane for admitted message pages and the native inbox. Materialized responses identify themselves as bounded-stale rather than claiming a new live-source observation. The same database also owns reader ACK/cursor state, correction history and resource/voice bindings; deleting it loses those local states. Local reads, source reads, resource derivation, the single database writer and transcript waits have independent bounded runtime lanes, so slow source or processor work cannot consume local-read capacity. Long PDF derivations use durable jobs introduced in schema v6, with lease/fencing recovery, and return a polling token instead of occupying a synchronous request indefinitely. Slow source reads run outside the database writer transaction. Catalog work uses a full validated snapshot; known conversation/message fallbacks and cold resources use typed dependency-scoped sessions that pin and revalidate only the SQLCipher databases/files they actually read. Cold resource processors run after that source lease closes, and a short transaction rechecks both the resolver revision and any worker fence before binding derived objects. Authorized CAS hits and transcript reads stay local while rechecking the owning conversation's current policy.
+The core owns admitted state; local mode owns source access, while remote mode delegates only finite capture to the Mac edge. Providers return evidence; the reader service decides admission and policy. Message bodies in `window.db` are source-derived projections and supply the local read plane for admitted message pages and resident inbox previews. Catalog recents remain visible without bodies, while new ordinary remote recent message reads use the connected edge. Materialized responses identify themselves as bounded-stale rather than claiming a new live-source observation. The same database also owns reader ACK/cursor state, correction history and resource/voice bindings; deleting it loses those local states. Local reads, source reads, resource derivation, the single database writer and transcript waits have independent bounded runtime lanes, so slow source or processor work cannot consume local-read capacity. Long PDF derivations use durable jobs introduced in schema v6, with lease/fencing recovery, and return a polling token instead of occupying a synchronous request indefinitely. Slow source reads run outside the database writer transaction. Catalog work uses a full validated snapshot; known conversation/message fallbacks and cold resources use typed dependency-scoped sessions that pin and revalidate only the SQLCipher databases/files they actually read. Cold resource processors run after that source lease closes, and a short transaction rechecks both the resolver revision and any worker fence before binding derived objects. Authorized CAS hits and transcript reads stay local while rechecking the owning conversation's current policy.
 
 See the [component/evidence map](docs/ARCHITECTURE.md) and [editable topology](docs/assets/architecture.mmd).
 

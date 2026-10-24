@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-24. This page owns current source, candidate and publication status.
+Updated: 2026-10-25. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -11,6 +11,40 @@ history belong in private operator records outside Git.
 - Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and source native implementation `sightglass.macos-wechat.sqlcipher.v6.r1`. Native interpretation remains v6; the r1 implementation changes the existing projection/capture epoch recipe. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
+
+## Daily contact reading: source candidate
+
+The current development increment prioritizes ordinary contact recents before deep
+history/IR. Default `wechat_read_inbox(mode="recent")` returns
+`sightglass.inbox-page.v2`: recent authorized catalog contacts/groups, including
+body-free on-demand conversations, executable per-contact read actions, and optional
+current-epoch resident previews with explicit availability/time. Conflicted previews
+stay hidden. Explicit `mode="resident"` retains the v1 cached-message inbox and
+frozen observation behavior. Catalog readability no longer waits for all message tails.
+
+A new ordinary remote `read_messages(mode="recent")` without an explicit view/cursor
+uses the connected edge. The daemon freezes the decision before lane classification;
+offline replica, explicit replica and signed continuation keep their selected plane.
+Selected fresh failure never silently returns cached text. The source/egress policy,
+thirteen tools, WindowDB schema v10, native interpretation, transport and dependencies
+are unchanged. This adds no background history copying or semantic activation.
+
+Fresh source validation passed all 1,619 tests in 638.535 seconds, full Pyright
+(zero errors/warnings), Ruff and compileall. Generated checks cover the actual
+stdio → IPC → daemon → Core → edge relay journey, body-free native direct contacts,
+policy/pause, catalog cursor/preview changes and transport transitions. The built
+wheel passed the isolated frozen noneditable runtime gate: four entrypoints,
+thirteen tools, and the public synthetic example listing two conversations before
+caching bodies, then reading three messages. The wheel source/license inventory
+and sdist Swift/helper/build/contract sources were inspected; neither contains
+private runtime state. These are generated-source and artifact results; hosted CI,
+installation and live account acceptance remain separate. The earlier installed
+Core/edge below have not been promoted by this source increment.
+
+Programme interpretation and next capability order are maintained in
+[reading reliability](READING-RELIABILITY.md) and [SG-060](IMPLEMENTATION-PLAN.md).
+Remote cold discovery, the unified operator coverage matrix and independent semantic
+relevance evidence remain open; they are not prerequisites for everyday contact recents.
 
 ## Post-repair review: source and activation
 

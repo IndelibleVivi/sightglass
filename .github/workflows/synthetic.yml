@@ -48,6 +48,7 @@ jobs:
           tests.integration.test_daemon_reliability tests.integration.test_backfill_job_progress
           tests.integration.test_backfill_stale_jobs tests.integration.test_caller_cancellation
           tests.integration.test_remote_caller_cancellation
+          tests.integration.test_daily_recents
           tests.integration.test_native_identity_window
           tests.unit.test_delivery_durability tests.unit.test_resource_reliability
           tests.unit.test_legacy_cas_recovery tests.unit.test_voice_workspace_recovery

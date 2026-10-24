@@ -343,6 +343,22 @@ class ReaderService:
             raise SightglassError(ErrorCode.QUERY_INVALID)
         return "fresh" if refresh else (view or self.default_view)
 
+    def bind_recent_view(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Freeze the ordinary remote recent request before choosing its work lane.
+
+        Only a new recent request without an explicit view uses transport evidence.
+        An edge connection permits an attempt, never a claim of source freshness.
+        A captured operation has already selected fresh and cannot fall back if the
+        connection disappears while its sealed terminal is being admitted.
+        """
+        if (self.default_view == "replica" and arguments.get("mode", "recent") == "recent"
+                and arguments.get("view") is None and arguments.get("cursor") is None
+                and arguments.get("refresh", False) is False):
+            fresh = (self._operation_provider.get() is not None
+                     or self.capture_transport_state() == "edge_connected")
+            return {**arguments, "view": "fresh" if fresh else "replica"}
+        return arguments
+
     @staticmethod
     def _view_scope(scope_key: str, view: str) -> str:
         return scope_key if view == "auto" else opaque_id("wxviewscope", scope_key, view)
@@ -1989,8 +2005,11 @@ class ReaderService:
         include_latest: str = "metadata",
         cursor: str | None = None,
         limit: int = 50,
+        mode: str = "recent",
     ) -> dict[str, Any]:
         self.reader.require_active()
+        if mode not in {"recent", "resident"}:
+            raise SightglassError(ErrorCode.QUERY_INVALID)
         if include_latest not in {"metadata", "text"}:
             raise SightglassError(ErrorCode.QUERY_INVALID)
         if any(kind not in {"direct", "group"} for kind in kinds):
@@ -1998,11 +2017,19 @@ class ReaderService:
         after_utc = to_utc_iso(after) if after else None
         before_utc = to_utc_iso(before) if before else None
         bounded = self.reader.bound_limit(limit)
-        if self.default_view == "replica":
+        # Recent contacts belong to the observed catalog, independently of body
+        # residency or background tail/history completion. Reading catalog activity
+        # neither opens the source nor imports bodies.
+        accounts = self.repository.active_account_ids()
+        catalog_account = account_id or (accounts[0] if len(accounts) == 1 else None)
+        if self.default_view == "replica" or (
+            mode == "recent" and catalog_account in accounts
+            and self.repository.source_catalog_state(str(catalog_account)) is not None
+        ):
             return self.replica.read_inbox(
                 account_id=account_id, after_utc=after_utc, before_utc=before_utc,
                 kinds=kinds, unread_only=unread_only, include_latest=include_latest,
-                cursor=cursor, bounded=bounded,
+                cursor=cursor, bounded=bounded, mode=mode,
             )
 
         indexed_account = self._native_indexed_inbox_account(account_id)
@@ -2050,6 +2077,7 @@ class ReaderService:
                 live_warning_codes=tuple(
                     str(value) for value in cached_source.get("warnings", ())
                 ),
+                activity=mode == "recent",
             )
 
         with self._source_read() as (stack, snapshot):
@@ -2073,6 +2101,7 @@ class ReaderService:
                     catalog_coverage="complete" if facts.complete else "partial",
                     active_conversations_only=facts.active_conversations_only,
                     catalog_fresh_as_of=snapshot.fresh_as_of,
+                    activity=mode == "recent",
                 )
 
     def _native_indexed_inbox_account(
@@ -2158,6 +2187,12 @@ class ReaderService:
         account_id = arguments.get("account_id")
         if account_id is not None and not isinstance(account_id, str):
             return False
+        if arguments.get("mode", "recent") == "recent":
+            accounts = self.repository.active_account_ids()
+            selected = account_id or (accounts[0] if len(accounts) == 1 else None)
+            if (selected in accounts
+                    and self.repository.source_catalog_state(str(selected)) is not None):
+                return True
         try:
             return self._native_indexed_inbox_account(account_id) is not None
         except SightglassError:
@@ -2170,6 +2205,7 @@ class ReaderService:
         eligible: list[tuple[list[Any], Any]],
         *,
         include_latest: str,
+        activity: bool = False,
     ) -> str:
         """Digest the exact pre-cursor snapshot one inbox page promises.
 
@@ -2181,6 +2217,12 @@ class ReaderService:
         only this digest reaches the signed cursor.
         """
 
+        if activity:
+            return self._scope_digest({"rows": [
+                {"position": position,
+                 **self._activity_inbox_item(row, include_latest=include_latest)}
+                for position, row in eligible
+            ]})
         rows: list[dict[str, Any]] = []
         for position, row in eligible:
             sender_snapshot = json.loads(str(row["latest_sender_snapshot"]))
@@ -2208,6 +2250,43 @@ class ReaderService:
             rows.append(entry)
         return self._scope_digest({"total": len(eligible), "rows": rows})
 
+    def _activity_inbox_item(self, row: Any, *, include_latest: str) -> dict[str, Any]:
+        """A catalog contact may have no readable body; never invent its preview."""
+        conversation = str(row["conversation_id"])
+        latest = None
+        state = str(row["_latest_state"]) if "_latest_state" in row.keys() else "not_resident"
+        if row["latest_message_id"] is not None:
+            sender = json.loads(str(row["latest_sender_snapshot"]))
+            latest = {
+                "message_id": str(row["latest_message_id"]),
+                "sent_at": str(row["latest_sent_at"]),
+                "kind": str(row["latest_kind"]),
+                "sender": {
+                    "participant_id": row["latest_sender_id"],
+                    "label": row["latest_sender_label"],
+                    "is_self": bool(row["latest_sender_is_self"]),
+                    "shown_as": sender.get("shown_as"),
+                    "identity_state": row["latest_sender_resolution_state"],
+                    "identity_confidence": row["latest_sender_identity_confidence"],
+                },
+            }
+            if include_latest == "text":
+                text = row["latest_text"]
+                latest["text"] = (str(text)[:self.reader.policy.max_compact_body_chars_per_message]
+                                  if text is not None else None)
+            state = ("older_resident" if str(row["latest_sent_at"]) < str(row["last_message_at"])
+                     else "resident")
+        return {
+            "conversation_id": conversation, "kind": str(row["kind"]),
+            "title": str(row["current_title"])[:512],
+            "last_message_at": max(str(row["last_message_at"]),
+                                   str(row["latest_sent_at"] or "")),
+            "unread_count": max(0, int(row["unread_count"] or 0)),
+            "latest_state": state, "latest": latest,
+            "read_action": {"tool": "wechat_read_messages",
+                            "arguments": {"mode": "recent", "conversation_id": conversation}},
+        }
+
     def _read_indexed_inbox(
         self,
         *,
@@ -2227,6 +2306,7 @@ class ReaderService:
         live_refresh_available: bool = True,
         live_warning_codes: tuple[str, ...] = (),
         projection_epoch: str | None = None,
+        activity: bool = False,
     ) -> dict[str, Any]:
         scope_key = self._scope_digest(
             {
@@ -2235,6 +2315,7 @@ class ReaderService:
                 "kinds": sorted(set(kinds)),
                 "unread_only": bool(unread_only),
                 "include_latest": include_latest,
+                **({"mode": "recent"} if activity else {}),
                 **({"view": "replica", "projection_epoch": projection_epoch}
                    if projection_epoch is not None else {}),
             }
@@ -2274,15 +2355,23 @@ class ReaderService:
         eligible: list[tuple[list[Any], Any]] = []
         for row in self.repository.inbox_rows(
             external_account_id, observation_seq=observation_seq, projection_epoch=projection_epoch,
+            include_catalog=activity,
         ):
             conversation_id = str(row["conversation_id"])
             if not self.reader.policy.permits(conversation_id):
                 continue
-            if epoch_indexed_ids is not None and conversation_id not in epoch_indexed_ids:
+            if activity and conversation_id in degraded_ids:
+                # Catalog identity/activity remains usable, but conflicted body or
+                # sender evidence must not leak into the recent-contact preview.
+                row = {**dict(row), "latest_message_id": None, "latest_sent_at": None,
+                       "_latest_state": "source_conflict"}
+            if (not activity and epoch_indexed_ids is not None
+                    and conversation_id not in epoch_indexed_ids):
                 continue
             if kinds and str(row["kind"]) not in kinds:
                 continue
-            sent_at = str(row["latest_sent_at"])
+            sent_at = (max(str(row["last_message_at"]), str(row["latest_sent_at"] or ""))
+                       if activity else str(row["latest_sent_at"]))
             if after_utc is not None and sent_at < after_utc:
                 continue
             if before_utc is not None and sent_at >= before_utc:
@@ -2292,11 +2381,12 @@ class ReaderService:
             row_position = self._activity_position(sent_at, str(row["kind"]), conversation_id)
             eligible.append((row_position, row))
         eligible.sort(key=lambda item: item[0])
-        inbox_epoch = self._inbox_epoch(eligible, include_latest=include_latest)
+        inbox_epoch = self._inbox_epoch(eligible, include_latest=include_latest, activity=activity)
         if cursor_snapshot is not None and cursor_snapshot.get("inbox_epoch") != inbox_epoch:
             raise SightglassError(ErrorCode.CURSOR_STALE)
         indexed_conversations = len(
-            {str(row["conversation_id"]) for _position, row in eligible}
+            {str(row["conversation_id"]) for _position, row in eligible
+             if row["latest_message_id"] is not None}
         )
         selected = [
             item for item in eligible if position is None or item[0] > position
@@ -2304,6 +2394,9 @@ class ReaderService:
         page_rows = selected[:bounded]
         items: list[dict[str, Any]] = []
         for _row_position, row in page_rows:
+            if activity:
+                items.append(self._activity_inbox_item(row, include_latest=include_latest))
+                continue
             sender_snapshot = json.loads(str(row["latest_sender_snapshot"]))
             latest = {
                 "message_id": str(row["latest_message_id"]),
@@ -2352,7 +2445,8 @@ class ReaderService:
             else None
         )
         return {
-            "schema": "sightglass.inbox-page.v1",
+            "schema": "sightglass.inbox-page.v2" if activity else "sightglass.inbox-page.v1",
+            **({"mode": "recent"} if activity else {}),
             "account_id": external_account_id,
             "include_latest": include_latest,
             "items": items,
@@ -2366,7 +2460,8 @@ class ReaderService:
                 "catalog_fresh_as_of": catalog_fresh_as_of,
                 "active_conversations_only": active_conversations_only,
                 "indexed_conversations": indexed_conversations,
-                "message_scope": "resident",
+                "message_scope": "catalog_activity" if activity else "resident",
+                **({"activity_conversations": len(eligible)} if activity else {}),
                 "degraded_conversations": excluded_degraded,
             },
             "source_receipt": {
@@ -4837,7 +4932,10 @@ class ReaderService:
     ) -> dict[str, Any]:
         if type(refresh) is not bool or (refresh and (mode == "updates" or cursor is not None)):
             raise SightglassError(ErrorCode.QUERY_INVALID)
-        resolved_view = self.resolve_view(view, refresh=refresh)
+        bound_view = self.bind_recent_view({
+            "mode": mode, "view": view, "cursor": cursor, "refresh": refresh,
+        })
+        resolved_view = self.resolve_view(bound_view.get("view"), refresh=refresh)
         if request_id is not None and mode != "updates":
             raise SightglassError(ErrorCode.QUERY_INVALID)
         if request_id is not None and (

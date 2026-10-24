@@ -2,6 +2,34 @@
 
 决策日期：2026-10-02。本文把 [SPEC](SPEC.md) 的阅读承诺落实到现有组件、验收与基础设施取舍；不替代 [完整 ledger](IMPLEMENTATION-PLAN.md)。实现、安装和真实使用证据由 [current-state](current-state.md) 维护。K2 / AI Search 部分是候选方案，当前 runtime 未接入它们。
 
+## 2026-10-25：先让日常联系人容易读
+
+产品的第一条路是：看到最近联系的谁 → 打开当前消息 → 按需看前后文与附件 →
+继续读新回复。Direct contacts 与大型群聊同等属于阅读对象。成熟的历史管理和 IR
+对高流量群聊有价值，但普通 recent 阅读不能要求预先保留历史、建 job、完成 index，
+或由调用者理解 storage、replica 与 capture 的内部组合。
+
+本轮 source 校准把两个事实分开：catalog 知道会话最近活动，不代表正文仍驻留；
+正文没有驻留，也不代表 source 没有消息。默认 inbox 因此展示 catalog activity，
+每项提供打开消息的动作；explicit resident inbox 继续服务已有正文。普通 remote
+recent 首读在 edge connected 时取得当前 source evidence，离线时保留明确的 resident
+范围；选择的 view 在 lane 分配前固定，source 失败不会退回旧内容。
+它们复用已有 catalog、read-only provider、typed capture、WindowDB writer 和 MCP，
+没有增加另一份历史库、schema、cloud service 或后台全账号消息复制。
+
+[Matrix 的同步合同](https://spec.matrix.org/latest/client-server-api/#syncing)明确保留
+limited timeline 与历史缺口，并通过按会话分页补读；这里采用的启发是把会话可见性、
+局部消息可用性与完整历史分开，而不复制 Matrix 的服务或写入协议。
+[Vespa 的 phased ranking](https://docs.vespa.ai/en/ranking/phased-ranking.html)把候选召回、
+有界重排与最终结果分层；它支持继续发展现有 retrieval 分层，并不提供把搜索基础设施
+放到普通联系人的 recents 前面的理由。本轮未引入这两个系统的代码或依赖。
+
+后续 programme 按实际阅读体验推进：先完成同一安装的日常 contacts/recent/context/
+附件/updates 连续验收与失败恢复；再把大型群聊的 cold history discovery、scope coverage
+解释和独立 relevance holdout 连成一条完整调查能力。Semantic ranking、云事件消费者、
+新 source 与控制 UI 根据这两条已可使用路径的证据发展。M5/M7 原有范围保留，
+其中没有现实 consumer 的 adapter 不因历史 milestone 编号而优先实现。
+
 ## 要稳定交付的体验
 
 Sightglass 的核心是让 reader 找到原话、打开原话、沿前后文继续读，并看到原消息绑定的图片或文件。原作者、时间、会话、reply、资源版本与权限必须可核对；缺口必须说清楚。自然语言检索帮助定位，不能替代这个阅读过程。
@@ -110,4 +138,6 @@ K2 适合的是“一份变化、多份进度”。[Subscription 的 at-least-on
 
 复用现有 `source/registry.py`、typed sessions 和 versioned contracts。下一种来源需要证明其 account/source identity、稳定 message key、排序、增量/缺失语义、resource binding 和 capability；源特有 envelope 在 provider 内转换。Reader、policy、context、updates、资源与检索继续消费已 admission 的统一事实。跨来源同名联系人不会自动变成同一个人。
 
-顺序固定为：微信阅读故障闭环 → 同一真实安装的八项阅读验收与 latency → synthetic AI Search/K2 对照 → 有明确需求的新 source。新增 source 不要求先引入 K2；接入 K2 也不要求把微信数据搬到云端才能读取。
+2026-10-02 的基础设施顺序保留为历史取舍；当前 programme 以上方日常阅读校准为准。
+Cloudflare 对照与新增 source 都以实际阅读需求和独立授权为前提。新增 source 不要求
+先引入 K2；接入 K2 也不要求把微信数据搬到云端才能读取。

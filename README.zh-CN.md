@@ -12,6 +12,19 @@ Sightglass 是一个采用 macOS native source 与 portable core 的实验性 re
 
 > **开发预览 · `0.1.0.dev1`。** Native source 支持精确的微信 **4.1.13 / build 269602 / arm64** 和 **4.1.15 / build 270115 / arm64** profiles，需要 operator 自行提供并验证数据库 key。Sightglass 不提取这些 key。4.1.15 尚无经过验证的 sticker 解密 offset，这类本地贴纸明确报告 unavailable，普通消息仍可读取。配置真实账号前，先运行 synthetic 示例。公开与许可状态见 [Current state](docs/current-state.md) 和 [Notices](NOTICE.md)。
 
+## 日常看微信
+
+先调用 `wechat_read_inbox()`。默认 `mode="recent"` 从已观察的会话目录列出最近联系的
+contacts 和 groups，正文没有缓存的会话也会出现；`kinds=["direct"]` 只看私聊。
+选定一项后，沿它的 `read_action` 调用 `wechat_read_messages(mode="recent")`。
+
+新的普通 remote recent 读取在 Mac edge 已连接时自动获取当前 source 消息，不需要先建
+history job、保留整段历史或启用 semantic index。离线时只返回仍可读取的 resident 消息，
+明确标注 bounded freshness。没有预览会标为 `latest_state="not_resident"`，不表示这个
+contact 没有消息。Inbox 的 `mode="resident"` 则只查看缓存正文的活动。
+`include_latest="text"` 仅增加已有 resident preview，并附自己的时间；比目录活动旧的
+缓存预览标为 `older_resident`。
+
 ## 可选 Mac edge 与 Linux core
 
 可选 remote core 属于开发预览；安装与 production cutover 按
@@ -30,7 +43,9 @@ catalog 与 cached bytes 仍从 admitted state 读取。结果明确标注 parti
 message 的当前 resident bindings；正文过期或已 released 时返回 `SOURCE_INCOMPLETE`，
 不会恢复 inactive 的历史 resolver。需要有界 source 验证时，在提供该参数的 tool 上用
 `view="fresh"`。
-读取最新消息时使用 `wechat_read_messages(mode="recent", refresh=true)`。长段读取按返回的
+新的普通 `mode="recent"` 首读是默认值中的例外：未指定 view/cursor 且 edge 已连接时，
+自动选择 fresh source evidence；显式 `view="replica"` 始终本地读取。使用 `refresh=true`
+可以在离线时也要求 source evidence；已选定 fresh 后失败不会退回缓存。长段读取按返回的
 cursor 和 `next_actions` 继续，并在 continuation 中清除 `refresh`。Signed source cursor
 会保留 fresh view，也适用于只暴露 `refresh`、未暴露 `view` 的 host；每页独立验证。
 已支持 build 的升级使用 stopped、verified 的
@@ -41,7 +56,7 @@ keys、identities 和 stream state。
 `read_plane.live_refresh_available` 表示当前能否发起 fresh 请求（transport 已连接或已有确认，
 paused 时一律不能），`read_plane.live_refresh_confirmed` 表示 current capture 是否已确认 source
 事实；`readiness.live_refresh`/`resource_acquisition` 在尚无 current capture 确认时报告
-`awaiting_confirmation`，只有 transport 断开或未观察到时才为 `degraded`。空 resident inbox
+`awaiting_confirmation`，只有 transport 断开或未观察到时才为 `degraded`。空 `mode="resident"` inbox
 只表示没有 resident body，并非 observed catalog 丢失：其 `next_actions` 先指向
 `wechat_find_conversations`（在调用者 account/kinds scope 内枚举已观察 catalog），再指向对
 选定 `conversation_id` 的显式有界 `wechat_read_messages` fresh 读取；指引仅是指令，不自动执行、
@@ -63,8 +78,8 @@ Native support 仍只指上方精确的 macOS profile。`remote-capture` 是 off
 
 | 能力 | 可观察行为 |
 | --- | --- |
-| 会话与 inbox | 分页、policy 过滤的会话发现；live source degraded 时仍可读取、并明确报告 freshness 与 coverage 的物化活动 inbox。 |
-| 消息与成员 | current semantic epoch 已完成 admission 时，recent、range、context、single-message 和成员聚焦阅读从 `window.db` projection 返回；稳定身份与可变称呼分开。 |
+| 会话与 inbox | 不依赖正文驻留的最近 contacts/groups、可直接打开消息的动作和可选缓存预览；独立的 resident 活动模式，明确报告目录 freshness。 |
+| 消息与成员 | current semantic epoch 的缓存支持本地 range、context、single-message 和成员聚焦阅读；普通 remote recent 首读使用已连接的 edge；稳定身份与可变称呼分开。 |
 | 搜索 | Local source 搜索先准备有界 source page；remote core 的 replica 搜索在本地验证 resident candidates，显式 fresh 搜索再通过 Mac edge 验证有界候选；continuation 继续已有扫描。短词保留有界 timeline fallback，历史缺口与零命中的 partial page 保持明确。 |
 | 链接与候选上下文 | 按 exact hostname 或 approximate hints 查本地观察到的 URL；retrieve 排序同一会话的上下文，包含邻近链接、显式 reply 与可重读 anchor。这些 materialized read 明确报告 bounded freshness，不推进 updates／ACK。可选 BGE-M3／Vectorize semantic recall 仍通过相同 canonical 与 policy 检查，失败时 deterministic recall 继续可用。 |
 | 增量阅读 | 每个 reader 独立 delivery 与 ACK，replica 可离线 ACK；未确认 payload 跨重启精确 replay，fresh ACK、admission 与新 delivery 一起提交。 |
@@ -75,7 +90,7 @@ Native support 仍只指上方精确的 macOS profile。`remote-capture` 是 off
 
 MCP 默认返回 `response_profile="brief"`（`sightglass.mcp.brief.v1`）：保留内容、coverage、freshness 与 continuation，省略 implementation diagnostics。Compact 行仍按 `fields` 和 `people` 解码。新 compact recent 页默认 30 条消息，search／link 页默认 20 条命中，retrieve 默认 3 个 contexts；有界页以阅读／retrieval 约 16 KiB、search／links 约 8 KiB 为目标。按 `next_actions` 区分 poll、结果分页与继续 source scan，每个 action 指明自己的 token 字段。Preparation continuation 沿用原 scope 与有效 limit。需要完整 receipt 或明确恢复被截断的消息文字时，使用 `response_profile="diagnostic"`。Updates 保持 pending delivery 的 exact replay 与 ACK 语义。
 
-成功 admission 的 native recent 页会记录已观察窗口，供随后本地复读；它不会跨过缺口推进后台连续 sync frontier。已知 current-epoch 消息及已索引前后文不必等待后台 tail 完成，历史缺口仍明确报告。默认 `recent` 页可能落后于 source；需要当前最新消息、补齐 partial 前后文或明确重读当前 source 时，可无 cursor 调用 `read_messages(refresh=true)`，沿用同一权限与有界 source 验证。空间不足的 voice preparation 返回 `not_scheduled` 并保留文字页；物化阅读进度可使用有界 maintenance 余量，但必要写入仍遵守 filesystem free floor。
+成功 admission 的 native recent 页会记录已观察窗口，供随后本地复读；它不会跨过缺口推进后台连续 sync frontier。已知 current-epoch 消息及已索引前后文不必等待后台 tail 完成，历史缺口仍明确报告。Local auto、离线或显式 replica 页可能落后于 source；普通 remote recent 首读会使用已连接的 edge。需要强制当前 source 消息、补齐 partial 前后文或明确重读时，可无 cursor 调用 `read_messages(refresh=true)`，沿用同一权限与有界 source 验证。空间不足的 voice preparation 返回 `not_scheduled` 并保留文字页；物化阅读进度可使用有界 maintenance 余量，但必要写入仍遵守 filesystem free floor。
 
 使用 local source 时，Daemon 普通搜索首调用会明确返回 **preparing** 与 signed `reading_token`。使用同一组参数加 token（也可放入既有 `cursor` 参数）继续取 canonical validated 结果；preparing 不代表没有命中。私有有界 job 可跨重启恢复；同参数 token poll 在内存中重新提供 query 后，未完成的 conversation 会重新扫描、取得新的 source evidence。Query text 不持久化；最终结果的 `next_cursor` 仍用于普通搜索分页。详见 [搜索 lifecycle](docs/MCP-CONTRACT.md#asynchronous-search-preparation)。
 
@@ -127,11 +142,14 @@ uv sync --extra dev
 uv run python examples/synthetic_read.py
 ```
 
-示例在临时目录创建 synthetic source 和 read model，找到一个合成群聊并读取三条消息。它不检查微信、不访问 Keychain、不启动 daemon，也不修改已安装的 config；退出时清理本次临时文件。
+示例在临时目录创建 synthetic source 和 read model，先列出尚未缓存正文的两个最近会话，再找到一个合成群聊并读取三条消息。它不检查微信、不访问 Keychain、不启动 daemon，也不修改已安装的 config；退出时清理本次临时文件。
 
 ```json
 {
   "source": "generated synthetic fixture",
+  "inbox_schema": "sightglass.inbox-page.v2",
+  "recent_conversations": 2,
+  "contacts_without_cached_bodies": 2,
   "schema": "sightglass.message-page.v1",
   "returned_messages": 3,
   "source_page_complete": true,
@@ -189,13 +207,13 @@ uv sync --extra dev --extra macos-wechat --extra voice
 bash scripts/compile-voice-helper.sh
 ```
 
-编译脚本只生成本地 executable，不启动服务、不 enroll key、不下载 speech asset。默认输出属于默认 data directory；paired production 安装须显式传入 active config 的 helper path，设置为空时使用该 pair 的 `<data_dir>/voice/sightglass-transcribe`。另一个 pair 中的 helper 不会让当前 pair ready。缺少 decoder、helper 或语言资产会明确报告 readiness／blocked 状态，不影响普通读取。配置步骤见 [本地语音转写](docs/OPERATIONS.md#local-voice-transcription)。
+编译脚本只生成本地 executable，不启动服务、不 enroll key、不下载 speech asset。默认输出属于默认 data directory；paired production 安装须显式传入 active config 的 helper path，设置为空时使用该 pair 的 `<data_dir>/voice/sightglass-transcribe`。另一个 pair 中的 helper 不会让当前 pair ready。缺少 decoder、helper 或语言资产会明确报告 readiness／blocked 状态，不影响普通读取。配置步骤见 [本地语音转写](docs/OPERATIONS.md#voice-transcription-worker)。
 
 ## 架构
 
 [![Sightglass 架构：thin MCP bridge 经过 authenticated local IPC 进入执行 policy 的 daemon；local 模式直接只读 source；可选 Mac capture edge 将有界 evidence 交给独占 projection、replay 与 processing 的 Linux core。](docs/assets/architecture.svg)](docs/ARCHITECTURE.md)
 
-Core 独占 admitted state；local 模式直接拥有 source access，remote 模式只把有限 capture 交给 Mac edge。Provider 返回 evidence，reader service 决定 policy 与 admission。`window.db` 中的消息正文是 source-derived projection，也是已 admission 消息页与 native inbox 的普通前台 read plane；物化响应会明确标记 bounded-stale，不冒充一次新的 live-source observation。同一数据库还持有 reader ACK/cursor state、correction history 与 resource/voice bindings，不能靠删库无损重建。Local read、source read、resource derivation、单一 database writer 与 transcript wait 使用彼此独立的有界 runtime lanes，因此慢 source／processor 不会占光本地读取能力。耗时 PDF derivation 进入 schema v6 引入的 durable job，以 lease/fencing 恢复，并返回 polling token，不无限占用同步请求。慢 source read 在数据库写事务外执行：catalog work 使用完整 validated snapshot；已知 conversation／message fallback 与 cold resource 使用 typed dependency-scoped session，只 pin 并复验实际读取的 SQLCipher database／file。Cold resource processor 在 source lease 关闭后执行，短 admission transaction 会在绑定 derived object 前同时重查 resolver revision 与 worker fence。已授权的 CAS hit 与 transcript read 保持本地，同时重查所属会话的当前权限。
+Core 独占 admitted state；local 模式直接拥有 source access，remote 模式只把有限 capture 交给 Mac edge。Provider 返回 evidence，reader service 决定 policy 与 admission。`window.db` 中的消息正文是 source-derived projection，用于已 admission 消息页与 resident inbox preview 的本地 read plane。Catalog recents 不依赖正文驻留；普通 remote recent 消息首读使用已连接的 edge；物化响应会明确标记 bounded-stale，不冒充一次新的 live-source observation。同一数据库还持有 reader ACK/cursor state、correction history 与 resource/voice bindings，不能靠删库无损重建。Local read、source read、resource derivation、单一 database writer 与 transcript wait 使用彼此独立的有界 runtime lanes，因此慢 source／processor 不会占光本地读取能力。耗时 PDF derivation 进入 schema v6 引入的 durable job，以 lease/fencing 恢复，并返回 polling token，不无限占用同步请求。慢 source read 在数据库写事务外执行：catalog work 使用完整 validated snapshot；已知 conversation／message fallback 与 cold resource 使用 typed dependency-scoped session，只 pin 并复验实际读取的 SQLCipher database／file。Cold resource processor 在 source lease 关闭后执行，短 admission transaction 会在绑定 derived object 前同时重查 resolver revision 与 worker fence。已授权的 CAS hit 与 transcript read 保持本地，同时重查所属会话的当前权限。
 
 进一步看 [component／evidence map](docs/ARCHITECTURE.md) 和 [可编辑 topology](docs/assets/architecture.mmd)。
 
