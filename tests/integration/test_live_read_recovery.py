@@ -12,8 +12,10 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -21,7 +23,7 @@ from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.model.db import WindowDB
 from sightglass.model.repositories import WindowRepository
 from sightglass.model.schema import SCHEMA_SQL
-from sightglass.operations import check_operation_budget
+from sightglass.operations import check_operation_budget, operation_budget_snapshot
 from sightglass.policy.readers import ReaderPolicy
 from sightglass.runtime import source_worker
 from sightglass.runtime.source_worker import SourceWorker
@@ -640,21 +642,26 @@ class SlowTailDegradationTests(unittest.TestCase):
         # Make the default 201-row (batch 200) and the degraded 21-row (batch 20)
         # incremental ranges consume their attempts, while the final one-message batch
         # (read_range probe limit 2) is truthful and admits.
+        clock = [0.0]
+
+        def expire_attempt() -> None:
+            budget = operation_budget_snapshot()
+            assert budget is not None and budget.deadline is not None
+            clock[0] = budget.deadline + 0.001
+
         provider = _SlowTailReadProvider(
             self.provider,
             slow_at=0,  # never slow the tail read in this scenario
             slow_range_limits={201, 21},
+            expire_slow_read=expire_attempt,
         )
         self.service.provider = provider  # type: ignore[assignment]
         self.provider._snapshots.clear()  # noqa: SLF001 - fixture snapshot cache
 
-        # Keep the production final-attempt budget for truthful admission. Only
-        # the deliberately slow first two attempts need shortened fixture budgets.
-        with mock.patch.object(
-            source_worker,
-            "LIVE_SYNC_ATTEMPT_TIMEOUTS",
-            (*TEST_DEGRADED_ATTEMPT_TIMEOUTS[:2],
-             source_worker.LIVE_SYNC_ATTEMPT_TIMEOUTS[-1]),
+        # Advance the real operation-budget clock at the intended slow range.
+        # Setup speed must not expire an attempt before it reaches that range.
+        with mock.patch(
+            "sightglass.operations.time", SimpleNamespace(monotonic=lambda: clock[0]),
         ):
             worker = SourceWorker(self.service, poll_interval_seconds=50)  # type: ignore[arg-type]
             worker.start()
@@ -794,10 +801,12 @@ class _SlowTailReadProvider:
         *,
         slow_at: int,
         slow_range_limits: set[int] | None = None,
+        expire_slow_read: Callable[[], None] | None = None,
     ) -> None:
         self._provider = provider
         self._slow_at = slow_at
         self._slow_range_limits = slow_range_limits or set()
+        self._expire_slow_read = expire_slow_read
         self.slow_reads: list[int] = []
         self.slow_ranges: list[int] = []
 
@@ -837,6 +846,8 @@ class _SlowTailReadProvider:
         limit = kwargs.get("limit")
         if limit is not None and int(limit) in self._slow_range_limits:
             self.slow_ranges.append(int(limit))
+            if self._expire_slow_read is not None:
+                self._expire_slow_read()
             # Consume the attempt's own fresh deadline rather than faking the error.
             while True:
                 check_operation_budget()
