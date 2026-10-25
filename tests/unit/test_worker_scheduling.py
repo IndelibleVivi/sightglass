@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import time
 import unittest
 from types import SimpleNamespace
@@ -27,6 +28,17 @@ def wait_until(test: unittest.TestCase, predicate, timeout: float = 1.0) -> None
 
 
 class WorkerSchedulingTests(unittest.TestCase):
+    def test_unexpired_sqlite_probe_error_retains_original_failure(self) -> None:
+        links = Mock()
+        error = sqlite3.OperationalError("synthetic SQL failure before deadline")
+        links.state.return_value = {"state": "ready"}
+        links.has_pending_backfill.side_effect = error
+        worker = DerivedIndexWorker(links, SimpleNamespace(paused=False))  # type: ignore[arg-type]
+        with self.assertRaises(sqlite3.OperationalError) as caught:
+            worker.run_once()
+        self.assertIs(caught.exception, error)
+        links.backfill_batch.assert_not_called()
+
     def test_derived_idle_wake_fallback_and_stop_are_bounded(self) -> None:
         links = Mock()
         links.has_pending_backfill.return_value = False

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from typing import Any
 
 from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.model.links import LinkRepository
-from sightglass.operations import operation_budget
+from sightglass.operations import check_operation_budget, operation_budget
 from sightglass.policy.readers import ReaderContext
 from sightglass.runtime.worker_diagnostics import clear_error, error_fields, record_error
 
@@ -65,17 +66,27 @@ class DerivedIndexWorker:
     def run_once(self) -> bool:
         if self.reader.paused:
             return False
-        if self.links.state()["state"] == "ready" and not self.links.has_pending_backfill():
-            with self._lock:
-                clear_error(self._state)
-                self._state["paused_for_storage"] = False
-            return False
         try:
-            storage = self.links.database.storage
-            if storage is not None:
-                storage.require(256 * 1024, background=True)
             with operation_budget(3.0, cancelled=self._stop):
-                result = self.links.backfill_batch(limit=100)
+                try:
+                    # Readiness probes can traverse resident stock too. They share
+                    # the batch's deadline/cancellation so stop can interrupt SQL.
+                    if (self.links.state()["state"] == "ready"
+                            and not self.links.has_pending_backfill()):
+                        with self._lock:
+                            clear_error(self._state)
+                            self._state["paused_for_storage"] = False
+                        return False
+                    storage = self.links.database.storage
+                    if storage is not None:
+                        storage.require(256 * 1024, background=True)
+                    check_operation_budget()
+                    result = self.links.backfill_batch(limit=100)
+                except sqlite3.DatabaseError:
+                    # A progress-handler interrupt is a budget/cancel outcome;
+                    # unrelated SQLite failures keep their original diagnosis.
+                    check_operation_budget()
+                    raise
             with self._lock:
                 self._state.update(
                     completed_batches=self._state["completed_batches"] + 1,

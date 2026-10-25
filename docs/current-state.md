@@ -12,24 +12,37 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Continued daily reading and lifecycle: source candidate
+## Continued daily reading and lifecycle: activation and follow-up
 
-The next source increment connects ordinary remote updates to their selected fresh
-capture while retaining exact local pending/request replay and legacy request
-compatibility. No history job or semantic preparation is required for new replies.
-It also separates producer/capture/receipt-writer quiescence from resource/voice lease recovery;
-failed stops block recovery and every failure still blocks runtime replacement or
-DB/lock release. The operator's existing fast `operations_only` IPC exposes bounded
-content-free original-stop/compensation evidence without DB or file inventory.
-Explicit shutdown retains its listener-close semantics.
-Candidate receipt writers stay dormant until recovery completes; accepted receipts
-drain before replacement, failed joins remain retryable, and a stopped owner cannot
-overlap its replacement. Dormant/stopping calls increment the existing dropped count.
+Core `3698644` connects ordinary remote updates to their selected fresh capture while
+retaining exact local pending/request replay and legacy request compatibility. No
+history job or semantic preparation is required for new replies. It separates
+producer/capture/receipt-writer quiescence from resource/voice lease recovery;
+failures block replacement and DB/lock release. Fast operator `operations_only`
+diagnostics preserve bounded content-free original-stop/compensation evidence.
+Candidate receipt writers stay dormant until recovery completes; accepted work drains
+before replacement and failed joins remain retryable. Explicit shutdown retains its
+listener-close semantics.
 
-Generated continuation and lifecycle checks are being integrated. Their source,
-final gate and installation results are distinct from the activated contact-reading
-increment below; this paragraph does not claim the new updates/lifecycle increment
-is installed. The complete ledger retains [SG-061/062](IMPLEMENTATION-PLAN.md).
+The source passed fresh hosted CI at runtime-equivalent validation commit `5f6a0d9`
+([40163948752](https://github.com/IndelibleVivi/sightglass/actions/runs/40163948752)):
+1,641 full macOS tests, 998 portable Linux tests, typing/lint/build and both isolated
+installed-wheel gates. The validation commits changed two generated test files only;
+all 138 runtime Python modules match the frozen `3698644` wheel. That candidate passed
+231 installed Linux tests with frozen dependency/SQLite/native SILK parity, and is
+active with the retained Mac edge, schema, source binding and grants. Generated real
+stdio/IPC/Core/edge checks include an appended reply, ordinary updates, exact offline
+request/pending replay and ACK. Original-plugin updates acceptance is still pending.
+
+A live pause then exposed a derived worker that survived both stop attempts. The new
+diagnostic fences correctly blocked lease recovery/replacement, and a controlled
+same-runtime restart restored readiness. Source inspection found that readiness and
+pending-index probes ran outside the batch's operation budget. The follow-up candidate
+puts those reads under the same deadline/cancellation and retains genuine SQL errors;
+real SQLite long-query pause/replacement and related generated checks pass locally.
+Its final hosted, installed and live results remain pending. Cancellation safety does
+not establish budget-bounded convergence over a large resident stock; that scan/progress
+work remains open. The complete ledger retains [SG-061/062](IMPLEMENTATION-PLAN.md).
 
 ## Daily contact reading: source and activation
 
@@ -61,9 +74,9 @@ private runtime state. Source commit `cd82f0b` also passed both jobs in hosted C
 1,619 full macOS tests, 967 portable tests, typing/lint/build and both isolated
 installed-wheel gates. These are generated-source and artifact results;
 the source candidate subsequently passed 200 installed Linux fixture tests with
-unchanged frozen runtime, SQLite and native SILK bytes. Core `cd82f0b` is now active
+unchanged frozen runtime, SQLite and native SILK bytes. Core `cd82f0b` was first activated
 with the retained Mac edge `066f24e`, the original schema/config/grants and native
-interpretation. The original plugin returned body-free direct contacts, ordinary
+interpretation; the continuation increment above subsequently superseded that Core. The original plugin returned body-free direct contacts, ordinary
 fresh recent messages, a fresh signed continuation without duplicates, message
 detail and anchor-containing materialized context. This is bounded daily-reading
 acceptance, not complete history, a new IR consent scope or a long-term latency SLO.

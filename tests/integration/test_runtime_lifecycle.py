@@ -121,6 +121,60 @@ class RuntimeLifecycleTests(unittest.TestCase):
 
     group: str
 
+    def test_pause_cancels_sqlite_readiness_probe_before_replacing_derived_owner(self):
+        self.start()
+        worker = self.daemon.derived_worker
+        self.assertTrue(worker.stop())
+        entered, interrupted = threading.Event(), threading.Event()
+        connections: list[sqlite3.Connection] = []
+
+        def probe() -> bool:
+            with self.daemon.database.connection() as connection:
+                connections.append(connection)
+                entered.set()
+                try:
+                    connection.execute(
+                        "WITH RECURSIVE n(v) AS (VALUES(0) UNION ALL "
+                        "SELECT v+1 FROM n WHERE v<1000000000) SELECT SUM(v) FROM n"
+                    ).fetchone()
+                except sqlite3.DatabaseError:
+                    interrupted.set()
+                    raise
+            return False
+
+        try:
+            with (
+                patch.object(worker.links, "state", return_value={"state": "ready"}),
+                patch.object(worker.links, "has_pending_backfill", side_effect=probe),
+            ):
+                worker.start()
+                self.assertTrue(entered.wait(2))
+                paused = self.client("operator", timeout=15).call("operator.pause")
+                self.assertTrue(paused["paused"])
+                self.assertTrue(interrupted.is_set())
+                self.assertFalse(worker.status()["running"])
+                self.assertEqual(worker.status()["last_error_code"], "SERVICE_TIMEOUT")
+                self.assertIsNot(self.daemon.derived_worker, worker)
+                attempt = self.diagnostic()["attempts"][-1]
+                self.assertTrue(attempt["owners_stopped"])
+                self.assertTrue(attempt["leases_recovered"])
+                step = next(step for step in attempt["steps"] if step["step"] == "derived")
+                self.assertEqual(step["state"], "completed")
+                self.assertFalse(step["thread_alive"])
+        finally:
+            # Keep the old-code failure finite too; this is a generated connection.
+            if not interrupted.is_set():
+                for connection in connections:
+                    try:
+                        connection.interrupt()
+                    except sqlite3.Error:
+                        pass
+            worker.stop()
+        self.stop_edge()
+        self.client("operator").call("operator.resume")
+        self.connect_edge()
+        self.fresh_read()
+
     def test_sqlite_lease_failure_keeps_cause_and_fast_diagnostic_then_retry_recovers(self):
         self.start()
         old_tools = self.daemon.tools

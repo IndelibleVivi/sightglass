@@ -210,6 +210,11 @@ Global pause／resume 或 restart 不会复活 failed job。按原会话与需�
 job 一直挡住另一 job。已取得 capture 的失败先完成 exact rejection，再提交 job 失败；
 admission 与 progress 仍在同一事务，rollback 不会只留下其中一项。
 
+Derived readiness／pending probes 也必须位于同一个三秒 operation budget 与 stop cancellation 内；
+只给正式 backfill 加预算不能保证旧 owner 可停止。SQLite progress handler 中断后复核当前
+budget，取消／deadline 记录为 `SERVICE_TIMEOUT`，未过期的 SQL 错误保留原诊断。这个上限
+保证可中断性，不证明整个 resident stock 的历史 derivative pass 已完成；仍按 coverage 判断。
+
 Resource／voice／derived workers 现在先读 durable 状态，只有实际到期或可 claim 的工作
 才取得短 writer transaction；空 resource lease recovery 不取得 writer。每种 worker 有自己的
 Event，新任务、配置／rebuild 通知与最近 retry／lease deadline 驱动等待，默认最长 30 秒

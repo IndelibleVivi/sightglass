@@ -41,6 +41,10 @@ Producer/capture owners 与 receipt writer 全部停止后才允许 lease recove
 receipts 必须排空，candidate writer 在 recovery 完成前保持 dormant。失败须保留有限、无内容的
 stop/compensation evidence，并继续阻止新 owner。合成 writer contention 可以导致所有
 公开 worker 都已停止而 lease recovery 仍失败，因此 `running=false` 不能替代恢复证明。
+实际 pause 还暴露了 derived readiness probe 在 batch 预算外的缺口：有限的结果数量不等于
+有限的扫描成本。整个 probe/batch 需要共享 cancellation 与 deadline，真实 SQLite 长查询
+必须先中断，才允许 replacement。这个修复恢复 ownership 交接；大规模 resident stock 的
+预算内持续遍历与覆盖收敛仍需后续 seek/progress 设计，不能由一次 stop 成功推定。
 具体实现、安装与测试状态仍以 [current-state](current-state.md) 为准。
 
 ## 要稳定交付的体验
