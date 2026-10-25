@@ -19,8 +19,8 @@ credential; the bridge calls the daemon over an authenticated Unix socket; the d
 refreshes catalog-wide live state under validated snapshots and known targets under typed
 dependency-scoped sessions, records what it admits into a source-derived projection, and
 serves catalog recents, current-epoch resident message previews and warm CAS resources
-from that local plane with explicit freshness. A new ordinary remote recent message read
-selects the connected edge before lane classification; explicit replica and offline reads
+from that local plane with explicit freshness. A new ordinary remote recent or updates read
+selects the connected edge before lane classification; exact update replay stays local; explicit replica and offline reads
 stay local. Independent bounded lanes keep local reads, source reads,
 resource derivation, the database writer and transcript waits from exhausting one another;
 long resource work becomes a durable fenced job, while cold/source-current work and optional
@@ -52,7 +52,7 @@ SSH relay pins the activated core generation. The core admits that evidence, rea
 new delivery, reconciliation checkpoint and exact request outcome in one WindowDB writer
 transaction; only a committed journal permits transport ACK. Replica reads remain local
 to the core while the Mac is offline and report partial resident coverage. New ordinary
-remote recents use fresh edge evidence when connected; explicit fresh operations require
+remote recents and updates use fresh edge evidence when connected; explicit fresh operations require
 it even when transport is unavailable. This topology is a source/candidate capability;
 the diagram does not establish any installation or production cutover.
 
@@ -206,7 +206,7 @@ identity is injected server-side and never accepted from MCP arguments.
 | 2 | `wechat_find_conversations` | Bounded conversation discovery under policy. |
 | 3 | `wechat_read_inbox` | Recent catalog contacts/groups with optional resident previews and direct read actions; explicit resident activity view. |
 | 4 | `wechat_find_participants` | Bounded participant discovery within an admitted conversation. |
-| 5 | `wechat_read_messages` | New ordinary remote recents use the connected edge; `view=replica` reads partial resident coverage; `view=fresh` requires finite source proof; `auto` retains local-mode routing. Updates keep their exact durable delivery/ACK path. |
+| 5 | `wechat_read_messages` | New ordinary remote recents and updates use the connected edge; `view=replica` reads partial resident coverage; `view=fresh` requires finite source proof; `auto` retains local-mode routing. Updates keep their exact durable delivery/ACK path. |
 | 6 | `wechat_read_transcripts` | Optional local transcript reads for admitted resources. |
 | 7 | `wechat_search_messages` | Replica search validates resident canonical bodies without opening source; fresh/auto source search uses bounded preparation and current-source validation. |
 | 8 | `wechat_find_links` | Local-only observed-URL discovery; full observed URL projection; policy/version cursor, signed continuation. |

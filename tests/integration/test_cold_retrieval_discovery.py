@@ -20,9 +20,11 @@ import unittest
 from contextlib import ExitStack, closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+from sightglass.operations import operation_budget_snapshot
 from sightglass.reader.service import SEARCH_PREPARATION_MESSAGE_BUDGET
 from sightglass.residency.repository import ResidencyRepository
 from sightglass.runtime.lanes import RuntimeLanes
@@ -1097,16 +1099,25 @@ class ColdRetrievalDiscoveryTests(unittest.TestCase):
         job = next(iter(self.manager._jobs.values()))
         scan = self.provider.scan_discovery_page
         pages = {"n": 0}
+        expired_clock: float | None = None
+
+        def budget_clock() -> float:
+            return time.monotonic() if expired_clock is None else expired_clock
 
         def slow_second_page(*args, **kwargs):
+            nonlocal expired_clock
             pages["n"] += 1
             if pages["n"] == 2:
-                time.sleep(0.55)
+                budget = operation_budget_snapshot()
+                assert budget is not None and budget.deadline is not None
+                # Expire the actual operation budget only after page one commits.
+                # Fixture setup/admission speed must not choose the failure phase.
+                expired_clock = budget.deadline + 1
             return scan(*args, **kwargs)
 
         with ExitStack() as patches:
-            patches.enter_context(patch("sightglass.runtime.search_preparation.ATTEMPT_SECONDS",
-                                        0.5))
+            patches.enter_context(patch("sightglass.operations.time",
+                                        SimpleNamespace(monotonic=budget_clock)))
             patches.enter_context(patch.object(
                 self.provider, "scan_discovery_page", side_effect=slow_second_page
             ))

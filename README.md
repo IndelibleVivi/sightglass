@@ -18,8 +18,10 @@ Start with `wechat_read_inbox()`. Its default `mode="recent"` lists recent autho
 contacts and groups from the observed conversation catalog, including conversations
 with no cached message bodies. `kinds=["direct"]` selects direct contacts. Choose an
 item and follow its `read_action` to `wechat_read_messages(mode="recent")`.
+Continue new replies with `mode="updates"`; the reader acknowledges a delivered page
+only after consuming it. Retrying without an ACK returns that exact pending payload.
 
-A new ordinary remote recent read uses the connected Mac edge automatically. It
+A new ordinary remote recent or updates read uses the connected Mac edge automatically. It
 does not require a history job, retained archive or semantic index. Offline reads
 return only available resident messages with explicit bounded freshness. A missing
 preview is marked `latest_state="not_resident"`; it does not mean the contact has no
@@ -49,10 +51,12 @@ cannot prove source absence. `wechat_list_resources` lists the owning message's 
 resident bindings; an expired or released body returns `SOURCE_INCOMPLETE`, and an
 inactive historical resolver is never restored. Use `view="fresh"` on tools that expose
 it for bounded source verification.
-The exception is a new ordinary `mode="recent"` read: with a connected edge and no
-explicit view or cursor it selects fresh source evidence. `view="replica"` remains
-explicitly local. Use `refresh=true` to require source evidence even when offline;
-failure after selecting fresh never falls back to cache.
+New ordinary `mode="recent"` and `mode="updates"` requests select fresh source evidence
+with a connected edge and no explicit view. Recent cursors keep their selected plane;
+pending updates and committed request retries replay locally before any source work. `view="replica"` remains
+explicitly local. Cursor-free non-update reads can use `refresh=true` to require
+source evidence even when offline; updates use explicit `view="fresh"` for new work.
+Failure after selecting fresh never falls back to cache.
 Read longer spans through the returned cursor and `next_actions`; clear `refresh`
 on continuation. A signed source cursor retains its fresh view even on hosts that
 expose `refresh` without `view`. Each page is independently validated. Exact
@@ -92,7 +96,7 @@ loss recovery and wire limits are in [Capture protocol](docs/CAPTURE-PROTOCOL.md
 | Capability | Behavior |
 | --- | --- |
 | Conversations and inbox | Policy-filtered recent contacts/groups independent of message residency, with direct reading actions and optional cached previews; a separate resident activity view and explicit catalog freshness. |
-| Messages and people | Current-epoch cached messages support local range/context/single-message/participant reads; new ordinary remote recents use the connected edge. Stable identity stays separate from mutable names. |
+| Messages and people | Current-epoch cached messages support local range/context/single-message/participant reads; new ordinary remote recents and updates use the connected edge. Stable identity stays separate from mutable names. |
 | Search | Local-source searches prepare a bounded source page; remote-core replica searches validate resident candidates locally, while explicit fresh searches revalidate bounded candidates through the Mac edge. Continuation resumes the existing scan. Short terms retain the bounded timeline fallback; missing history and partial zero-hit pages remain explicit. |
 | Links and candidate contexts | Find locally observed URLs by exact hostname or approximate hints; retrieve ranked same-conversation contexts with nearby links, explicit replies and replayable anchors. These materialized reads report bounded freshness and never advance updates or ACK. Optional BGE-M3/Vectorize semantic recall uses the same canonical and policy checks; failures leave deterministic recall available. |
 | Updates | Reader-scoped delivery and ACK, including offline replica ACK. Unacknowledged payloads replay exactly after a restart; fresh ACK, admission and the new delivery commit together. |

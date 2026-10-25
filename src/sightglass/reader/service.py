@@ -344,20 +344,28 @@ class ReaderService:
         return "fresh" if refresh else (view or self.default_view)
 
     def bind_recent_view(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Freeze the ordinary remote recent request before choosing its work lane.
+        """Freeze an ordinary remote daily read before choosing its work lane.
 
-        Only a new recent request without an explicit view uses transport evidence.
+        Only a new cursor-free recent or updates request without an explicit view
+        uses transport evidence. A prior update request_id retains the plane that
+        committed its durable outcome, so an offline response replay remains local.
         An edge connection permits an attempt, never a claim of source freshness.
         A captured operation has already selected fresh and cannot fall back if the
         connection disappears while its sealed terminal is being admitted.
         """
-        if (self.default_view == "replica" and arguments.get("mode", "recent") == "recent"
-                and arguments.get("view") is None and arguments.get("cursor") is None
-                and arguments.get("refresh", False) is False):
-            fresh = (self._operation_provider.get() is not None
-                     or self.capture_transport_state() == "edge_connected")
-            return {**arguments, "view": "fresh" if fresh else "replica"}
-        return arguments
+        if (self.default_view != "replica" or arguments.get("view") is not None
+                or arguments.get("refresh", False) is not False):
+            return arguments
+        mode = arguments.get("mode", "recent")
+        if mode == "updates":
+            prior = self.replica.committed_update_request_view(arguments.get("request_id"))
+            if prior is not None:
+                return {**arguments, "view": prior}
+        elif mode != "recent" or arguments.get("cursor") is not None:
+            return arguments
+        fresh = (self._operation_provider.get() is not None
+                 or self.capture_transport_state() == "edge_connected")
+        return {**arguments, "view": "fresh" if fresh else "replica"}
 
     @staticmethod
     def _view_scope(scope_key: str, view: str) -> str:
@@ -3424,7 +3432,7 @@ class ReaderService:
                 )
                 self.replica.record_update_error(
                     arguments.get("request_id"), binding, ack_error,
-                    conversation_id=conversation_id,
+                    conversation_id=conversation_id, view=str(arguments.get("view", "auto")),
                 )
             raise ack_error from error
 
@@ -3485,7 +3493,7 @@ class ReaderService:
                 return self.replica.record_update_outcome(
                     request_id, request_binding, page, conversation_id=conversation_id,
                     payload_id=str(pending["delivery_id"]),
-                    payload_digest=str(pending["payload_digest"]),
+                    payload_digest=str(pending["payload_digest"]), view=view,
                 )
 
         if view == "replica":
@@ -3566,7 +3574,7 @@ class ReaderService:
                         return self.replica.record_update_outcome(
                             request_id, request_binding, page, conversation_id=conversation_id,
                             payload_id=str(pending["delivery_id"]),
-                            payload_digest=str(pending["payload_digest"]),
+                            payload_digest=str(pending["payload_digest"]), view=view,
                         )
                 self._persist_catalog(catalog_read, snapshot)
                 context = self._conversation_context(conversation_id)
@@ -3592,7 +3600,7 @@ class ReaderService:
                         return self.replica.record_update_outcome(
                             request_id, request_binding, page, conversation_id=conversation_id,
                             payload_id=str(pending["delivery_id"]),
-                            payload_digest=str(pending["payload_digest"]),
+                            payload_digest=str(pending["payload_digest"]), view=view,
                         )
                 if (captured_page is not None
                         and self.replica.fresh_updates_reconcile_position(conversation_id)[:2]
@@ -3917,7 +3925,7 @@ class ReaderService:
         )
         if to_sequence is None:
             return self.replica.record_update_outcome(request_id, request_binding, page,
-                                                     conversation_id=conversation_id)
+                                                     conversation_id=conversation_id, view=view)
         assert to_sequence is not None and delivery_id is not None
         payload_ref, payload_digest = self.delivery_store.write(delivery_id, page)
         self.repository.create_pending_delivery(
@@ -3946,7 +3954,7 @@ class ReaderService:
                 )
         return self.replica.record_update_outcome(
             request_id, request_binding, page, conversation_id=conversation_id,
-            payload_id=delivery_id, payload_digest=payload_digest,
+            payload_id=delivery_id, payload_digest=payload_digest, view=view,
         )
     def _voice_policy(self, requested: str | None) -> str:
         """Resolve one read's voice policy; message-only or disabled readers stay unchanged."""
@@ -4933,7 +4941,11 @@ class ReaderService:
         if type(refresh) is not bool or (refresh and (mode == "updates" or cursor is not None)):
             raise SightglassError(ErrorCode.QUERY_INVALID)
         bound_view = self.bind_recent_view({
-            "mode": mode, "view": view, "cursor": cursor, "refresh": refresh,
+            "mode": mode,
+            "view": view,
+            "cursor": cursor,
+            "refresh": refresh,
+            "request_id": request_id,
         })
         resolved_view = self.resolve_view(bound_view.get("view"), refresh=refresh)
         if request_id is not None and mode != "updates":

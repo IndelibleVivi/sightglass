@@ -21,7 +21,8 @@ from .secrets import SecretStore, default_secret_store, semantic_secret_account
 
 
 def build_daemon_tools(
-    config: SightglassConfig, *, secret_store: SecretStore | None = None
+    config: SightglassConfig, *, secret_store: SecretStore | None = None,
+    receipt_autostart: bool = True,
 ) -> ReaderTools:
     provider = create_provider(config)
     storage = StorageBudget(config.data_dir, config.window_db_path, config.storage)
@@ -86,7 +87,9 @@ def build_daemon_tools(
                 service.semantic_unavailable_reason = "storage_pressure"
             except RuntimeError:
                 service.semantic_unavailable_reason = "sidecar_unavailable"
-    receipt_writer = AsyncReceiptWriter(service.record_access_receipt)
+    receipt_writer = AsyncReceiptWriter(
+        service.record_access_receipt, autostart=receipt_autostart,
+    )
     return ReaderTools(
         service,
         receipt_recorder=receipt_writer,

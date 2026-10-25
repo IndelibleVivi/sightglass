@@ -31,7 +31,7 @@ from sightglass.runtime.config import SightglassConfig
 from sightglass.runtime.control import cleanup_deliveries
 from sightglass.source.capture.executor import CaptureExecutor
 from sightglass.source.capture.frozen import FrozenCaptureProvider
-from sightglass.source.identity import SignedTokenCodec
+from sightglass.source.identity import SignedTokenCodec, opaque_id
 from sightglass.source.parser import parse_message
 from sightglass.source.remote import RemoteCaptureProvider, RemoteCaptureSettings
 from sightglass.source.synthetic import _create_shard, _row, create_synthetic_source
@@ -477,6 +477,29 @@ class ReplicaReadTests(unittest.TestCase):
                         self.assertFalse(
                             result["source_receipt"]["freshness"]["live_refresh_confirmed"]
                         )
+
+    def test_connected_view_classifier_matches_shared_validation(self) -> None:
+        self.service.default_view = "replica"
+        self.service.register_capture_transport(lambda: "edge_connected")
+        cases = (
+            {"mode": "recent", "conversation_id": self.group, "limit": 1},
+            {"mode": "updates", "conversation_id": self.group, "limit": 1},
+        )
+        for arguments in cases:
+            with self.subTest(mode=arguments["mode"]):
+                self.assertFalse(self.service.local_message_read_ready(arguments))
+                settings = self.service._validate_message_arguments(
+                    **arguments, participant_ids=()
+                )
+                self.assertEqual(settings["resolved_view"], "fresh")
+        self.service.register_capture_transport(lambda: "edge_disconnected")
+        for arguments in cases:
+            with self.subTest(mode=arguments["mode"], transport="disconnected"):
+                self.assertTrue(self.service.local_message_read_ready(arguments))
+                settings = self.service._validate_message_arguments(
+                    **arguments, participant_ids=()
+                )
+                self.assertEqual(settings["resolved_view"], "replica")
 
     def test_replica_missing_scope_and_signed_cursor_mismatch_fail_locally(self) -> None:
         self.offline()
@@ -1275,6 +1298,286 @@ class ReplicaReadTests(unittest.TestCase):
         self.assertEqual(self.service.replica.fresh_updates_reconcile_position(self.group)[0], None)
         self.assertEqual(received & expected, expected)
         self.assertIsNotNone(previous_delivery)
+
+    def test_new_direct_reply_and_ack_continue_through_ordinary_fresh_updates(self) -> None:
+        direct = self.repository.conversation_id_for(self.account, "conv_direct")
+        reply = _row(
+            "synthetic-daily-continuation-reply",
+            "conv_direct",
+            "2026-10-25T00:00:00+00:00",
+            10,
+            10_001,
+            1,
+            "Synthetic reply arriving after the initial recent page",
+            sender="wxid_demo_member",
+            shown_as="Synthetic Direct Contact",
+        )
+        columns = tuple(reply)
+        with closing(sqlite3.connect(self.source_root / "messages-1.db")) as connection:
+            connection.execute(
+                f"INSERT INTO messages ({','.join(columns)}) VALUES "
+                f"({','.join('?' for _ in columns)})",
+                tuple(reply[key] for key in columns),
+            )
+            connection.commit()
+
+        initial = self.service.read_messages(
+            mode="range", conversation_id=direct, limit=1,
+            time_after="2026-09-13T09:00:00+00:00",
+            time_before="2026-10-01T00:00:00+00:00",
+            view="fresh", voice="off", include_resources="none",
+        )
+        self.assertTrue(initial["messages"])
+        arguments = {
+            "mode": "updates", "conversation_id": direct, "limit": 5, "view": "fresh",
+            "voice": "off", "include_resources": "none",
+        }
+        plan, page = self.read_capture(arguments)
+        self.assertEqual(plan.operation, "verify")
+        self.assertEqual(page["source_receipt"]["view"], "fresh")
+        prefix = {
+            row["source_message_id"]
+            for row in self.repository.frozen_message_rows(
+                tuple(row[0] for row in page["messages"])
+            )
+        }
+        self.assertNotIn(str(reply["source_message_id"]), prefix)
+        prefix_delivery = page["page"]["delivery_id"]
+        assert prefix_delivery is not None
+        prefix_row = self.repository.delivery(prefix_delivery)
+        assert prefix_row is not None
+        prefix_payload = Path(prefix_row["payload_ref"]).read_bytes()
+        self.offline()
+        self.assertEqual(
+            self.service.read_messages(
+                mode="updates", conversation_id=direct, limit=5,
+                voice="off", include_resources="none",
+            ),
+            page,
+        )
+        prefix_replay = self.repository.delivery(prefix_delivery)
+        assert prefix_replay is not None
+        self.assertEqual(Path(prefix_replay["payload_ref"]).read_bytes(), prefix_payload)
+        self.service.provider = self.provider
+        scan_plan, scan = self.read_capture({
+            **arguments, "ack_delivery_id": prefix_delivery,
+        })
+        self.assertEqual(scan_plan.operation, "range")
+        scan_ids = {
+            row["source_message_id"]
+            for row in self.repository.frozen_message_rows(
+                tuple(row[0] for row in scan["messages"])
+            )
+        }
+        self.assertIn(str(reply["source_message_id"]), scan_ids)
+        scan_delivery = scan["page"]["delivery_id"]
+        assert scan_delivery is not None
+        acknowledged = self.service.read_messages(
+            mode="updates", conversation_id=direct, limit=5,
+            ack_delivery_id=scan_delivery, voice="off", include_resources="none",
+        )
+        self.assertNotEqual(
+            acknowledged["page"].get("delivery_id"), scan_delivery
+        )
+        scan_row = self.repository.delivery(scan_delivery)
+        assert scan_row is not None
+        self.assertEqual(scan_row["status"], "acknowledged")
+        self.assertGreater(
+            self.repository.update_position("codex", direct, "conversation", "*"), 0
+        )
+
+    def test_omitted_update_view_restores_committed_fresh_plane_after_restart(self) -> None:
+        self.offline()
+        arguments = {
+            "mode": "updates",
+            "conversation_id": self.group,
+            "limit": 2,
+            "projection": "compact",
+            "include_resources": "indicator",
+            "request_id": "synthetic-daily-restart-request",
+        }
+        self.assertEqual(self.service.bind_recent_view(arguments)["view"], "replica")
+        fresh = {**arguments, "view": "fresh"}
+        _, page = self.read_capture(fresh)
+        self.restart_reader()
+        self.assertTrue(
+            self.service.local_only_tool_call("wechat_read_messages", arguments)
+        )
+        self.assertEqual(
+            self.service.bind_recent_view(arguments)["view"], "fresh"
+        )
+        replay_arguments = {**arguments, "view": "fresh"}
+        with patch.object(
+            self.service,
+            "_source_read",
+            side_effect=AssertionError("offline request replay opened source"),
+        ):
+            self.assertEqual(self.service.read_messages(**replay_arguments), page)
+
+    def test_legacy_viewless_update_outcome_replays_replica_without_source(self) -> None:
+        self.offline()
+        arguments = {
+            "mode": "updates",
+            "conversation_id": self.group,
+            "limit": 2,
+            "projection": "compact",
+            "include_resources": "indicator",
+            "request_id": "synthetic-legacy-viewless-outcome",
+        }
+        self.assertEqual(self.service.bind_recent_view(arguments)["view"], "replica")
+        page = self.service.read_messages(**arguments)
+        delivery_id = page["page"]["delivery_id"]
+        assert delivery_id is not None
+        delivery = self.repository.delivery(delivery_id)
+        assert delivery is not None
+        payload = Path(delivery["payload_ref"]).read_bytes()
+        receipt_id = opaque_id(
+            "wxrequest", self.service.reader.reader_id, arguments["request_id"]
+        )
+        with self.repository.database.transaction() as connection:
+            receipt = connection.execute(
+                "SELECT warning_codes_json FROM access_receipts WHERE receipt_id=?",
+                (receipt_id,),
+            ).fetchone()
+            assert receipt is not None
+            metadata = json.loads(receipt["warning_codes_json"])
+            metadata.pop("view")
+            connection.execute(
+                "UPDATE access_receipts SET warning_codes_json=? WHERE receipt_id=?",
+                (json.dumps(metadata), receipt_id),
+            )
+
+        # A connected edge must not reclassify a valid pre-metadata outcome as fresh.
+        self.service.register_capture_transport(lambda: "edge_connected")
+        self.assertEqual(self.service.bind_recent_view(arguments)["view"], "replica")
+        self.assertEqual(
+            self.service._validate_message_arguments(
+                **arguments, participant_ids=()
+            )["resolved_view"],
+            "replica",
+        )
+        with (
+            patch.object(
+                self.service,
+                "_source_read",
+                side_effect=AssertionError("legacy replay opened source"),
+            ),
+            patch.object(
+                self.service.replica,
+                "prepare_fresh_message_capture",
+                side_effect=AssertionError("legacy replay prepared capture"),
+            ),
+        ):
+            self.assertEqual(self.service.read_messages(**arguments), page)
+            self.assert_error(
+                ErrorCode.QUERY_INVALID,
+                self.service.read_messages,
+                **{**arguments, "view": "fresh"},
+            )
+        self.assertEqual(Path(delivery["payload_ref"]).read_bytes(), payload)
+
+        with self.repository.database.transaction() as connection:
+            metadata["expires_at"] = "2000-01-01T00:00:00+00:00"
+            connection.execute(
+                "UPDATE access_receipts SET warning_codes_json=? WHERE receipt_id=?",
+                (json.dumps(metadata), receipt_id),
+            )
+        with patch.object(
+            self.service,
+            "_source_read",
+            side_effect=AssertionError("expired legacy replay opened source"),
+        ):
+            self.assert_error(
+                ErrorCode.CURSOR_STALE, self.service.read_messages, **arguments
+            )
+        self.assertEqual(self.delivery(delivery_id)["status"], "pending")
+
+    def test_pending_payload_plane_does_not_override_request_outcome_plane(self) -> None:
+        base = {
+            "mode": "updates",
+            "conversation_id": self.group,
+            "limit": 2,
+            "projection": "compact",
+            "include_resources": "indicator",
+        }
+        fresh_page = self.service.read_messages(**base, view="fresh")
+        fresh_delivery = fresh_page["page"]["delivery_id"]
+        assert fresh_delivery is not None
+        fresh_payload = self.repository.delivery(fresh_delivery)
+        assert fresh_payload is not None
+        fresh_bytes = Path(fresh_payload["payload_ref"]).read_bytes()
+        replica_request = {
+            **base,
+            "view": "replica",
+            "request_id": "synthetic-replica-request-over-fresh-payload",
+        }
+        replica_result = self.service.read_messages(**replica_request)
+        self.assertEqual(
+            json.dumps(replica_result, sort_keys=True),
+            json.dumps(fresh_page, sort_keys=True),
+        )
+        replica_receipt = self.repository.update_request_outcome(opaque_id(
+            "wxrequest", self.service.reader.reader_id, replica_request["request_id"]
+        ))
+        assert replica_receipt is not None
+        self.assertEqual(
+            json.loads(replica_receipt["warning_codes_json"])["view"], "replica"
+        )
+
+        # ACK the original fresh delivery before constructing a distinct replica
+        # payload; another unacknowledged read would only replay the fresh bytes.
+        replica_page = self.service.read_messages(
+            **base, view="replica", ack_delivery_id=fresh_delivery,
+        )
+        replica_delivery = replica_page["page"]["delivery_id"]
+        assert replica_delivery is not None
+        self.assertNotEqual(replica_delivery, fresh_delivery)
+        self.assertEqual(replica_page["source_receipt"]["view"], "replica")
+        replica_payload = self.repository.delivery(replica_delivery)
+        assert replica_payload is not None
+        replica_bytes = Path(replica_payload["payload_ref"]).read_bytes()
+        fresh_request = {
+            **base,
+            "view": "fresh",
+            "request_id": "synthetic-fresh-request-over-replica-payload",
+        }
+        fresh_result = self.service.read_messages(**fresh_request)
+        self.assertEqual(json.dumps(fresh_result, sort_keys=True),
+                         json.dumps(replica_page, sort_keys=True))
+        fresh_receipt = self.repository.update_request_outcome(opaque_id(
+            "wxrequest", self.service.reader.reader_id, fresh_request["request_id"]
+        ))
+        assert fresh_receipt is not None
+        self.assertEqual(
+            json.loads(fresh_receipt["warning_codes_json"])["view"], "fresh"
+        )
+
+        self.service.provider = OfflineSource(self.provider)  # type: ignore[assignment]
+        self.restart_reader()
+        with (
+            patch.object(
+                self.service,
+                "_source_read",
+                side_effect=AssertionError("plane replay opened source"),
+            ),
+            patch.object(
+                self.service.replica,
+                "prepare_fresh_message_capture",
+                side_effect=AssertionError("plane replay prepared capture"),
+            ),
+        ):
+            self.assertEqual(
+                self.service.read_messages(**replica_request), replica_result
+            )
+            self.assertEqual(
+                self.service.read_messages(**fresh_request), fresh_result
+            )
+        fresh_replay = self.repository.delivery(fresh_delivery)
+        assert fresh_replay is not None
+        replica_replay = self.repository.delivery(replica_delivery)
+        assert replica_replay is not None
+        self.assertEqual(Path(fresh_replay["payload_ref"]).read_bytes(), fresh_bytes)
+        self.assertEqual(Path(replica_replay["payload_ref"]).read_bytes(), replica_bytes)
 
     def test_actual_fresh_cursor_boundary_is_verified_without_entering_the_next_page(self) -> None:
         expected = self.append_source(225)

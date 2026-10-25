@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 from pydantic import BaseModel
 
@@ -85,6 +85,7 @@ from .storage_history import (
 from .voice_setup import VoiceSetup, build_voice_setup, injected_readiness
 from .voice_wait import VOICE_WAIT_CEILING_MS, VoiceWaiters, bound_wait_ms
 from .voice_worker import Transcriber, VoiceWorker
+from .worker_diagnostics import error_fields, record_error
 
 READER_METHODS = {"tools.call", "daemon.status"}
 OPERATOR_METHODS = {
@@ -287,7 +288,9 @@ class SightglassDaemon:
         if token_hash(operator_token) != self.config.operator_token_hash:
             raise RuntimeError("operator credential does not match the private config")
         self.lanes = RuntimeLanes()
-        self.tools = build_daemon_tools(self.config, secret_store=self.secret_store)
+        self.tools = build_daemon_tools(
+            self.config, secret_store=self.secret_store, receipt_autostart=False,
+        )
         try:
             self._initialize_runtime(runtime_lock)
         except BaseException:
@@ -331,6 +334,7 @@ class SightglassDaemon:
             MAX_CONCURRENT_IPC_CONNECTIONS - RESERVED_IPC_CONTROL_CONNECTIONS)
         self._lifecycle_lock = threading.RLock()
         self._lifecycle_state = "starting"
+        self._lifecycle_attempts: tuple[dict[str, Any], ...] = ()
         self._serving = False
         self._runtime_closed = False
         self._owned_tools = [self.tools]
@@ -404,11 +408,6 @@ class SightglassDaemon:
     def _claim_resource_leases(self) -> None:
         self.resource_jobs.recover_outstanding_leases()
 
-    def _close_resource_worker(self) -> None:
-        self.resource_worker.stop()
-        self._require_worker_stopped(self.resource_worker, "resource")
-        self._claim_resource_leases()
-
     def _resolve_voice_transcriber(self, tools) -> Transcriber | None:
         """Use an injected recognizer, else the probe result for this configuration."""
 
@@ -431,14 +430,6 @@ class SightglassDaemon:
         voice_service = self.tools.voice_service
         if voice_service is not None:
             voice_service.recover_outstanding_leases()
-
-    def _close_voice_worker(self) -> None:
-        """Stop this context's worker, wake its waiters, and fence out its leases."""
-
-        self.voice_worker.stop()
-        self._require_worker_stopped(self.voice_worker, "voice")
-        self._transcript_waiters.notify()
-        self._claim_voice_leases()
 
     def _configure_storage_history(self) -> None:
         """Bind the daily history sidecar to the current data directory/budget."""
@@ -640,11 +631,12 @@ class SightglassDaemon:
 
     def _start_runtime_workers(self) -> None:
         with self._lifecycle_lock:
+            self._claim_resource_leases()
+            self._claim_voice_leases()
+            self.tools.start_receipt_writer()
             if self.capture_core is not None:
                 self.capture_core.start()
             self.search_preparation.start()
-            self._claim_resource_leases()
-            self._claim_voice_leases()
             self.source_worker.start()
             self.derived_worker.start()
             self.semantic_worker.start()
@@ -652,34 +644,83 @@ class SightglassDaemon:
             self.voice_worker.start()
             self._start_storage_history()
 
-    def _stop_runtime_workers(self) -> None:
-        # Even one failed join must not leave later workers running unnoticed.
-        # Callers may retry compensation, but never replace an unquiesced owner.
+    def _stop_runtime_workers(self, *, attempt: str = "stop") -> None:
+        """Stop every owner before recovering leases, retaining content-free evidence."""
         with self._lifecycle_lock:
-            failures = []
-            steps = [
-                ("preparation", self.search_preparation.stop),
-                ("semantic", self.semantic_worker.stop),
-                ("derived", self.derived_worker.stop),
-                ("history", self._stop_storage_history),
-                ("resource", self._close_resource_worker),
-                ("voice", self._close_voice_worker),
-                ("source", self.source_worker.stop),
-            ]
-            if self.capture_core is not None:
-                steps.append(("capture", self.capture_core.close))
-            for name, stop in steps:
+            failures: list[BaseException] = []
+            steps: list[dict[str, Any]] = []
+            # Publish fresh snapshots without taking the lifecycle lock on diagnostics.
+            # At most the original stop and its compensation are retained.
+            previous = self._lifecycle_attempts[-1:] if attempt == "compensation" else ()
+            owners_stopped: bool | None = None
+            leases_recovered: bool | None = None
+
+            def publish() -> None:
+                self._lifecycle_attempts = (*previous, {
+                    "attempt": attempt,
+                    "owners_stopped": owners_stopped,
+                    "leases_recovered": leases_recovered,
+                    "steps": list(steps),
+                })
+
+            def run(phase: str, name: str, action: Any, worker: Any = None) -> None:
+                started = time.monotonic()
+                step: dict[str, Any] = {"phase": phase, "step": name, "state": "running"}
+                steps.append(step)
+                publish()
                 try:
-                    if stop() is False:
-                        raise RuntimeError(f"{name} worker did not stop")
+                    if action() is False:
+                        raise RuntimeError("runtime owner did not stop")
+                    if worker is not None:
+                        self._require_worker_stopped(worker, name)
                 except BaseException as error:
                     failures.append(error)
-            for name in ("search_preparation", "semantic_worker", "derived_worker",
-                         "resource_worker", "voice_worker", "source_worker"):
-                try:
-                    self._require_worker_stopped(getattr(self, name), name)
-                except RuntimeError as error:
-                    failures.append(error)
+                    fields = error_fields()
+                    record_error(fields, cast(Exception, error), "runtime_cleanup_failed")
+                    step = {**step, "state": "failed",
+                            "error_type": fields["last_error_type"],
+                            "error_location": fields["last_error_location"]}
+                else:
+                    step = {**step, "state": "completed"}
+                if worker is not None:
+                    thread = getattr(worker, "_thread", None)
+                    step["thread_alive"] = thread is not None and thread.is_alive()
+                step["elapsed_ms"] = max(0, round((time.monotonic() - started) * 1_000))
+                steps[-1] = step
+                publish()
+
+            publish()
+            for name, worker in (
+                ("preparation", self.search_preparation),
+                ("semantic", self.semantic_worker),
+                ("derived", self.derived_worker),
+            ):
+                run("stop", name, worker.stop, worker)
+            run("stop", "history", self._stop_storage_history)
+            run("stop", "resource", self.resource_worker.stop, self.resource_worker)
+            run("stop", "voice", self.voice_worker.stop, self.voice_worker)
+            self._transcript_waiters.notify()
+            run("stop", "source", self.source_worker.stop, self.source_worker)
+            if self.capture_core is not None:
+                run("stop", "capture", self.capture_core.close)
+            run("stop", "receipts", self.tools.stop_receipt_writer, self.tools.receipt_recorder)
+            owners_stopped = not failures
+            publish()
+
+            # No recovery writes until every producer and capture owner is quiescent.
+            # Both recoveries are attempted even when the first recovery fails.
+            for name, recover in (
+                ("resource", self._claim_resource_leases),
+                ("voice", self._claim_voice_leases),
+            ):
+                if owners_stopped:
+                    run("recovery", name, recover)
+                else:
+                    steps.append({"phase": "recovery", "step": name, "state": "blocked",
+                                  "reason": "producers_not_quiesced"})
+                    publish()
+            leases_recovered = owners_stopped and not failures
+            publish()
             if failures:
                 raise RuntimeError("runtime workers could not be quiesced") from failures[0]
 
@@ -696,7 +737,9 @@ class SightglassDaemon:
             stopping_started = False
             config_published = False
             try:
-                candidate = build_daemon_tools(config, secret_store=self.secret_store)
+                candidate = build_daemon_tools(
+                    config, secret_store=self.secret_store, receipt_autostart=False,
+                )
                 self._owned_tools.append(candidate)
                 if (candidate.service.repository.database.schema_version
                         != self.database.schema_version):
@@ -713,7 +756,7 @@ class SightglassDaemon:
                     try:
                         # A partial stop/start can leave either generation active.
                         # Confirm all its workers stopped before constructing another.
-                        self._stop_runtime_workers()
+                        self._stop_runtime_workers(attempt="compensation")
                         if config_published:
                             self.config_store.save(previous_config)
                         self._install_runtime(previous_config, previous_tools)
@@ -1493,7 +1536,12 @@ class SightglassDaemon:
             if operations_only:
                 if role != "operator":
                     raise RuntimeError("operation diagnostics require the operator role")
-                return self._operation_status(include_stack=include_stack)
+                result = self._operation_status(include_stack=include_stack)
+                result["lifecycle"] = {
+                    "state": self._lifecycle_state,
+                    "attempts": list(self._lifecycle_attempts),
+                }
+                return result
             return self.status()
         if method == "daemon.shutdown":
             # Cancellation/control cannot wait behind the reader it must stop.

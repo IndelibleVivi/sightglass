@@ -12,7 +12,26 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Daily contact reading: source candidate
+## Continued daily reading and lifecycle: source candidate
+
+The next source increment connects ordinary remote updates to their selected fresh
+capture while retaining exact local pending/request replay and legacy request
+compatibility. No history job or semantic preparation is required for new replies.
+It also separates producer/capture/receipt-writer quiescence from resource/voice lease recovery;
+failed stops block recovery and every failure still blocks runtime replacement or
+DB/lock release. The operator's existing fast `operations_only` IPC exposes bounded
+content-free original-stop/compensation evidence without DB or file inventory.
+Explicit shutdown retains its listener-close semantics.
+Candidate receipt writers stay dormant until recovery completes; accepted receipts
+drain before replacement, failed joins remain retryable, and a stopped owner cannot
+overlap its replacement. Dormant/stopping calls increment the existing dropped count.
+
+Generated continuation and lifecycle checks are being integrated. Their source,
+final gate and installation results are distinct from the activated contact-reading
+increment below; this paragraph does not claim the new updates/lifecycle increment
+is installed. The complete ledger retains [SG-061/062](IMPLEMENTATION-PLAN.md).
+
+## Daily contact reading: source and activation
 
 The current development increment prioritizes ordinary contact recents before deep
 history/IR. Default `wechat_read_inbox(mode="recent")` returns
@@ -41,8 +60,13 @@ private runtime state. Source commit `cd82f0b` also passed both jobs in hosted C
 [40125997642](https://github.com/IndelibleVivi/sightglass/actions/runs/40125997642):
 1,619 full macOS tests, 967 portable tests, typing/lint/build and both isolated
 installed-wheel gates. These are generated-source and artifact results;
-installation and live account acceptance remain separate. The earlier installed
-Core/edge below have not been promoted by this source increment.
+the source candidate subsequently passed 200 installed Linux fixture tests with
+unchanged frozen runtime, SQLite and native SILK bytes. Core `cd82f0b` is now active
+with the retained Mac edge `066f24e`, the original schema/config/grants and native
+interpretation. The original plugin returned body-free direct contacts, ordinary
+fresh recent messages, a fresh signed continuation without duplicates, message
+detail and anchor-containing materialized context. This is bounded daily-reading
+acceptance, not complete history, a new IR consent scope or a long-term latency SLO.
 
 Programme interpretation and next capability order are maintained in
 [reading reliability](READING-RELIABILITY.md) and [SG-060](IMPLEMENTATION-PLAN.md).
@@ -70,8 +94,8 @@ currentness and signed history progress will be fenced by a new epoch; semantic
 indexing then uses a new generation/namespace without remote deletion.
 
 Core `0bd0759` first passed bounded acceptance with the old native origin and
-Mac edge `91e0a16`. The separately authorized stopped origin transition is now
-active with Core `89bc612` and Mac edge `066f24e`. The coordinated cut verified an
+Mac edge `91e0a16`. The separately authorized stopped origin transition activated Core `89bc612`
+and Mac edge `066f24e`; the daily-reading increment above preserves that binding. The coordinated cut verified an
 empty spool, equal Core/edge stream position and exact last ACK, and retained
 verified encrypted database, sidecar and spool recovery. It preserved sequence,
 stream, configuration scope and ownership guards while changing the origin.

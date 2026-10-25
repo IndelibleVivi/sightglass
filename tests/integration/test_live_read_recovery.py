@@ -648,15 +648,18 @@ class SlowTailDegradationTests(unittest.TestCase):
         self.service.provider = provider  # type: ignore[assignment]
         self.provider._snapshots.clear()  # noqa: SLF001 - fixture snapshot cache
 
+        # Keep the production final-attempt budget for truthful admission. Only
+        # the deliberately slow first two attempts need shortened fixture budgets.
         with mock.patch.object(
             source_worker,
             "LIVE_SYNC_ATTEMPT_TIMEOUTS",
-            TEST_DEGRADED_ATTEMPT_TIMEOUTS,
+            (*TEST_DEGRADED_ATTEMPT_TIMEOUTS[:2],
+             source_worker.LIVE_SYNC_ATTEMPT_TIMEOUTS[-1]),
         ):
             worker = SourceWorker(self.service, poll_interval_seconds=50)  # type: ignore[arg-type]
             worker.start()
             try:
-                deadline = time.monotonic() + 5
+                deadline = time.monotonic() + source_worker.SOURCE_WORKER_OPERATION_TIMEOUT_SECONDS
                 status = worker.status()
                 while status["last_success_epoch"] is None and time.monotonic() < deadline:
                     time.sleep(0.02)

@@ -70,7 +70,7 @@ uv run sightglassctl source image-key remove
 
 正常使用时保持 `sightglassd` 与微信运行。Daemon 的 bounded source worker 先轮询 authorized conversations 的 live tail，再处理至多一个 resumable backfill batch；它负责后台 live refresh；前台按需 recent 复用同一有界 capture 路径。Native live-tail phase 与 backfill phase 各自保留原 20 秒总预算；`SOURCE_GENERATION_CHANGED` 或 exact `SERVICE_TIMEOUT(reason="operation_deadline")` 会在同一 phase 内进入 fresh attempt。Live-tail 的 conversation scope 依次为 5 / 2 / 1，stale-tail depth 为默认 / 20 / 10，incremental batch 为默认 / 20 / 1；backfill batch 为 50 / 20 / 1。Stop、foreground cancellation、其他 source error 或最终 one-message attempt 仍失败时不会继续重试或猜测进度，durable position 留给下一轮。Backfill 直接复用 queue 时已 admission 且仍受当前 policy 检查的 source target，不在每批历史消息前重扫完整 catalog。大 catalog 通过 persisted round-robin cursor 跨轮覆盖，同一 generation 已完整 index 时 no-op，catalog activity 新于已 admission tail 时优先。Current-epoch 的 local/replica message pages、catalog recents 与显式 resident inbox 从 `window.db` 物化读取，warm resource binding 从 CAS 读取；这些 local-only call 不会 foreground-cancel 或等待 source worker。Cold miss、stale semantic epoch、search/current-source validation、discovery 与首次 resource acquisition 仍进入 source-required lane。
 
-Reader 需要补齐 partial context 或明确确认 source 时，可无 cursor 请求 `wechat_read_messages(refresh=true)`，它不启用全历史 backfill；source/space failure 保留原 strict error，显式 replica 与离线读取仍可打开有效缓存。普通 remote recent 首读在 edge connected 时已默认选择 fresh；目录项返回的 read action 可直接使用。已 admission 的 message/context 局部页不依赖后台 tail completion；其 `has_more` 只描述本地已观察集合，coverage 会标出历史缺口。Native 首次无 cursor 的 recent source page 在同一验证提交中记录真实 tail，之后可本地复读；历史 anchor 不会使全会话 repair 提前完成。Cold native resident inbox 的已知 readiness error 直接返回，不先中断负责修复的后台 worker。Voice prepare 空间不足只降低 sidecar，不丢弃已读取文字；recent/range/speaker 的短进度提交可用 maintenance reserve，低于真实 free floor 时仍必须失败。
+Reader 需要补齐 partial context 或明确确认 source 时，可无 cursor 请求 `wechat_read_messages(refresh=true)`，它不启用全历史 backfill；source/space failure 保留原 strict error，显式 replica 与离线读取仍可打开有效缓存。普通 remote recent 首读与新的 updates 请求在 edge connected 时默认选择 fresh；pending delivery 与 committed request 重试优先本地 exact replay；目录项返回的 read action 可直接使用。已 admission 的 message/context 局部页不依赖后台 tail completion；其 `has_more` 只描述本地已观察集合，coverage 会标出历史缺口。Native 首次无 cursor 的 recent source page 在同一验证提交中记录真实 tail，之后可本地复读；历史 anchor 不会使全会话 repair 提前完成。Cold native resident inbox 的已知 readiness error 直接返回，不先中断负责修复的后台 worker。Voice prepare 空间不足只降低 sidecar，不丢弃已读取文字；recent/range/speaker 的短进度提交可用 maintenance reserve，低于真实 free floor 时仍必须失败。
 
 `wechat_status(summary, response_profile="diagnostic")` 使用 cached reader health，不打开 source，也不进入 tool slots/read gate；runtime retrieval 附加状态仍只读小型 published derivative metadata，不统计历史行数。返回的 `read_plane` 与 `readiness.indexed_reads/live_refresh/resource_cache/resource_acquisition/voice` 区分本地可读性与 live refresh，`runtime.operations`、`runtime.window_writer`、`runtime.receipt_writer` 与 `runtime.source_worker` 则区分 active work、writer wait、receipt backlog、foreground yield 和 source-worker/backfill state。Receipt queue 固定容量为 4096；`failed_count` 或 `dropped_count` 非零表示审计持久化发生故障或 saturation，需要先查本机 writer/DB 状态，但 reader success 不会因此被改写。已 admission 的 known native conversation 的 local/replica 读取不打开 encrypted source snapshot；response receipt 明确 `served_from=window_db`、`freshness.state=bounded_stale` 与 `live_refresh_confirmed=false`。需要新鲜、完整 source catalog 时调用 `wechat_find_conversations`；search 仍对 candidate 做 current-source validation。显式 `wechat_read_inbox(mode="resident")` 使用 latest complete catalog epoch 中已达到当前 provider/parser projection epoch 的 observation snapshot，不要求 warm call 先完成 live health check，并在 coverage/source receipt 中报告 `catalog_fresh_as_of`、watermark、indexed/degraded conversation count 与 bounded-stale freshness；repair 未完成时返回 `source_projection_refresh_pending`，不混用旧 sender projection。普通 tool operation 的 cooperative deadline 是 25 秒；超时返回 retryable `SERVICE_TIMEOUT` 并释放 operation slot，相同 tool name/arguments 的并发请求 single-flight。普通 append 不进入已签发 materialized message/resident-inbox traversal；默认 recent inbox 绑定所选 catalog activity 与 preview，变化会返回 `CURSOR_STALE`；当时已存在的 row 后续发生 correction、policy revision 或 semantic epoch 变化则 cursor stale。Main DB replacement、key/profile/database-set 变化仍需重新 reconcile 或 import。
 
@@ -88,6 +88,22 @@ print(operations)
 ```
 
 `include_stack=true` 只采样最早开始的 active operation owner，返回最多八个 `sightglass.*` module/function/line；`active_phase` 是最接近当前执行位置的 public code location。它不返回 locals、arguments、SQL、file paths、thread IDs 或消息内容，也不保留 frame。省略该选项只返回 counters；idle 返回空 stack，普通 MCP/status 不采样。采样是当时的位置，需结合 operation age 与重复位置判断卡点；一次 aggregate writer-wait 数值不能单独归因某次 timeout。
+
+这个 operator fast diagnostic 还保留当前进程有限的 lifecycle evidence：原 stop 与
+compensation 各自的阶段、失败 step、异常类型和 public code location。它不扫描 DB 或
+文件库存，也不返回异常 message、SQL 或私有路径。全部 worker 的 `running=false` 仍不
+代表 reload 成功：线程停止之后，resource/voice lease recovery 也可能失败。
+Runtime 先确认所有 producer、capture owner 与 receipt writer 停止，再恢复 leases；stop 未完成时 recovery
+标为 blocked。任一步失败都禁止 replacement 或提前释放 DB/lock。修复外部阻塞后可显式
+重新执行原 operator 动作；不要仅增加 timeout、忽略失败或启动第二个 owner。
+Pause/reload 补偿失败时，存活的 daemon 保留这个诊断入口；显式 shutdown 仍按原协议
+关闭 listener，不能把退出后的 IPC 当成可查询的持久事故记录。
+
+Receipt writer 也属于 WindowDB owner：它停止接收后排空已接收的 queue，并确认 thread
+退出；join 失败可再次等待同一个 owner，不能启动第二个 writer。Candidate 在 lease
+recovery 完成前保持 dormant。Dormant/stopping/closed 期间的调用不进入 queue，计入已有
+`dropped_count`；正常运行时 accepted receipts 仍须完成排空。普通响应不等待异步 receipt
+持久化，失败与丢弃计数仍可区分。
 
 当前 native runtime 应报告 `source.mode=live`、`source.implementation=sightglass.macos-wechat.sqlcipher.v6.r1`、`synthetic_only=false`、`window_db_schema_version=10` 与 `resources=true`。Appmsg file/image 与已观测 digest-named `msg/video` payload 可进入 image/PDF/text/rich-file pipeline；resource finder 只查已物化 local catalog，HEIC/TIFF/BMP 支持本地 sniff／preview，UTF-16/GB18030 严格解码，audio/video 可返回有界 metadata，支持的本地视频可生成 PNG 首帧 preview。Thumbnail-only image 以 `preview_only` 提供 preview 而不冒充 original；encrypted V2 mapped original 在 decoder key 未 enrollment 时明确返回 `image_decoder_key_missing`，但若同一 message-position 另有可解码 cache thumbnail，则只以 `preview_only` 提供该 preview，绝不把 ciphertext 或 preview 冒充 original。当 `message/media_*.db` key 已 page-1 verified/enrolled 时，voice 可作为 `audio/silk` original 读取且 generic `metadata` 返回 `audio={format:"silk",mime_type:"audio/silk"}`；本地转写另需已安装 helper、decoder 和对应语言 speech assets。每次安装的客户端 playback/consumption 须单独验收。Sticker 由运行时 in-memory 推导的 account FileXorKey 本地解密，original 优先、message-bound thumbnail 降级，entry 缺失或推导失败保持显式 missing/key_missing/metadata_only。所有资源处理都没有 attachment network fallback。Catalog、roster、indexed history 和 local payload availability 都按实际 coverage 报告，不从 bounded empty result 推断全局不存在。
 
@@ -345,7 +361,7 @@ retention mode。新配置／新会话默认 `on_demand`。`keep` 持续收未�
 日常看联系人时，先用 `wechat_read_inbox()` 的默认 `mode="recent"`，再执行所选项的
 `read_action`。目录中已观察到的 direct contacts 与群聊不需要先选 `keep`、建 history job
 或完成 semantic index；没有 resident preview 不等于没有消息。Remote Core 的普通新
-recent 请求在 edge connected 时读取当前 source；离线与显式 `view="replica"` 只读取
+recent 与新的 updates 请求在 edge connected 时读取当前 source；离线与显式 `view="replica"` 只读取
 仍可用的 resident bodies，并报告 bounded freshness。显式 `refresh=true` 强制 source
 验证；已选择 fresh 的请求失败时不会退回缓存。Catalog activity 本身仍是本地观察，
 以 `catalog_fresh_as_of` 表明时间，需要更新目录时调用 `wechat_find_conversations`。
@@ -730,7 +746,7 @@ SILK input 的 private 检查不放宽。失败回收的 leftover 继续计入 S
 
 失败语义：`RESOURCE_BLOCKED` 覆盖缺 decoder extra、缺/不可执行 helper、损坏或截断 SILK、超出上限、语言资产未安装或不受支持——永久结论，job 落 `blocked` 且不自动重试；只有墙钟超时（decode/helper/operation budget）、pause 与 source generation 变化是 retryable。worker 启动时会非递归清扫超过 `DEFAULT_STALE_STAGING_SECONDS`（1 小时）的遗留暂存文件。
 
-生命周期与 source worker 对称：`serve_forever` 在进程锁与 socket 就绪后先 reclaim 遗留 lease 再 start；`operator.pause/resume`、policy 变更等触发的 `_reload` 与 `daemon.shutdown` 先 stop 旧 worker、唤醒 transcript waiter、把旧上下文仍持有的 lease 归还队列（fencing token +1），再以 bounded join（最多 `VOICE_WORKER_STOP_TIMEOUT_SECONDS`，默认 10 秒）确认旧执行上下文退出，candidate services 与 schema 先在旧 worker 停止前构建／probe；确认 quiescence 后才 swap config/tools 并启动 candidate worker，save/start 失败会恢复旧 config/tools 并重启旧 worker。因此 daemon 重启或崩溃后不会等 60 秒 lease 过期：下一条 `pending` 作业立即可被新上下文 lease，而旧上下文即使仍在识别（非合作式停在 10 秒超时）也无法提交。
+生命周期与 source worker 对称：`serve_forever` 在进程锁与 socket 就绪后先 reclaim 遗留 lease，再启动 receipt writer 与各 worker；`operator.pause/resume`、policy 变更等触发的 `_reload` 与 `daemon.shutdown` 先 stop 并 bounded join 所有 producer、capture owner 与 receipt writer，唤醒 transcript waiter，确认全部退出和已接收 receipts 排空后才归还 resource/voice lease（fencing token +1）。Voice join 最多 `VOICE_WORKER_STOP_TIMEOUT_SECONDS`（默认 10 秒）；任一 owner 未退出就阻止 recovery、replacement 与 DB/lock release。Candidate services/schema 可提前构建和 probe，但 receipt writer 保持 dormant；确认旧 owner quiescence 后才 swap config/tools，完成 recovery 并启动 candidate。Save/start 失败尝试恢复旧 config/tools，只有再次确认所有 owner 停止和 lease recovery 后才重启；失败则 degraded。成功 takeover 不需等待旧 lease 的 60 秒到期；join timeout 本身不代表已完成 takeover。
 
 识别器失败分三类：`RESOURCE_BLOCKED` 是永久结论（job 变 `blocked`，之后同一输入复用该 job、绝不自动重试）；带 `retryable=True` 且有明确失败原因的识别器错误按 0.5 秒起指数退避、最多 3 次尝试后落 `failed`；operation budget 取消/超时（`TRANSCRIBE_TIMEOUT`）与其他异常同样直接落 `failed`，不进入重试。退避只存在于进程内，重启会清掉等待时间，但 `attempt` 上限仍然生效。合作式识别器会在 lease 提前 1 秒的 operation budget 内被取消；worker 从不宣称 job 处于 `running`，因此一次合作式 stop 会留下 `leased` 作业，由 lease 过期或下一次上下文 takeover 回收。
 
@@ -897,6 +913,16 @@ production activation 的各自验收；source 在 build 后变化会拒绝旧 w
 Import path 必须属于 release environment，不能指向 checkout 的 `src/`。在 private manifest 记录实际 source commit、Python、extras、wheel 和 `editable=false`；wheel/native fixture verification 与真实账号 activation 分别记录。Production interpreter/base Python 也须保持可用；清理时不能删除它依赖的 interpreter。
 
 Promotion 是显式 operator action。先记录原 config、paused 状态、policy 和已安装 package 的可用 rollback 路径，然后用原 production CLI 执行 `pause` → `daemon stop`。同 schema promotion 保持原 DB。Schema v10 conversion 使用下文 compact／paired selection，禁止用首次 open 触发迁移。核对 exact recovery、candidate 和含 private state staging 的实际空间；暂停验收期间不自动 background growth。
+
+若 live pause/reload 不能安全完成，先保留上述 lifecycle evidence，并核实原 runtime、
+config 与 paused 状态。已有部署授权下，可以改用 stopped procedure：由原 supervisor
+停止唯一 Core 与原 tunnel，确认原进程退出，再通过 `ConfigStore` 把同一 config 的
+`paused` 暂设为 true；只切换已验证的同 schema wheel，保留最新 DB、grants、source
+binding 和旧 runtime。启动 paused candidate，验证 installed stdio 与 schema 后再次停止，
+恢复原 config 的 exact bytes，按原 paused 状态启动并核对原 tunnel、edge 与 named-host
+读取。失败恢复选择原 wheel 和最新同 schema DB，不能恢复陈旧 DB 或改写 spool 来绕过
+未完成的 capture。不要在 runtime 仍运行时直接编辑 config，也不要重复执行未核实结果的
+promotion intent。Installation-specific commands、before-images 和 receipts 仍在 Git 外。
 
 大库的 stopped-only backup create/plan/retire 会执行离线 SQLite 完整性检查与 snapshot digest verification，可能需要数分钟。它们不使用普通 reader 的 25 秒 deadline；进程仍健康且处于该校验时，保留原操作，不因没有中间输出重复执行、重启 daemon 或删除待验证文件。
 

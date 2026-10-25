@@ -30,6 +30,19 @@ limited timeline 与历史缺口，并通过按会话分页补读；这里采用
 新 source 与控制 UI 根据这两条已可使用路径的证据发展。M5/M7 原有范围保留，
 其中没有现实 consumer 的 adapter 不因历史 milestone 编号而优先实现。
 
+本轮继续把「她又回了」接到同一条路径。新的 remote updates 必须在已连接 edge 上取得
+当前 source evidence，并由同一次选定的 view 完成 publication；发出了 capture request
+不等于结果已经消费了那个 capture。Pending delivery 和 committed request 的 exact replay
+优先本地完成，ACK 与下一页 admission/terminal 仍共同提交。离线、显式 replica 和历史
+request replay 各自保留可解释的范围，不能因连接状态变化把同一个请求换成另一份结果。
+
+实际安装也检验了生命周期：安全停下线程、恢复 lease、切换 runtime 是不同阶段。
+Producer/capture owners 与 receipt writer 全部停止后才允许 lease recovery；已接收的
+receipts 必须排空，candidate writer 在 recovery 完成前保持 dormant。失败须保留有限、无内容的
+stop/compensation evidence，并继续阻止新 owner。合成 writer contention 可以导致所有
+公开 worker 都已停止而 lease recovery 仍失败，因此 `running=false` 不能替代恢复证明。
+具体实现、安装与测试状态仍以 [current-state](current-state.md) 为准。
+
 ## 要稳定交付的体验
 
 Sightglass 的核心是让 reader 找到原话、打开原话、沿前后文继续读，并看到原消息绑定的图片或文件。原作者、时间、会话、reply、资源版本与权限必须可核对；缺口必须说清楚。自然语言检索帮助定位，不能替代这个阅读过程。

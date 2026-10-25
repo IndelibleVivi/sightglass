@@ -863,6 +863,32 @@ class ReplicaReader:
             "reader": self.service.reader.reader_id, **arguments, **self._request_policy_scope(),
         })
 
+    def committed_update_request_view(self, request_id: str | None) -> str | None:
+        """Return a prior request's selected view without touching the source.
+
+        This lets an ordinary omitted-view retry retain the plane that committed
+        its request. Before the metadata field existed, omitted-view updates always
+        selected replica, so a valid legacy outcome falls back to that historical
+        plane. This probe never reads the private payload spool.
+        """
+
+        if not isinstance(request_id, str):
+            return None
+        receipt = self.repository.update_request_outcome(opaque_id(
+            "wxrequest", self.service.reader.reader_id, request_id))
+        if receipt is None:
+            return None
+        try:
+            metadata = json.loads(receipt["warning_codes_json"])
+        except (TypeError, ValueError):
+            return None
+        if metadata.get("schema") != UPDATE_REQUEST_SCHEMA:
+            return None
+        selected = metadata.get("view")
+        if selected is None:
+            return "replica"
+        return str(selected) if selected in {"fresh", "replica"} else None
+
     def _request_policy_scope(self) -> dict[str, Any]:
         profile = self.repository.database.reader_profile(self.service.reader.reader_id)
         return {"policy": self.service._policy_revision(),
@@ -899,7 +925,7 @@ class ReplicaReader:
 
     def record_update_error(
         self, request_id: str | None, request_binding: str | None,
-        error: SightglassError, *, conversation_id: str,
+        error: SightglassError, *, conversation_id: str, view: str,
     ) -> None:
         if request_id is None:
             return
@@ -909,13 +935,14 @@ class ReplicaReader:
             receipt_id=opaque_id("wxrequest", self.service.reader.reader_id, request_id),
             reader_id=self.service.reader.reader_id, conversation_id=conversation_id,
             scope_digest=request_binding, completed_at=now.isoformat(),
-            metadata={"schema": UPDATE_REQUEST_SCHEMA, "error": error.as_dict(),
+            metadata={"schema": UPDATE_REQUEST_SCHEMA, "error": error.as_dict(), "view": view,
                       "expires_at": (now + timedelta(days=UPDATE_REQUEST_REPLAY_DAYS)).isoformat()},
         )
 
     def record_update_outcome(
         self, request_id: str | None, request_binding: str | None, page: dict[str, Any], *,
         conversation_id: str, payload_id: str | None = None, payload_digest: str | None = None,
+        view: str,
     ) -> dict[str, Any]:
         if request_id is None:
             return page
@@ -935,6 +962,7 @@ class ReplicaReader:
             metadata={"schema": UPDATE_REQUEST_SCHEMA, "payload_id": payload_id,
                       "payload_digest": payload_digest,
                       "delivery_id": page["page"].get("delivery_id"),
+                      "view": view,
                       "expires_at": (now + timedelta(days=UPDATE_REQUEST_REPLAY_DAYS)).isoformat()},
         )
         return page
@@ -981,7 +1009,7 @@ class ReplicaReader:
                 return self.record_update_outcome(
                     arguments["request_id"], arguments["request_binding"], page,
                     conversation_id=conversation, payload_id=pending["delivery_id"],
-                    payload_digest=pending["payload_digest"],
+                    payload_digest=pending["payload_digest"], view=arguments["view"],
                 )
             state = self.repository.source_conversation_state(conversation)
             if (state is not None

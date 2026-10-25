@@ -46,6 +46,8 @@ jobs:
           tests.integration.test_capture_reliability
           tests.integration.test_frozen_installation tests.integration.test_replica_reads
           tests.integration.test_daemon_reliability tests.integration.test_backfill_job_progress
+          tests.integration.test_runtime_lifecycle
+          tests.unit.test_async_receipts tests.unit.test_runtime_operation_status
           tests.integration.test_backfill_stale_jobs tests.integration.test_caller_cancellation
           tests.integration.test_remote_caller_cancellation
           tests.integration.test_daily_recents

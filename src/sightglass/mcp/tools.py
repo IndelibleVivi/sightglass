@@ -85,12 +85,22 @@ class ReaderTools:
         value = status() if callable(status) else None
         return value if isinstance(value, dict) else None
 
+    def start_receipt_writer(self) -> None:
+        start = getattr(self.receipt_recorder, "start", None)
+        if callable(start):
+            start()
+
+    def stop_receipt_writer(self) -> None:
+        stop = getattr(self.receipt_recorder, "stop", None)
+        if callable(stop):
+            stop()
+
     def close(self) -> None:
-        if self.service.semantic is not None:
-            self.service.semantic.close()
         close = getattr(self.receipt_recorder, "close", None)
         if callable(close):
             close()
+        if self.service.semantic is not None:
+            self.service.semantic.close()
         close_provider = getattr(self.service.provider, "close", None)
         if callable(close_provider):
             close_provider()
@@ -264,10 +274,10 @@ class ReaderTools:
         request_id: str | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
-        """Read a conversation's messages; new remote recents use the connected edge.
+        """Read messages; new remote recents and updates use the connected edge.
 
-        Ordinary recents need no backfill. Offline recents describe resident bodies only.
-        view=replica stays local; refresh forces current source evidence in either deployment.
+        Daily reads need no backfill. Pending updates replay exactly before new source work.
+        view=replica stays local; refresh forces source evidence for non-update reads.
         Updates request_id gives bounded durable replay after a committed response is lost.
         Compact columns use fields/people; next_actions gives each continuation slot.
         A signed timeline cursor retains fresh view; clear refresh when continuing it.

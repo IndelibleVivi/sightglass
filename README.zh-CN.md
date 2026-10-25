@@ -17,8 +17,9 @@ Sightglass 是一个采用 macOS native source 与 portable core 的实验性 re
 先调用 `wechat_read_inbox()`。默认 `mode="recent"` 从已观察的会话目录列出最近联系的
 contacts 和 groups，正文没有缓存的会话也会出现；`kinds=["direct"]` 只看私聊。
 选定一项后，沿它的 `read_action` 调用 `wechat_read_messages(mode="recent")`。
+后续新回复使用 `mode="updates"`；reader 处理完一页后再 ACK，未 ACK 的重试返回同一份 pending payload。
 
-新的普通 remote recent 读取在 Mac edge 已连接时自动获取当前 source 消息，不需要先建
+新的普通 remote recent 和 updates 请求在 Mac edge 已连接时自动获取当前 source 消息，不需要先建
 history job、保留整段历史或启用 semantic index。离线时只返回仍可读取的 resident 消息，
 明确标注 bounded freshness。没有预览会标为 `latest_state="not_resident"`，不表示这个
 contact 没有消息。Inbox 的 `mode="resident"` 则只查看缓存正文的活动。
@@ -43,9 +44,11 @@ catalog 与 cached bytes 仍从 admitted state 读取。结果明确标注 parti
 message 的当前 resident bindings；正文过期或已 released 时返回 `SOURCE_INCOMPLETE`，
 不会恢复 inactive 的历史 resolver。需要有界 source 验证时，在提供该参数的 tool 上用
 `view="fresh"`。
-新的普通 `mode="recent"` 首读是默认值中的例外：未指定 view/cursor 且 edge 已连接时，
-自动选择 fresh source evidence；显式 `view="replica"` 始终本地读取。使用 `refresh=true`
-可以在离线时也要求 source evidence；已选定 fresh 后失败不会退回缓存。长段读取按返回的
+新的普通 `mode="recent"` 首读与 `mode="updates"` 请求在未指定 view 且 edge 已连接时，
+自动选择 fresh source evidence。Recent cursor 保留原 plane；pending updates 与 committed
+request 重试优先本地 exact replay。显式 `view="replica"` 始终本地读取。无 cursor 的非 updates 读取可以使用 `refresh=true`
+在离线时也要求 source evidence；updates 的显式 source 要求使用 `view="fresh"`。
+已选定 fresh 后失败不会退回缓存。长段读取按返回的
 cursor 和 `next_actions` 继续，并在 continuation 中清除 `refresh`。Signed source cursor
 会保留 fresh view，也适用于只暴露 `refresh`、未暴露 `view` 的 host；每页独立验证。
 已支持 build 的升级使用 stopped、verified 的
@@ -79,7 +82,7 @@ Native support 仍只指上方精确的 macOS profile。`remote-capture` 是 off
 | 能力 | 可观察行为 |
 | --- | --- |
 | 会话与 inbox | 不依赖正文驻留的最近 contacts/groups、可直接打开消息的动作和可选缓存预览；独立的 resident 活动模式，明确报告目录 freshness。 |
-| 消息与成员 | current semantic epoch 的缓存支持本地 range、context、single-message 和成员聚焦阅读；普通 remote recent 首读使用已连接的 edge；稳定身份与可变称呼分开。 |
+| 消息与成员 | current semantic epoch 的缓存支持本地 range、context、single-message 和成员聚焦阅读；普通 remote recent 首读与新的 updates 使用已连接的 edge；稳定身份与可变称呼分开。 |
 | 搜索 | Local source 搜索先准备有界 source page；remote core 的 replica 搜索在本地验证 resident candidates，显式 fresh 搜索再通过 Mac edge 验证有界候选；continuation 继续已有扫描。短词保留有界 timeline fallback，历史缺口与零命中的 partial page 保持明确。 |
 | 链接与候选上下文 | 按 exact hostname 或 approximate hints 查本地观察到的 URL；retrieve 排序同一会话的上下文，包含邻近链接、显式 reply 与可重读 anchor。这些 materialized read 明确报告 bounded freshness，不推进 updates／ACK。可选 BGE-M3／Vectorize semantic recall 仍通过相同 canonical 与 policy 检查，失败时 deterministic recall 继续可用。 |
 | 增量阅读 | 每个 reader 独立 delivery 与 ACK，replica 可离线 ACK；未确认 payload 跨重启精确 replay，fresh ACK、admission 与新 delivery 一起提交。 |

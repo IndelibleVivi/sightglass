@@ -56,6 +56,8 @@ class RuntimeOperationStatusTests(unittest.TestCase):
         # A generated registry-only daemon has no config, source, secrets or database.
         self.daemon = SightglassDaemon.__new__(SightglassDaemon)
         self.daemon.capture_core = None
+        self.daemon._lifecycle_state = "ready"
+        self.daemon._lifecycle_attempts = ()
         self.daemon._operations_lock = threading.RLock()
         self.daemon._operations = {}
         self.daemon._joined_tool_calls = 0

@@ -61,16 +61,22 @@ retains `sightglass.inbox-page.v1`, its resident-only body scope and frozen-appe
 behavior. A cursor cannot cross these modes; start a new recent traversal when moving
 from an older default resident inbox.
 
-On a remote core, an ordinary new `read_messages(mode="recent")` with no explicit
-view/cursor uses a connected edge. The daemon freezes this view before choosing its
-lane. Offline it selects replica, and a later reconnect does not turn that request
-into source work. Once fresh is selected, disconnect/source failure remains an error;
-it never silently returns cached text. Explicit `view="replica"` stays local. Signed
-fresh and materialized continuations retain their selected plane independently of
-later transport changes. `refresh=true` remains the explicit source requirement in
-either topology, including hosts with an older tool catalog. Local `auto` retains
-its admitted-page behavior. No new account or edge-egress authorization follows from
-this default, and ordinary recents need no history or semantic preparation.
+On a remote core, an ordinary new `read_messages` in `recent` or `updates` mode with
+no explicit view/cursor uses a connected edge. The daemon freezes this view before
+choosing its lane. Offline it selects replica, and a later reconnect does not turn
+that request into source work. Once fresh is selected, disconnect/source failure
+remains an error; it never silently returns cached text. Exact pending delivery and
+committed `request_id` replay stay local before that selection; an omitted-view
+updates retry with a committed outcome retains the view recorded with it; outcomes
+from before that metadata retain their historical replica default. Explicit
+`view="replica"` stays local. Signed fresh and materialized continuations retain
+their selected plane independently of later transport changes. `refresh=true`
+remains the explicit source requirement for cursor-free non-update reads in either
+topology, including hosts with an older tool catalog. Updates reject `refresh`;
+explicit `view="fresh"` requires source for new work while exact replay stays local.
+Local `auto` retains its admitted-page behavior. No new account
+or edge-egress authorization follows from this default, and ordinary recents and
+updates need no history or semantic preparation.
 
 ## Caller lifecycle
 
@@ -102,10 +108,10 @@ automatically acknowledges a delivery or deletes an already committed winner.
 `ReaderService(default_view="auto")` 保留既有本机默认行为：符合条件的 message/cache reads
 使用本地 projection，普通 search/cold discovery 沿用下面的 source preparation contract。
 配置为 replica 的 core 使用 `default_view="replica"`，省略 `view` 时通常读取已 admitted 的当前
-projection；新的普通 recent 首读在 edge 已连接时选择 fresh，详见上方 daily contract。
+projection；新的普通 recent 首读与 updates 请求在 edge 已连接时选择 fresh，详见上方 daily contract。
 `auto` 是 service 配置，不是 MCP argument。所有十三个 tool 及本机 defaults 保留。
 
-普通 remote recent 首读自动选择已连接的 edge；需要强制 source 时使用 `refresh=true`。一个 signed source timeline cursor 会保留其 `fresh` view；continuation 只传该 cursor、保留原 scope 并清除 `refresh` 即可，兼容未暴露 `view` 的既有 host catalog。显式传入不同 view 仍返回 `CURSOR_INVALID`。Signature、reader/account/conversation/filter scope、当前授权、position 与 projection epoch 在获取 source foreground ownership 之前本地验证，执行仍复检。每页是独立 capture，不声明跨页 atomic source snapshot。Brief 的 result-page action 不要求额外 view；fresh detail 和 context-edge actions 使用 `refresh=true`，updates immutable replay 保持原样。
+普通 remote recent 首读与新的 updates 自动选择已连接的 edge。无 cursor 的非 updates 读取需要强制 source 时可使用 `refresh=true`；updates 拒绝 refresh，显式 fresh 使用 `view="fresh"`，exact replay 仍保持本地。一个 signed source timeline cursor 会保留其 `fresh` view；continuation 只传该 cursor、保留原 scope 并清除 `refresh` 即可，兼容未暴露 `view` 的既有 host catalog。显式传入不同 view 仍返回 `CURSOR_INVALID`。Signature、reader/account/conversation/filter scope、当前授权、position 与 projection epoch 在获取 source foreground ownership 之前本地验证，执行仍复检。每页是独立 capture，不声明跨页 atomic source snapshot。Brief 的 result-page action 不要求额外 view；fresh detail 和 context-edge actions 使用 `refresh=true`，updates immutable replay 保持原样。
 
 显式 fresh 的 target preflight 不扫描整个 conversation 的驻留正文过期库存；它仍验证本地目标、签名与权限，再获取 bounded source evidence。Replica 在选择每条返回消息时应用 resident predicate；只有 `auto` 的缓存选择需要 conversation 级过期检查。
 
