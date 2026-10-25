@@ -143,15 +143,26 @@ class RuntimeLifecycleTests(unittest.TestCase):
         self.addCleanup(blocker.close)
         blocker.execute("BEGIN IMMEDIATE")
         recovery_entered = threading.Event()
+        diagnostic_completed = threading.Event()
+        self.addCleanup(diagnostic_completed.set)
         recovery_owner_ident: int | None = None
         recover = self.daemon._claim_resource_leases
         open_connection = database.connection
+        connect = database.connect
+
+        def bounded_busy_connection():
+            connection = connect()
+            # Exercise real BEGIN IMMEDIATE contention without spending two
+            # production five-second busy waits on a fixture scheduling budget.
+            connection.execute("PRAGMA busy_timeout = 100")
+            return connection
 
         def observed_recovery():
             nonlocal recovery_owner_ident
             self.assert_quiet()  # Includes capture: the pre-fix path fails here.
             recovery_owner_ident = threading.get_ident()
             recovery_entered.set()
+            self.assertTrue(diagnostic_completed.wait(3), "diagnostic did not finish")
             return recover()
 
         def recovery_connection():
@@ -161,6 +172,7 @@ class RuntimeLifecycleTests(unittest.TestCase):
             return open_connection()
 
         with (
+            patch.object(database, "connect", side_effect=bounded_busy_connection),
             patch.object(self.daemon, "_claim_resource_leases", side_effect=observed_recovery),
             patch.object(self.daemon, "_claim_voice_leases",
                          wraps=self.daemon._claim_voice_leases) as voice_recovery,
@@ -172,12 +184,16 @@ class RuntimeLifecycleTests(unittest.TestCase):
             self.assertTrue(recovery_entered.wait(3))
             before = time.monotonic()
             # This IPC must not acquire the lifecycle/state locks or scan storage.
-            with (
-                patch.object(self.daemon, "status", side_effect=AssertionError("full status")),
-                patch.object(database, "connection", side_effect=recovery_connection),
-                patch.object(database, "storage_status", side_effect=AssertionError("aggregate")),
-            ):
-                active = self.diagnostic()
+            try:
+                with (
+                    patch.object(self.daemon, "status", side_effect=AssertionError("full status")),
+                    patch.object(database, "connection", side_effect=recovery_connection),
+                    patch.object(database, "storage_status",
+                                 side_effect=AssertionError("aggregate")),
+                ):
+                    active = self.diagnostic()
+            finally:
+                diagnostic_completed.set()
             self.assertLess(time.monotonic() - before, 1)
             self.assertEqual(active["state"], "reloading")
             self.assertTrue(active["attempts"][0]["owners_stopped"])
