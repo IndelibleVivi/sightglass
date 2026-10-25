@@ -12,37 +12,45 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Continued daily reading and lifecycle: activation and follow-up
+## Continued daily reading and lifecycle: active
 
-Core `3698644` connects ordinary remote updates to their selected fresh capture while
+Core `ea97fc7` connects ordinary remote updates to their selected fresh capture while
 retaining exact local pending/request replay and legacy request compatibility. No
-history job or semantic preparation is required for new replies. It separates
-producer/capture/receipt-writer quiescence from resource/voice lease recovery;
-failures block replacement and DB/lock release. Fast operator `operations_only`
-diagnostics preserve bounded content-free original-stop/compensation evidence.
-Candidate receipt writers stay dormant until recovery completes; accepted work drains
-before replacement and failed joins remain retryable. Explicit shutdown retains its
-listener-close semantics.
+history job or semantic preparation is required for new replies. Producer, capture
+and receipt owners must stop before resource/voice lease recovery; failures block
+replacement and DB/lock release. Fast operator diagnostics retain bounded content-free
+stop/compensation evidence. Candidate receipt writers remain dormant until recovery;
+accepted work drains before replacement and failed joins remain retryable.
 
-The source passed fresh hosted CI at runtime-equivalent validation commit `5f6a0d9`
-([40163948752](https://github.com/IndelibleVivi/sightglass/actions/runs/40163948752)):
-1,641 full macOS tests, 998 portable Linux tests, typing/lint/build and both isolated
-installed-wheel gates. The validation commits changed two generated test files only;
-all 138 runtime Python modules match the frozen `3698644` wheel. That candidate passed
-231 installed Linux tests with frozen dependency/SQLite/native SILK parity, and is
-active with the retained Mac edge, schema, source binding and grants. Generated real
-stdio/IPC/Core/edge checks include an appended reply, ordinary updates, exact offline
-request/pending replay and ACK. Original-plugin updates acceptance is still pending.
+Final source [ea97fc7](https://github.com/IndelibleVivi/sightglass/commit/ea97fc7d8128c3742f106aa261545f0495d2c037)
+passed hosted [40165657188](https://github.com/IndelibleVivi/sightglass/actions/runs/40165657188):
+1,643 full macOS tests in 448.277 seconds, 1,000 portable Linux tests in 359.446 seconds,
+full Pyright with zero errors/warnings, lint/compile/build and both isolated installed-wheel
+gates. The frozen artifact retained all 138 runtime modules, five rights/provenance files
+and required Swift/helper/build/contract sources. It passed 243 installed Linux fixture
+tests with unchanged frozen dependencies, SQLite and native SILK bytes before activation.
 
-A live pause then exposed a derived worker that survived both stop attempts. The new
-diagnostic fences correctly blocked lease recovery/replacement, and a controlled
-same-runtime restart restored readiness. Source inspection found that readiness and
-pending-index probes ran outside the batch's operation budget. The follow-up candidate
-puts those reads under the same deadline/cancellation and retains genuine SQL errors;
-real SQLite long-query pause/replacement and related generated checks pass locally.
-Its final hosted, installed and live results remain pending. Cancellation safety does
-not establish budget-bounded convergence over a large resident stock; that scan/progress
-work remains open. The complete ledger retains [SG-061/062](IMPLEMENTATION-PLAN.md).
+Actual installation exposed a surviving derived worker during pause. Source inspection
+found readiness/pending probes outside the batch budget. The final increment includes
+those reads in the existing three-second deadline/cancellation, classifies an actual
+budget interruption correctly and retains unrelated SQLite errors. Generated real SQLite
+long-query tests prove cancellation before replacement. The installed Core then completed
+normal pause/resume with every stop and lease-recovery step confirmed, preserving the
+latest database, original configuration/grants, native origin, Mac edge process and tunnel.
+
+The original plugin completed direct-contact discovery, ordinary fresh recents and
+fresh updates. An unacknowledged message delivery replayed identically across actual
+pause/resume, and ACK returned the next fresh delivery. Earlier source-required transport
+failure remained explicit; offline results did not claim fresh source confirmation.
+This is bounded acceptance, not complete history, proof of a newly arriving human reply,
+long-term transport stability or a latency SLO. Generated append/new-reply scenarios cover
+the arrival path through real stdio/IPC/Core/edge.
+
+The [SG-061/062](IMPLEMENTATION-PLAN.md) increment is implemented, installed and activated.
+Budget-bounded convergence over a large resident stock remains open: a finite result limit
+and a cancellable query do not establish a bounded scan or restart-safe traversal progress.
+That work, remote cold discovery, scope/coverage explanations and independent retrieval
+quality remain in the [reading programme](READING-RELIABILITY.md).
 
 ## Daily contact reading: source and activation
 
