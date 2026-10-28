@@ -136,6 +136,15 @@ Rebind 只探测配置中的 source root，不枚举其他账号；使用原 Key
 
 ## Lifecycle and policy
 
+Core operator `status` includes `capture.relay.connection`: finite connection phase
+and bounded current/historical error code, type and public source location. Check it
+alongside `edge_connected`, source-worker success/error and the reader receipt to
+separate transport/handshake failure from source/capture failure. It never reads the
+source or database. A phase or successful SSH connection does not confirm message
+freshness. The fixed stdio proxy has bounded buffers/write waits and exits on broker
+EOF even if the stdin producer stays open; EOF is distinct from transient nonblocking
+readiness. Do not reset a spool or stream to clear a connection error.
+
 Daemon status includes `lifecycle_state` (`starting`, `reloading`, `ready`,
 `degraded`, `stopping`, or `stopped`). Reload first stops every old worker and
 confirms quiescence before replacing its owner. A partial stop/start failure
@@ -222,7 +231,11 @@ residency/receipt 并只读取待发表的正文。Released skeleton 不参与�
 envelope 记录 frozen upper 与完整五元组 cursor；不用改 schema 或创建 sidecar。
 Publication、checkpoint 与 cursor 在同一短事务提交；失败不越过未发表页。
 Explicit rebuild 在同事务增加独立 scan generation/reset；普通 historical publication
-只增加对应 published index generation，不重置自身遍历。完成后下一次巡检从头开始，
+只增加对应 published index generation，不重置自身遍历。首轮与未完成 sweep 连续推进；
+已完成且 recipe/generation 有效的大型 warm sweep 按小时从头巡检，期间保留有界
+head probe。Explicit rebuild／generation 或 recipe 失效立即启动；显式 repository batch
+不受低频等待限制。普通 admission 同事务发表当前索引，不等待这次 integrity audit。
+完成时间不因 idle probe 延后，重启保留其 durable deadline。下一次完整巡检从头开始，
 捕获 cursor 后方旧 receipt/FTS hole、rehydration 与 correction；warm 扫描不会暂时
 关闭已经 ready 的 lexical index。`runtime.derived_worker.scanned_messages` 包含已检查
 的 warm positions，`processed_messages` 只计实际 publication，二者为进程内计数。

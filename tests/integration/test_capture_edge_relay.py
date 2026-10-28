@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 
 from sightglass.contracts.capture import (
@@ -31,6 +33,7 @@ from sightglass.runtime.edge_relay import (
     FramedStream,
     PreparedRemoteCapture,
     RelayDisconnected,
+    _relay_stdio_descriptors,
     edge_token_hash,
 )
 from sightglass.source.capture.codec import SealedCapture, json_value
@@ -48,6 +51,184 @@ class CaptureEdgeRelayTests(unittest.TestCase):
     setUp = fixtures.CaptureBoundaryTests.setUp
     request = fixtures.CaptureBoundaryTests.request
     capture = fixtures.CaptureBoundaryTests.capture
+
+    @staticmethod
+    def _stdio_pipes():
+        input_read, input_write = os.pipe()
+        output_read, output_write = os.pipe()
+        return (
+            os.fdopen(input_read, "rb"),
+            os.fdopen(output_write, "wb"),
+            input_write,
+            output_read,
+        )
+
+    def test_stdio_output_backpressure_bounds_reads_and_shutdown(self) -> None:
+        input_stream, output_stream, input_write, output_read = self._stdio_pipes()
+        self.addCleanup(input_stream.close)
+        self.addCleanup(output_stream.close)
+        self.addCleanup(os.close, input_write)
+        self.addCleanup(os.close, output_read)
+        receiver, sender = socket.socketpair()
+        self.addCleanup(receiver.close)
+        self.addCleanup(sender.close)
+        # Fill the consumer's output pipe and leave stdin open. The socket still
+        # has a second chunk ready, but the relay may buffer only one chunk.
+        os.set_blocking(output_stream.fileno(), False)
+        while True:
+            try:
+                os.write(output_stream.fileno(), b"synthetic-full-output" * 1000)
+            except BlockingIOError:
+                break
+        os.set_blocking(output_stream.fileno(), True)
+        read_sizes = []
+        errors = []
+
+        def produce():
+            try:
+                sender.sendall(b"s" * (4 * 65_536))
+            except OSError:
+                pass  # Closing the timed-out proxy deliberately ends this producer.
+
+        class TrackedConnection:
+            def fileno(self):
+                return receiver.fileno()
+
+            def setblocking(self, value):
+                receiver.setblocking(value)
+
+            def recv(self, amount):
+                chunk = receiver.recv(amount)
+                read_sizes.append(len(chunk))
+                return chunk
+
+            def send(self, value):
+                return receiver.send(value)
+
+            def shutdown(self, how):
+                receiver.shutdown(how)
+
+        def relay():
+            try:
+                _relay_stdio_descriptors(
+                    input_stream, output_stream, cast(Any, TrackedConnection())
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        with mock.patch("sightglass.runtime.edge_relay.RELAY_PROXY_WRITE_TIMEOUT_SECONDS", .15):
+            producer = threading.Thread(target=produce, daemon=True)
+            producer.start()
+            thread = threading.Thread(target=relay, daemon=True)
+            thread.start()
+            thread.join(2)
+            receiver.close()
+            producer.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(producer.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], RelayDisconnected)
+        self.assertEqual(str(errors[0]), "edge_stdio_proxy_output_timeout")
+        self.assertGreater(sum(read_sizes), 0)
+        self.assertLessEqual(sum(read_sizes), 65_536)
+        self.assertTrue(os.get_blocking(input_stream.fileno()))
+        self.assertTrue(os.get_blocking(output_stream.fileno()))
+
+    def test_stdio_relay_is_byte_transparent_and_restores_flags(self) -> None:
+        input_stream, output_stream, input_write, output_read = self._stdio_pipes()
+        input_read = input_stream.fileno()
+        output_write = output_stream.fileno()
+        client, broker = socket.socketpair()
+        input_blocking = os.get_blocking(input_read)
+        output_blocking = os.get_blocking(output_write)
+        payload = b"\x00synthetic-request" * 256
+        reply = b"\x00synthetic-response" * 256
+        errors: list[BaseException] = []
+        finished = threading.Event()
+
+        def relay() -> None:
+            try:
+                _relay_stdio_descriptors(input_stream, output_stream, broker)
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=relay, daemon=True)
+        thread.start()
+        os.write(input_write, payload)
+        client.settimeout(2)
+        forwarded = bytearray()
+        while len(forwarded) < len(payload):
+            forwarded.extend(client.recv(65_536))
+        self.assertEqual(bytes(forwarded), payload)
+        client.sendall(reply)
+        client.shutdown(socket.SHUT_WR)
+        self.addCleanup(os.close, input_write)
+        self.addCleanup(client.close)
+        self.assertTrue(finished.wait(2))
+        thread.join()
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(os.get_blocking(input_read), input_blocking)
+        self.assertEqual(os.get_blocking(output_write), output_blocking)
+        self.addCleanup(input_stream.close)
+        self.addCleanup(output_stream.close)
+        self.addCleanup(broker.close)
+        self.addCleanup(os.close, output_read)
+        received = bytearray()
+        while len(received) < len(reply):
+            received.extend(os.read(output_read, len(reply) - len(received)))
+        self.assertEqual(bytes(received), reply)
+        self.assertFalse(errors)
+
+    def test_stdio_recv_transient_errors_do_not_become_eof(self) -> None:
+        proxy_read, proxy_write = socket.socketpair()
+        input_stream, output_stream, input_write, output_read = self._stdio_pipes()
+        self.addCleanup(proxy_read.close)
+        self.addCleanup(proxy_write.close)
+        self.addCleanup(input_stream.close)
+        self.addCleanup(output_stream.close)
+        self.addCleanup(os.close, input_write)
+        self.addCleanup(os.close, output_read)
+        reply = b"synthetic-after-eagain"
+        reads = 0
+
+        def recv(_amount):
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                raise BlockingIOError()
+            if reads == 2:
+                raise InterruptedError()
+            if reads == 3:
+                return reply
+            return b""
+
+        class FakeConnection:
+            def fileno(self) -> int:
+                return proxy_read.fileno()
+
+            def setblocking(self, blocking: bool) -> None:
+                proxy_read.setblocking(blocking)
+
+            def recv(self, amount: int) -> bytes:
+                return recv(amount)
+
+            def send(self, _value: memoryview) -> int:
+                return 0
+
+            def shutdown(self, _how: int) -> None:
+                pass
+
+        proxy_write.sendall(b"ready")
+        _relay_stdio_descriptors(
+            input_stream, output_stream, cast(Any, FakeConnection())
+        )
+        received = bytearray()
+        while len(received) < len(reply):
+            received.extend(os.read(output_read, len(reply) - len(received)))
+        self.assertEqual(bytes(received), reply)
+        self.assertEqual(reads, 4)
 
     @contextmanager
     def _live_channel(self, broker):
@@ -220,16 +401,23 @@ class CaptureEdgeRelayTests(unittest.TestCase):
             lookup_terminal=receiver.lookup_terminal, recover=recover,
         )
         snapshots = [broker.diagnostics()]
-        self.assertEqual(snapshots[0], {"queued": 0, "detached_queued": 0, "inflight": None})
+        self.assertEqual(
+            {key: snapshots[0][key] for key in ("queued", "detached_queued", "inflight")},
+            {"queued": 0, "detached_queued": 0, "inflight": None},
+        )
         with ThreadPoolExecutor(max_workers=1) as pool:
             waiter = pool.submit(broker.submit, self.request(), timeout=3)
             try:
                 with broker._condition:
                     self.assertTrue(broker._condition.wait_for(lambda: bool(broker._queue), 1))
                 snapshots.append(broker.diagnostics())
-                self.assertEqual(snapshots[-1], {
-                    "queued": 1, "detached_queued": 0, "inflight": None,
-                })
+                self.assertEqual(
+                    {
+                        key: snapshots[-1][key]
+                        for key in ("queued", "detached_queued", "inflight")
+                    },
+                    {"queued": 1, "detached_queued": 0, "inflight": None},
+                )
                 with self._live_channel(broker) as channel:
                     channel.send({"schema": CAPTURE_VERSION, "kind": "poll"})
                     frame = channel.receive(timeout=2)
@@ -241,9 +429,13 @@ class CaptureEdgeRelayTests(unittest.TestCase):
                         "durable_terminal": False,
                     }
                     snapshots.append(broker.diagnostics())
-                    self.assertEqual(snapshots[-1], {
-                        "queued": 0, "detached_queued": 0, "inflight": phase,
-                    })
+                    self.assertEqual(
+                        {
+                            key: snapshots[-1][key]
+                            for key in ("queued", "detached_queued", "inflight")
+                        },
+                        {"queued": 0, "detached_queued": 0, "inflight": phase},
+                    )
                     channel.send(self.capture())
                     ticket = waiter.result(timeout=1)
                     phase = {**phase, "captured": True, "waiters": 0}
@@ -269,18 +461,37 @@ class CaptureEdgeRelayTests(unittest.TestCase):
                         "schema": CAPTURE_VERSION, "kind": "idle", "retry_seconds": 1,
                     })
                     snapshots.append(broker.diagnostics())
-                    self.assertEqual(snapshots[-1], snapshots[0])
+                    self.assertEqual(
+                        {
+                            key: snapshots[-1][key]
+                            for key in ("queued", "detached_queued", "inflight")
+                        },
+                        {
+                            key: snapshots[0][key]
+                            for key in ("queued", "detached_queued", "inflight")
+                        },
+                    )
             finally:
                 commit.set()
                 finish.set()
                 broker.close()
         for snapshot in snapshots:
-            self.assertEqual(set(snapshot), {"queued", "detached_queued", "inflight"})
+            self.assertEqual(
+                set(snapshot), {"queued", "detached_queued", "inflight", "connection"}
+            )
             if snapshot["inflight"] is not None:
                 self.assertEqual(set(snapshot["inflight"]), {
                     "operation", "captured", "detached", "recovering", "waiters",
                     "durable_terminal",
                 })
+            self.assertEqual(
+                set(snapshot["connection"]),
+                {
+                    "phase", "last_error_code", "last_error_type", "last_error_location",
+                    "historical_error_count", "historical_error_code",
+                    "historical_error_type", "historical_error_location",
+                },
+            )
         encoded = json.dumps(snapshots)
         for sensitive in (
             self.request().request_id, self.ceiling.account_id,
@@ -288,6 +499,97 @@ class CaptureEdgeRelayTests(unittest.TestCase):
             "synthetic-diagnostics-reject",
         ):
             self.assertNotIn(sensitive, encoded)
+
+    def test_connection_failure_retains_current_and_historical_diagnostics(self) -> None:
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=lambda _capture: None,
+        )
+        self.addCleanup(broker.close)
+        rejected = io.BytesIO()
+        FramedStream(io.BytesIO(), rejected).send(
+            {"schema": CAPTURE_VERSION, "kind": "hello", "role": "reader"}
+        )
+        with self.assertRaisesRegex(CaptureProtocolError, "capability_rejected"):
+            broker.serve_connection(
+                FramedStream(io.BytesIO(rejected.getvalue()), io.BytesIO())
+            )
+        self.assertEqual(
+            broker.diagnostics()["connection"]["historical_error_code"],
+            "edge_capability_rejected",
+        )
+        accepted = io.BytesIO()
+        FramedStream(io.BytesIO(), accepted).send(
+            {
+                "schema": CAPTURE_VERSION,
+                "kind": "hello",
+                "role": "edge",
+                "token": "synthetic-token",
+                "source_instance_id": self.executor.source_instance_id,
+                "account_id": self.ceiling.account_id,
+                "origin_epoch": self.executor.origin_epoch,
+                "stream_epoch": "fixture-stream",
+                "next_sequence": 1,
+                "core_generation": "",
+            }
+        )
+        class StopAfterReady(FramedStream):
+            def send(self, value, **kwargs):
+                super().send(value, **kwargs)
+                if isinstance(value, dict) and value.get("kind") == "ready":
+                    raise RelayDisconnected("synthetic_after_ready")
+
+        channel = StopAfterReady(io.BytesIO(accepted.getvalue()), io.BytesIO())
+        errors: list[BaseException] = []
+
+        def serve():
+            try:
+                broker.serve_connection(channel)
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            with broker._condition:
+                self.assertTrue(broker._condition.wait_for(
+                    lambda: broker._connection_phase == "failed", 2
+                ))
+            snapshot = broker.diagnostics()["connection"]
+            self.assertEqual(snapshot["phase"], "failed")
+            self.assertEqual(snapshot["historical_error_code"], "relay_disconnected")
+            self.assertEqual(snapshot["last_error_code"], "relay_disconnected")
+        finally:
+            broker.close()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+
+    def test_connection_diagnostics_name_phase_and_finite_failure_only(self) -> None:
+        broker = CaptureBroker(
+            self.expected, token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=lambda _capture: None,
+        )
+        self.addCleanup(broker.close)
+        initial = broker.diagnostics()["connection"]
+        self.assertEqual(initial["phase"], "listening")
+        self.assertIsNone(initial["last_error_code"])
+
+        wire = io.BytesIO()
+        FramedStream(io.BytesIO(), wire).send(
+            {"schema": CAPTURE_VERSION, "kind": "hello", "role": "reader"}
+        )
+        with self.assertRaisesRegex(CaptureProtocolError, "capability_rejected"):
+            broker.serve_connection(FramedStream(io.BytesIO(wire.getvalue()), io.BytesIO()))
+        failed = broker.diagnostics()["connection"]
+        self.assertEqual(failed["phase"], "failed")
+        self.assertEqual(failed["last_error_code"], "edge_capability_rejected")
+        self.assertEqual(failed["last_error_type"], "CaptureProtocolError")
+        self.assertEqual(
+            failed["last_error_location"]["module"], "sightglass.runtime.edge_relay"
+        )
+        self.assertEqual(failed["historical_error_count"], 1)
+        self.assertEqual(failed["last_error_code"], "edge_capability_rejected")
+        self.assertNotIn(str(self.root), json.dumps(failed))
 
     def test_cancelled_waiter_yields_and_late_capture_is_rejected_exactly(self) -> None:
         journal = fixtures.FixtureReceiveJournal(self.root / "cancelled-receive.sqlite")
@@ -872,6 +1174,64 @@ class CaptureEdgeRelayTests(unittest.TestCase):
         with broker._condition:
             self.assertTrue(broker._condition.wait_for(lambda: not broker.connected, 5))
         self.assertEqual(broker._by_request, {})
+
+    def test_stdio_proxy_exits_when_broker_closes_with_stdin_held_open(self) -> None:
+        broker = CaptureBroker(
+            self.expected,
+            token_hash=edge_token_hash("synthetic-token"),
+            lookup_terminal=lambda _capture: None,
+        )
+        server = CaptureBrokerServer(broker, self.root / "broker" / "close.sock")
+        server.start()
+        proxy = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; "
+                "from sightglass.runtime.edge_relay import run_core_stdio; "
+                "run_core_stdio(Path(sys.argv[1]))",
+                str(server.socket_path),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        def cleanup() -> None:
+            if proxy.poll() is None:
+                proxy.kill()
+            proxy.wait(timeout=5)
+            for stream in (proxy.stdin, proxy.stdout, proxy.stderr):
+                if stream is not None:
+                    stream.close()
+            if server.running:
+                server.close()
+
+        self.addCleanup(cleanup)
+        assert proxy.stdin is not None and proxy.stdout is not None and proxy.stderr is not None
+        channel = FramedStream(proxy.stdout, proxy.stdin)
+        channel.send(
+            {
+                "schema": CAPTURE_VERSION,
+                "kind": "hello",
+                "role": "edge",
+                "token": "synthetic-token",
+                "source_instance_id": self.executor.source_instance_id,
+                "account_id": self.ceiling.account_id,
+                "origin_epoch": self.executor.origin_epoch,
+                "stream_epoch": "fixture-stream",
+                "next_sequence": 1,
+                "core_generation": "",
+            }
+        )
+        self.assertEqual(
+            channel.receive(timeout=5),
+            {"schema": CAPTURE_VERSION, "kind": "ready", "core_generation": ""},
+        )
+        server.close()
+        self.assertFalse(proxy.stdin.closed)
+        self.assertEqual(proxy.wait(timeout=5), 0)
+        self.assertEqual(proxy.stderr.read(), b"")
 
     def test_two_process_disconnect_and_lost_ack_replay_unchanged(self) -> None:
         journal = fixtures.FixtureReceiveJournal(self.root / "receive.sqlite")

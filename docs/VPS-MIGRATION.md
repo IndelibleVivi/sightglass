@@ -110,6 +110,32 @@ Frozen transfer 从 stopped 原 namespace 直接流向 target，不在 Mac 再�
 Receiver destination 的 parent 必须已在目标 encrypted filesystem 上建立且为
 owner-private directory；receiver 只创建 destination 本身，不递归创建任意 parent。
 
+## 容量维护与原卷扩容
+
+Storage soft limit 会暂停后台 derivative/history growth，即使普通读取仍在 hard limit
+内可用；先用 content-free status／quick storage explain 区分它与 source/transport
+故障。先保留原 recovery，核算 host 实际 free、encrypted filesystem free、owned
+footprint 与最终 free floor；调预算不等于增加底层空间，quota 与 filesystem 是两层。
+
+原 loop-file LUKS/ext4 卷的增量维护由 exact installation operator plan 执行：固定
+image inode/owner/private mode、LUKS UUID、mapper backing loop/image 和 mount；维护前
+抑制 Mac recovery controller，确认 key 可非交互使用，停止 Core/tunnel 并确认 writer
+退出。保留 LUKS header/keyslot backup、配置 before-image 和冻结数据库的完整 byte
+identity。后者用于扩容前后比较，不能替代已有 recovery。
+
+按 image suffix allocation → bound loop capacity → existing LUKS mapping → ext4
+filesystem 的顺序推进，阶段 receipt 放在 mount 外以便失败后检查。每步只操作已绑定
+对象，key 继续经安全 stdin，不能写入 key 文件或 argv。卸载后只读 `e2fsck -f -n`
+可检查一致性，却不会记录 resize2fs 所需的已完成检查状态；在检查确认干净后，按已授权
+offline 维护执行一次可记录完成状态的 `e2fsck -f -p`，再 resize2fs 并重新只读检查。
+若 image/mapper 已增大、filesystem 尚未增大，先核对现有阶段后续进，不重复增加 image。
+
+Remount 后验证原 UUID/header 与冻结 DB byte identity，使用 typed config 仅修改已批准
+的 budgets 并保留 free floor，恢复原 Core/tunnel，确认原路径 health 与一次 fresh
+读取。最后撤销本操作自己的 inhibit，复验 managed recovery。原 key、授权、stream、
+Mac edge process 和全部旧 recovery 不因扩容而变更或 retirement。实际命令、绑定、
+before-images 与阶段 receipts 属于 Git 外的 operator installation record。
+
 ## Source 与 candidate 预备
 
 使用 frozen runtime extras 与 source provenance 安装独立 noneditable wheel。Linux

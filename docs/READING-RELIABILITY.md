@@ -30,6 +30,13 @@ limited timeline 与历史缺口，并通过按会话分页补读；这里采用
 新 source 与控制 UI 根据这两条已可使用路径的证据发展。M5/M7 原有范围保留，
 其中没有现实 consumer 的 adapter 不因历史 milestone 编号而优先实现。
 
+远端日用还有 source 授权生命周期的缺口：当前 egress ceiling 是固定 enrollment 集合，
+reader 的 `all_except_denylist` 不能让未来会话自动跨过该边界。后续需要把 scope 的可见
+解释、纳入新会话的流程与 cold source discovery 接到同一条阅读路径。若设计持续账号
+scope，必须先完成候选与合成验证，再取得 exact account／未来会话范围的 operator
+授权；不能把既有固定集合改写成隐含的全账号 consent，也不能把授权外无结果说成
+微信里没有。普通联系人的日用价值仍先于新增 IR infrastructure。
+
 本轮继续把「她又回了」接到同一条路径。新的 remote updates 必须在已连接 edge 上取得
 当前 source evidence，并由同一次选定的 view 完成 publication；发出了 capture request
 不等于结果已经消费了那个 capture。Pending delivery 和 committed request 的 exact replay
@@ -47,7 +54,10 @@ stop/compensation evidence，并继续阻止新 owner。合成 writer contention
 把大规模 resident stock 接到 durable seek/progress：先截取有界 resident positions，
 再检查 receipts，publication 与完整 cursor 原子提交，完成后重开巡检。Warm 页即使
 无需发表也能前进，rebuild 使用独立 generation fence。它补上预算内持续遍历，
-仍不能把 traversal 完成当成完整微信历史或独立 source coverage。
+仍不能把 traversal 完成当成完整微信历史或独立 source coverage。真实大库存的首轮
+扫描还显示，大量 warm 页不应在完成后每 30 秒全库重扫；后台已完成巡检按小时
+重开，保留有界 head probe，rebuild／未完成工作立即执行。新消息索引仍在 admission
+中发表，不依赖全量复查。
 具体实现、安装与测试状态仍以 [current-state](current-state.md) 为准。
 
 ## 要稳定交付的体验

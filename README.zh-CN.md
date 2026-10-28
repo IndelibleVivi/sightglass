@@ -34,6 +34,9 @@ contact 没有消息。Inbox 的 `mode="resident"` 则只查看缓存正文的�
 `window.db`、reader ACK、immutable deliveries、CAS、processing 与 MCP。Edge 主动建立固定
 SSH stdio 连接；Sightglass 没有 public listener，也不开放任意 provider-method RPC。
 
+Remote capture 受已 enrollment 的固定会话集合限制。Reader 的 `all_except_denylist`
+不会扩大独立的 source-egress grant；新会话需 operator 纳入后才能远端发现和读取。
+
 Core 加密卷由 Mac 持 key 时，可在明确安装后由 Mac 后台恢复任务接住 VPS reboot。
 它先通过固定 SSH capability 查询，只有卷未解锁时才读取已有 Keychain item；卷已挂载、
 服务被有意停止时保留停机状态。恢复仍需要 Mac 在线且 Keychain 可非交互读取。
@@ -128,7 +131,8 @@ Fresh 只验证这些有界候选，不通过 edge 任意发现从未 admitted �
 本地 link／lexical reconciliation 只处理仍有驻留资格的正文；release 同时移除其
 本地派生，空闲、重启与 rebuild 不会从历史骨架重建空记录。Derivative sweep 先选有界的
 resident positions，再检查 receipt；publication 与遍历进度同事务提交，重启可续进。
-完成后重新巡检旧位置的缺口；warm verification 保留已发布索引的 readiness。
+完成的大型 warm sweep 按小时重新巡检旧位置，rebuild／未完成工作立即推进；
+普通 admission 直接发表索引。Warm verification 保留已发布索引的 readiness。
 这个过程修复已 admission 内容，不收集更多 source 历史。Resource、voice 与 derived
 workers 按新工作、retry／lease deadline 唤醒，保留 30 秒兜底；已 settled 的 on-demand
 metadata 使用同样的低频节奏，keep／recent 保持既有 live-tail 节奏。Native catalog

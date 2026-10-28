@@ -7,9 +7,11 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from sightglass.contracts.common import utc_now
 from sightglass.contracts.errors import SightglassError
 from sightglass.model.db import WindowDB
 from sightglass.model.lexical import LEXICAL_RECIPE
@@ -153,6 +155,9 @@ class DerivedSweepTests(unittest.TestCase):
         self.links.backfill_batch()
         self.seed(400)
         self.hole(399)
+        # Explicitly begin the next bounded audit; a current ready pass otherwise
+        # waits for its periodic verification deadline to avoid rescanning warm stock.
+        self.links.backfill_batch(limit=40)
         worker = DerivedIndexWorker(self.links, self.service.reader)
         self.assertTrue(worker.run_once())
         self.assertEqual(worker.status()["processed_messages"], 0)
@@ -163,8 +168,28 @@ class DerivedSweepTests(unittest.TestCase):
         else:
             self.fail("generated worker did not finish its frozen resident pass")
         self.assertEqual(worker.status()["processed_messages"], 1)
-        self.assertGreaterEqual(worker.status()["scanned_messages"], 400)
+        self.assertGreaterEqual(worker.status()["scanned_messages"], 350)
         self.assertIsNone(worker.status()["last_error_code"])
+
+    def test_completed_large_warm_sweep_waits_then_rechecks_older_tail_hole(self):
+        self.seed(400)
+        self.finish()
+        self.hole(399)
+        self.assertFalse(self.links.has_pending_backfill())
+        later = utc_now() + timedelta(hours=2)
+        with patch("sightglass.model.links.utc_now", return_value=later):
+            self.assertTrue(self.links.has_pending_backfill())
+            self.assertEqual(self.finish(), 1)
+
+    def test_generation_invalidation_cannot_inherit_warm_sweep_delay(self):
+        self.seed(400)
+        self.finish()
+        self.hole(399)
+        with self.database.transaction() as c:
+            c.execute("UPDATE derived_index_state SET generation=generation+1 "
+                      "WHERE index_kind=?", (SCAN_KIND,))
+        self.assertTrue(self.links.has_pending_backfill())
+        self.assertEqual(self.finish(), 1)
 
     def test_missing_receipt_behind_cursor_is_repaired_next_sweep(self):
         self.seed(120)

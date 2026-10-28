@@ -9,6 +9,7 @@ import os
 import random
 import re
 import select
+import selectors
 import signal
 import socket
 import stat
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import IO, Any, cast
 
 from sightglass.contracts.capture import (
+    CAPTURE_FINITE_REASONS,
     CAPTURE_VERSION,
     MAX_CAPTURE_METADATA_BYTES,
     MAX_CAPTURE_RESOURCE_BYTES,
@@ -46,6 +48,7 @@ from sightglass.source.capture.frozen import FrozenCaptureProvider
 from sightglass.source.capture.receiver import ack_matches
 
 from .edge import EdgeSpool
+from .worker_diagnostics import clear_error, record_error
 
 MAX_RELAY_FRAME_BYTES = MAX_CAPTURE_METADATA_BYTES + MAX_CAPTURE_RESOURCE_BYTES + 64
 RELAY_HANDSHAKE_TIMEOUT_SECONDS = 30.0
@@ -54,10 +57,51 @@ RELAY_ACK_TIMEOUT_SECONDS = 180.0
 RELAY_CANCEL_POLL_SECONDS = 0.05
 RELAY_TRANSPORT_REVISION = 2
 RELAY_CONTROL_TIMEOUT_SECONDS = 1.0
+RELAY_PROXY_BUFFER_BYTES = 65_536
+RELAY_PROXY_WRITE_TIMEOUT_SECONDS = 30.0
 FIXED_EDGE_REMOTE_COMMAND = "sightglassctl edge-session"
 _EDGE_FAILURE_REASONS = frozenset(
     {"capture_unsealed", "edge_spool_pressure", "edge_storage_unavailable"}
 )
+_RELAY_DIAGNOSTIC_REASONS = frozenset(
+    {
+        "capture_control_disconnected",
+        "capture_finalization_pending",
+        "capture_publication_pending",
+        "edge_disconnected_before_capture",
+        "edge_relay_frame_incomplete",
+        "edge_relay_read_cancelled",
+        "edge_relay_read_closed",
+        "edge_relay_read_timeout",
+        "edge_relay_write_cancelled",
+        "edge_relay_write_closed",
+        "edge_relay_write_incomplete",
+        "edge_relay_write_timeout",
+        "edge_stdio_proxy_disconnected",
+        "edge_stdio_proxy_input_incomplete",
+        "edge_stdio_proxy_input_timeout",
+        "edge_stdio_proxy_output_incomplete",
+        "edge_stdio_proxy_output_timeout",
+        "relay_disconnected",
+    }
+)
+_CONNECTION_PROTOCOL_REASONS = frozenset(
+    {
+        "edge_capability_rejected",
+        "edge_failure_control_invalid",
+        "edge_stream_already_connected",
+        "pending_capture_must_replay_before_poll",
+        "relay_control_not_object",
+        "relay_frame_kind_invalid",
+        "relay_frame_size_invalid",
+        "relay_stream_epoch_mismatch",
+        "request_capture_conflict",
+        "unexpected_capture_failure",
+        "unexpected_capture_order",
+        "unknown_request_requires_authorized_recovery",
+        "unsupported_edge_session_frame",
+    }
+) | CAPTURE_FINITE_REASONS
 
 
 class RelayDisconnected(ConnectionError):
@@ -77,6 +121,40 @@ def _stream_fileno(stream: IO[Any]) -> int | None:
         return stream.fileno()
     except (AttributeError, OSError, ValueError):
         return None
+
+def _write_some(descriptor: int, pending: memoryview) -> int:
+    """Write one chunk to a nonblocking descriptor, or report backpressure."""
+    try:
+        written = os.write(descriptor, pending[:RELAY_PROXY_BUFFER_BYTES])
+    except (BlockingIOError, InterruptedError):
+        return 0
+    if written <= 0:
+        raise RelayDisconnected("edge_stdio_proxy_output_incomplete")
+    return written
+
+
+def _stdio_selector_events(
+    *,
+    input_open: bool,
+    input_pending: bool,
+    connection_open: bool,
+    output_pending: bool,
+) -> dict[str, int]:
+    """Selector masks for at most one read buffer per proxy direction."""
+    events: dict[str, int] = {}
+    if input_open and not input_pending:
+        events["input"] = selectors.EVENT_READ
+    if connection_open:
+        connection_events = 0
+        if not output_pending:
+            connection_events |= selectors.EVENT_READ
+        if input_pending:
+            connection_events |= selectors.EVENT_WRITE
+        if connection_events:
+            events["connection"] = connection_events
+    if output_pending:
+        events["output"] = selectors.EVENT_WRITE
+    return events
 
 
 def _read_exact(
@@ -345,6 +423,16 @@ class CaptureBroker:
         self._stop = threading.Event()
         self._closed = False
         self._connected = False
+        self._connection_phase = "listening"
+        self._diagnostics: dict[str, Any] = {
+            "last_error_code": None,
+            "last_error_type": None,
+            "last_error_location": None,
+            "historical_error_count": 0,
+            "historical_error_code": None,
+            "historical_error_type": None,
+            "historical_error_location": None,
+        }
 
     @property
     def connected(self) -> bool:
@@ -367,7 +455,31 @@ class CaptureBroker:
                     "waiters": work.waiters,
                     "durable_terminal": ticket is not None and ticket.durable_ack is not None,
                 } if work is not None else None,
+                "connection": {
+                    "phase": self._connection_phase,
+                    **self._diagnostics,
+                },
             }
+
+    def _set_connection_phase(self, phase: str) -> None:
+        with self._condition:
+            self._connection_phase = phase
+
+    def _record_connection_error(self, exc: Exception) -> None:
+        with self._condition:
+            if (
+                isinstance(exc, CaptureProtocolError)
+                and exc.reason in _CONNECTION_PROTOCOL_REASONS
+            ):
+                code = exc.reason
+            elif isinstance(exc, RelayDisconnected):
+                reason = str(exc)
+                code = reason if reason in _RELAY_DIAGNOSTIC_REASONS else "relay_disconnected"
+            elif isinstance(exc, RuntimeError):
+                code = "ownership_or_runtime_rejected"
+            else:
+                code = "connection_failed"
+            record_error(self._diagnostics, exc, code)
 
     def submit(self, request: CaptureRequest, *, timeout: float = 120.0) -> PreparedRemoteCapture:
         from sightglass.contracts.capture import CaptureCeiling
@@ -590,6 +702,7 @@ class CaptureBroker:
         if not self._session_lock.acquire(blocking=False):
             raise CaptureProtocolError("edge_stream_already_connected")
         authenticated = False
+        self._set_connection_phase("handshake")
         try:
             hello = channel.receive(timeout=RELAY_HANDSHAKE_TIMEOUT_SECONDS)
             hello_keys = {
@@ -644,6 +757,8 @@ class CaptureBroker:
             )
             with self._condition:
                 self._connected = True
+                self._connection_phase = "connected"
+                clear_error(self._diagnostics)
                 self._condition.notify_all()
             while not self._closed:
                 # The session loop itself is bounded by the edge acknowledgment
@@ -712,11 +827,20 @@ class CaptureBroker:
                         )
                 else:
                     raise CaptureProtocolError("unsupported_edge_session_frame")
+        except Exception as exc:
+            self._record_connection_error(exc)
+            raise
         finally:
             if authenticated:
                 self._fail_uncaptured()
             with self._condition:
                 self._connected = False
+                if self._closed:
+                    self._connection_phase = "closed"
+                elif self._diagnostics["last_error_code"] is not None:
+                    self._connection_phase = "failed"
+                else:
+                    self._connection_phase = "disconnected"
                 self._condition.notify_all()
             self._session_lock.release()
 
@@ -724,6 +848,7 @@ class CaptureBroker:
         self._stop.set()
         with self._condition:
             self._closed = True
+            self._connection_phase = "closed"
             for work in self._by_request.values():
                 work.captured.set()
             self._condition.notify_all()
@@ -1194,7 +1319,12 @@ def run_core_stdio(
     reader: IO[Any] | None = None,
     writer: IO[Any] | None = None,
 ) -> None:
-    """Fixed remote edge-session command: stdio <-> private core Unix socket."""
+    """Fixed remote edge-session command: stdio <-> private core Unix socket.
+
+    The command uses one selector-driven loop so a core socket close is not
+    dependent on a reader blocked in stdin. The proxy is byte transparent and
+    bounds each write wait by the existing relay deadline.
+    """
     input_stream = reader or sys.stdin.buffer
     output_stream = writer or sys.stdout.buffer
     metadata = socket_path.lstat()
@@ -1205,35 +1335,137 @@ def run_core_stdio(
     ):
         raise CaptureProtocolError("broker_socket_not_private")
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.connect(str(socket_path))
-    errors: list[BaseException] = []
-
-    def upload() -> None:
-        try:
-            read_chunk = getattr(input_stream, "read1", input_stream.read)
-            while True:
-                chunk = read_chunk(65_536)
-                if not chunk:
-                    break
-                connection.sendall(chunk)
-        except (OSError, ValueError) as exc:
-            errors.append(exc)
-        finally:
-            try:
-                connection.shutdown(socket.SHUT_WR)
-            except OSError:
-                pass
-
-    thread = threading.Thread(target=upload, daemon=True)
-    thread.start()
     try:
-        while True:
-            chunk = connection.recv(65_536)
-            if not chunk:
-                break
-            output_stream.write(chunk)
-            output_stream.flush()
+        connection.settimeout(RELAY_PROXY_WRITE_TIMEOUT_SECONDS)
+        connection.connect(str(socket_path))
+        _relay_stdio_descriptors(input_stream, output_stream, connection)
     finally:
+        try:
+            connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         connection.close()
-    if errors:
-        raise RelayDisconnected("edge_stdio_proxy_disconnected")
+
+
+def _relay_stdio_descriptors(
+    input_stream: IO[Any], output_stream: IO[Any], connection: socket.socket
+) -> None:
+    """Relay descriptor streams through one deadline-aware selector loop."""
+    input_fd = _stream_fileno(input_stream)
+    output_fd = _stream_fileno(output_stream)
+    if input_fd is None or output_fd is None:
+        # The fixed SSH command always supplies pipes. Arbitrary Python streams
+        # cannot be multiplexed with the socket without a blocked reader thread.
+        raise CaptureProtocolError("edge_stdio_requires_file_descriptors")
+    input_blocking = os.get_blocking(input_fd)
+    output_blocking = os.get_blocking(output_fd)
+    try:
+        os.set_blocking(input_fd, False)
+        os.set_blocking(output_fd, False)
+        connection.setblocking(False)
+        connection_fd = connection.fileno()
+        with selectors.DefaultSelector() as selector:
+            pending_input = bytearray()
+            pending_output = bytearray()
+            input_eof = False
+            connection_eof = False
+            input_deadline: float | None = None
+            output_deadline: float | None = None
+            while not connection_eof or pending_output:
+                now = time.monotonic()
+                if pending_input:
+                    if input_deadline is None:
+                        input_deadline = now + RELAY_PROXY_WRITE_TIMEOUT_SECONDS
+                    if now >= input_deadline:
+                        raise RelayDisconnected("edge_stdio_proxy_input_timeout")
+                else:
+                    input_deadline = None
+                if pending_output:
+                    if output_deadline is None:
+                        output_deadline = now + RELAY_PROXY_WRITE_TIMEOUT_SECONDS
+                    if now >= output_deadline:
+                        raise RelayDisconnected("edge_stdio_proxy_output_timeout")
+                else:
+                    output_deadline = None
+
+                masks = _stdio_selector_events(
+                    input_open=not input_eof,
+                    input_pending=bool(pending_input),
+                    connection_open=not connection_eof,
+                    output_pending=bool(pending_output),
+                )
+                descriptors = {
+                    "input": input_fd,
+                    "connection": connection_fd,
+                    "output": output_fd,
+                }
+                desired = {
+                    descriptors[label]: (events, label)
+                    for label, events in masks.items()
+                }
+
+                registered = set(selector.get_map())
+                for descriptor in registered - set(desired):
+                    selector.unregister(descriptor)
+                for descriptor, (events, label) in desired.items():
+                    if descriptor in registered:
+                        if selector.get_map()[descriptor].events != events:
+                            selector.modify(descriptor, events, label)
+                    else:
+                        selector.register(descriptor, events, label)
+
+                timeout = RELAY_CANCEL_POLL_SECONDS
+                for deadline in (input_deadline, output_deadline):
+                    if deadline is not None:
+                        timeout = min(timeout, max(0.0, deadline - now))
+                for key, mask in selector.select(timeout):
+                    if key.data == "input":
+                        try:
+                            chunk = os.read(input_fd, RELAY_PROXY_BUFFER_BYTES)
+                        except BlockingIOError:
+                            continue
+                        if chunk:
+                            pending_input.extend(chunk)
+                        else:
+                            input_eof = True
+                            if not pending_input:
+                                try:
+                                    connection.shutdown(socket.SHUT_WR)
+                                except OSError:
+                                    pass
+                    elif key.data == "output":
+                        written = _write_some(output_fd, memoryview(pending_output))
+                        del pending_output[:written]
+                    else:
+                        if mask & selectors.EVENT_WRITE and pending_input:
+                            try:
+                                sent = connection.send(pending_input)
+                            except (BlockingIOError, InterruptedError):
+                                sent = 0
+                            if sent > 0:
+                                del pending_input[:sent]
+                            if input_eof and not pending_input:
+                                try:
+                                    connection.shutdown(socket.SHUT_WR)
+                                except OSError:
+                                    pass
+                        if mask & selectors.EVENT_READ:
+                            try:
+                                chunk = connection.recv(RELAY_PROXY_BUFFER_BYTES)
+                            except (BlockingIOError, InterruptedError):
+                                # Readable readiness can race with another consumer
+                                # or an interrupt. Neither is a zero-length EOF.
+                                continue
+                            if chunk:
+                                pending_output.extend(chunk)
+                            else:
+                                connection_eof = True
+                                if not pending_output:
+                                    break
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, RelayDisconnected):
+            raise
+        raise RelayDisconnected("edge_stdio_proxy_disconnected") from exc
+    finally:
+        os.set_blocking(input_fd, input_blocking)
+        os.set_blocking(output_fd, output_blocking)

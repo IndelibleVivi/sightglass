@@ -453,7 +453,14 @@ restricted server-side SSH key must permit
 only the fixed edge-session command; the source implementation does not install
 keys or change SSH policy.
 
-The fixed command proxies stdio to an owner-private core Unix socket. The broker
+The fixed command proxies stdio to an owner-private core Unix socket using a
+single selector-driven raw-fd loop with one 64 KiB buffer per direction
+and a 30-second deadline per pending write/backpressure interval. It does not
+leave a daemon thread blocked in buffered stdin when the broker closes. Stdin EOF
+half-closes the socket after pending input; broker EOF drains pending output and
+exits even while stdin remains open. Transient socket `EAGAIN`/`EINTR` is not EOF.
+The fixed command requires descriptor-backed streams, restores original stdin/stdout
+blocking modes and closes its socket on exit. The broker
 checks Unix peer UID, an independent edge token, source instance, account and
 origin epoch before accepting `hello`. `hello` and `ready` also carry the exact
 enrolled `core_generation`, which must equal the core configuration's
@@ -509,7 +516,12 @@ fabricated by that rejection.
 
 Core status includes `capture.relay`, an in-memory content-free snapshot with
 queued/detached-queued counts and an optional in-flight operation, capture,
-detachment, recovery, waiter and durable-terminal state. It contains no request or
+detachment, recovery, waiter and durable-terminal state. `connection` adds a finite
+phase (`listening`, `handshake`, `connected`, `disconnected`, `failed`, `closed`),
+allowlisted current/last historical error code/type and public module/function/line.
+Successful authentication clears the current error while retaining bounded historical
+evidence. A duplicate connection cannot replace the authenticated stream's diagnostic
+phase or change its connected predicate. It contains no request or
 conversation identity, arguments, content, paths or stacks, and probes no source,
 database or transport. A phase snapshot is diagnostic evidence, not confirmation
 of current source facts.

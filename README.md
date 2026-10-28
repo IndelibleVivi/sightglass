@@ -39,6 +39,10 @@ read-only sessions and one
 deliveries, CAS, processing and MCP. The edge initiates a fixed SSH stdio connection;
 there is no public Sightglass listener or arbitrary provider-method RPC.
 
+Remote capture is limited to its enrolled conversation set. A reader's
+`all_except_denylist` policy does not extend that independent source-egress grant;
+new conversations need operator enrollment before remote discovery/reading.
+
 When the encrypted Core volume uses a Mac-held key, an explicitly installed Mac
 recovery task can restore the existing vault after a VPS restart. It first probes
 the fixed SSH capability, reads the existing Keychain item only while the vault is
@@ -163,7 +167,8 @@ Local link/lexical reconciliation uses eligible resident bodies; releasing a bod
 removes its local derivatives, and idle/restarted/rebuilding workers cannot recreate
 empty records from durable history. Derivative sweeps select a bounded resident-position
 page before testing receipts, commit progress with publication and resume after restart.
-Completed sweeps revisit older holes; a warm verification pass preserves published-index
+Completed large warm sweeps recheck hourly, with immediate rebuild/unfinished work;
+ordinary admissions publish directly. A warm verification pass preserves published-index
 readiness. This repairs admitted content without collecting more source history.
 Resource, voice and derived workers wake on new
 work, retry or lease deadlines, with a 30-second fallback. Settled on-demand metadata

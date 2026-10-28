@@ -42,7 +42,7 @@ the original plugin after recovery. These bounded observations do not establish 
 daily usability or sustained stability; an older activity time alone proves neither
 staleness nor a missing newly arrived message.
 
-## Resident derivative convergence: source candidate
+## Resident derivative convergence: activated and progressing
 
 The active Core's repeated derivative deadline failures with zero completed batches
 exposed an unbounded selection query: output LIMIT followed a full resident traversal
@@ -56,13 +56,43 @@ preserves already-published index readiness. There is no schema/index/sidecar ch
 or extra source collection.
 
 Generated dense-stock checks reject the old implementation after 20,000 SQLite VM
-steps and accept the candidate within that bound. Dedicated regressions cover sparse
+steps and accept the increment within that bound. Dedicated regressions cover sparse
 history, warm pages, actual worker continuation, restart, append, rebuild and failed
-publication. Full source/artifact gates and live Core activation remain pending.
+publication. Source
+[184fd79](https://github.com/IndelibleVivi/sightglass/commit/184fd7959cce9fbe4dc150d3c83ac18b3e1cea80)
+passed 1,679 local tests, full Pyright/Ruff/compile and both hosted jobs in
+[40634132610](https://github.com/IndelibleVivi/sightglass/actions/runs/40634132610), including
+the isolated installed-wheel gates. The actual Linux candidate passed 315 generated
+tests with frozen dependency, SQLite and native SILK-byte parity before activation.
+The new Core is active with unchanged database/config/grants, schema/interpretation,
+Mac edge process and original tunnel identity. A previously issued fresh cursor
+continued across the upgrade with five nonduplicated source-confirmed messages.
+
+Live inspection first reached the configured background storage soft limit. The
+operator then explicitly authorized growth of the existing encrypted volume and a
+budget adjustment, preserving the original key/UUID, free floor and recovery. The
+frozen current database remained byte-exact across offline filesystem growth; Core
+and the original automatic-recovery controller resumed. Real-stock warm positions
+now advance across committed batches without a current error. Actual publication
+and whole-pass completion remain separate observations, not a claim of complete
+source/history coverage. There was
+also a post-upgrade disconnected interval followed by a 16-sample connected window
+and cleared source-worker error. Repeated transport stability remains open.
 
 ## Continued daily reading and lifecycle: active
 
-Core `ea97fc7` connects ordinary remote updates to their selected fresh capture while
+The current follow-up candidate replaces the fixed Core stdio proxy's blocked
+stdin daemon thread with a bounded nonblocking descriptor loop, and adds finite
+connection diagnostics to the existing operator snapshot. Generated subprocess
+shutdown, real output backpressure and transient-read tests cover it. Completed
+large warm derivative audits are paced hourly; first/rebuild/unfinished work stays
+immediate and ordinary admission publishes directly. This follow-up is not yet
+the installed Core. It passed 1,687 full local tests, full Pyright/Ruff/compile,
+real output-backpressure bounds and an injected `EAGAIN`/`EINTR` receive regression.
+Built/installed artifact checks, hosted gates and activation remain separate.
+
+The active Core retains the behavior introduced in `ea97fc7`: ordinary remote updates
+connect to their selected fresh capture while
 retaining exact local pending/request replay and legacy request compatibility. No
 history job or semantic preparation is required for new replies. Producer, capture
 and receipt owners must stop before resource/voice lease recovery; failures block
@@ -95,9 +125,16 @@ long-term transport stability or a latency SLO. Generated append/new-reply scena
 the arrival path through real stdio/IPC/Core/edge.
 
 The [SG-061/062](IMPLEMENTATION-PLAN.md) increment is implemented, installed and activated.
-Budget-bounded resident traversal is addressed by the source candidate above; its live
-convergence remains unverified. Remote cold discovery, scope/coverage explanations and independent retrieval
+Budget-bounded resident traversal is addressed by the activated increment above; its
+live traversal has resumed after authorized capacity recovery. Remote cold discovery,
+scope/coverage explanations and independent retrieval
 quality remain in the [reading programme](READING-RELIABILITY.md).
+
+The remote source grant remains a fixed enrolled conversation set. Automatic
+visibility of newly created chats is not implemented, and reader-wide policy does
+not enlarge that egress grant. Source-scope continuity and cold queries are genuine
+daily-use gaps; the current work does not claim every WeChat conversation/history
+is remotely searchable or that the complete product is stable.
 
 ## Daily contact reading: source and activation
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Any
 
 from sightglass.contracts.common import utc_now
@@ -24,7 +25,8 @@ from .lexical import LEXICAL_RECIPE, publish_lexical
 from .resident_read import body_is_eligible, resident_body_predicate
 
 SCAN_KIND = "resident_derivative_scan"
-SCAN_VERSION = "sightglass.resident-derivative-scan.v1"
+SCAN_VERSION = "sightglass.resident-derivative-scan.v2"
+SCAN_RECHECK_SECONDS = 3600.0
 SCAN_COLUMNS = "conversation_id,sort_primary,sort_seq,sort_tie,source_message_id"
 ScanPosition = tuple[str, str, int, int, str]
 
@@ -37,12 +39,15 @@ def _scan_binding(row: Any) -> tuple[Any, ...] | None:
     return tuple(row) if row is not None else None
 
 
-def _scan_envelope(position: ScanPosition | None, upper: ScanPosition | None) -> str:
+def _scan_envelope(
+    position: ScanPosition | None, upper: ScanPosition | None, generation: int = 0,
+) -> str:
     # This internal scan kind owns a versioned traversal recipe/envelope in the
     # existing generic state table. Published links/lexical recipe rows stay separate.
     return json.dumps({"version": SCAN_VERSION, "links": LINK_EXTRACTION_VERSION,
                        "lexical": LEXICAL_RECIPE, "body": CURRENT_BODY_VERSION,
-                       "position": position, "upper": upper}, separators=(",", ":"))
+                       "generation": generation, "position": position, "upper": upper},
+                      separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,7 @@ class _ScanPlan:
     scanned: int
     rows: tuple[sqlite3.Row, ...]
     persisted_ready: bool
+    completed_recently: bool
 
 
 def input_digest(row: Any) -> str:
@@ -243,6 +249,8 @@ class LinkRepository:
     def has_pending_backfill(self) -> bool:
         """Bounded read-only probe, including warm pages still needing traversal."""
         plan = self._scan_plan(100)
+        if plan.persisted_ready and plan.completed_recently and not plan.rows:
+            return False
         return bool(plan.rows) or not plan.complete or not plan.persisted_ready
 
     def _scan_plan(self, limit: int) -> _ScanPlan:
@@ -251,7 +259,8 @@ class LinkRepository:
                 "SELECT * FROM derived_index_state WHERE index_kind=?", (SCAN_KIND,)
             ).fetchone()
             position = upper = None
-            if scan is not None and scan["state"] == "building":
+            completed_recently = False
+            if scan is not None:
                 try:
                     envelope = json.loads(scan["recipe"])
                     candidate = envelope["position"]
@@ -261,9 +270,14 @@ class LinkRepository:
                                 and all(isinstance(value[i], str) for i in (0, 1, 4))
                                 and all(type(value[i]) is int for i in (2, 3)))
                     if (valid(candidate) and valid(end)
-                            and json.loads(_scan_envelope(tuple(candidate), tuple(end)))
+                            and json.loads(_scan_envelope(
+                                tuple(candidate), tuple(end), int(scan["generation"])))
                             == envelope):
-                        position, upper = tuple(candidate), tuple(end)
+                        if scan["state"] == "building":
+                            position, upper = tuple(candidate), tuple(end)
+                        else:
+                            age = (utc_now() - datetime.fromisoformat(scan["updated_at"]))
+                            completed_recently = 0 <= age.total_seconds() < SCAN_RECHECK_SECONDS
                 except (TypeError, ValueError, KeyError):
                     pass  # Invalid/old optimization state safely restarts its bounded sweep.
             if upper is None:
@@ -286,7 +300,7 @@ class LinkRepository:
                 ).fetchall()
             if not positions:
                 return _ScanPlan(_scan_binding(scan), position, upper, True, 0, (),
-                                 scan is None or scan["state"] == "ready")
+                                 scan is None or scan["state"] == "ready", completed_recently)
             # LIMIT precedes every eligibility/receipt probe and every payload read.
             # Both dense warm stock and large released skeleton history stay bounded.
             rows = connection.execute(
@@ -306,7 +320,7 @@ class LinkRepository:
             end = _scan_position(positions[-1])
             return _ScanPlan(_scan_binding(scan), end, upper,
                              len(positions) < limit or end == upper, len(positions), tuple(rows),
-                             scan is None or scan["state"] == "ready")
+                             scan is None or scan["state"] == "ready", completed_recently)
 
     def backfill_batch(self, *, limit: int = 100) -> dict[str, Any]:
         state = self.state()
@@ -362,7 +376,9 @@ class LinkRepository:
                 """INSERT INTO derived_index_state(index_kind,recipe,state,updated_at)
                 VALUES (?,?,?,?) ON CONFLICT(index_kind) DO UPDATE SET
                 recipe=excluded.recipe,state=excluded.state,updated_at=excluded.updated_at""",
-                (SCAN_KIND, _scan_envelope(plan.position, plan.upper), phase, now),
+                (SCAN_KIND, _scan_envelope(plan.position, plan.upper,
+                                          int(current["generation"]) if current else 1),
+                 phase, now),
             )
         return {"processed": len(prepared), "scanned": plan.scanned, **self.state(), "state": phase}
 
