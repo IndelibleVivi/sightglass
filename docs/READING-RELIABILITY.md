@@ -43,8 +43,11 @@ stop/compensation evidence，并继续阻止新 owner。合成 writer contention
 公开 worker 都已停止而 lease recovery 仍失败，因此 `running=false` 不能替代恢复证明。
 实际 pause 还暴露了 derived readiness probe 在 batch 预算外的缺口：有限的结果数量不等于
 有限的扫描成本。整个 probe/batch 需要共享 cancellation 与 deadline，真实 SQLite 长查询
-必须先中断，才允许 replacement。这个修复恢复 ownership 交接；大规模 resident stock 的
-预算内持续遍历与覆盖收敛仍需后续 seek/progress 设计，不能由一次 stop 成功推定。
+必须先中断，才允许 replacement。这个修复恢复 ownership 交接；后续 source increment
+把大规模 resident stock 接到 durable seek/progress：先截取有界 resident positions，
+再检查 receipts，publication 与完整 cursor 原子提交，完成后重开巡检。Warm 页即使
+无需发表也能前进，rebuild 使用独立 generation fence。它补上预算内持续遍历，
+仍不能把 traversal 完成当成完整微信历史或独立 source coverage。
 具体实现、安装与测试状态仍以 [current-state](current-state.md) 为准。
 
 ## 要稳定交付的体验

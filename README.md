@@ -161,7 +161,11 @@ identities and observation episodes. Startup performs no bulk rewrite.
 
 Local link/lexical reconciliation uses eligible resident bodies; releasing a body also
 removes its local derivatives, and idle/restarted/rebuilding workers cannot recreate
-empty records from durable history. Resource, voice and derived workers wake on new
+empty records from durable history. Derivative sweeps select a bounded resident-position
+page before testing receipts, commit progress with publication and resume after restart.
+Completed sweeps revisit older holes; a warm verification pass preserves published-index
+readiness. This repairs admitted content without collecting more source history.
+Resource, voice and derived workers wake on new
 work, retry or lease deadlines, with a 30-second fallback. Settled on-demand metadata
 uses the same slower cadence; keep/recent collection retains its live-tail cadence.
 Native catalog handles are reused, with at most 16 idle handles and a 60-second age

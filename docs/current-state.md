@@ -12,7 +12,7 @@ history belong in private operator records outside Git.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Vault restart recovery: source candidate
+## Vault restart recovery: installed
 
 A confirmed outage occurred after a host restart left the enrolled encrypted Core
 volume locked. Existing mount/ownership guards correctly kept Core and tunnel down.
@@ -20,17 +20,45 @@ The original Mac-held-key manual recovery restored those services and the origin
 plugin, without restoring/reinitializing a database or changing grants. This explains
 that outage, not every stale or missing-message report.
 
-The explicitly authorized automatic-recovery candidate adds standalone standard-library
+The explicitly authorized automatic-recovery increment adds standalone standard-library
 operator helpers: a finite fixed-SSH vault status/unlock gateway and a Mac launchd
 one-shot controller. Healthy probes do not read Keychain; automatic recovery preserves
 mounted stopped services, reconfirms the recovered state and supports maintenance
 inhibition with bounded backoff. Vault keys remain Mac-held. Generated regressions
 cover protocol compatibility, recovery failures, concurrency, deadline process-tree
-cleanup, status proof and maintenance races. Installation and live managed invocation
-are separate pending checks. The Core wheel and Mac edge are unchanged by these scripts.
+cleanup, status proof and maintenance races. Source
+[c6ac0a1](https://github.com/IndelibleVivi/sightglass/commit/c6ac0a19067f9b2a3e9592f53914da13bdb7863b)
+passed both hosted jobs in [40631725869](https://github.com/IndelibleVivi/sightglass/actions/runs/40631725869).
+Both helpers were independently installed with exact source-byte provenance. The
+existing forced SSH status and successive actual launchd invocations returned healthy;
+Core/edge processes, configuration and trusted Keychain helper remained unchanged.
+A complete real reboot/locked-Keychain drill was not performed.
 
-Daily catalog freshness and broader reading acceptance remain under investigation;
-one successful fresh page or a one-minute connected window is not a stability claim.
+Generated native and Core/edge catalog regressions refresh an on-demand conversation's
+activity without capturing its body or changing tail progress. No catalog production
+defect was established by the current investigation. Fresh recents, opened context,
+known-positive ordinary-text search, links and a fresh updates request succeeded in
+the original plugin after recovery. These bounded observations do not establish full
+daily usability or sustained stability; an older activity time alone proves neither
+staleness nor a missing newly arrived message.
+
+## Resident derivative convergence: source candidate
+
+The active Core's repeated derivative deadline failures with zero completed batches
+exposed an unbounded selection query: output LIMIT followed a full resident traversal
+and mismatched sort, and the next attempt repeated the same work. The candidate uses
+the existing resident timeline index to select a bounded position page before testing
+eligibility/receipts or reading payloads. An internal versioned scan envelope in the
+existing state table holds a frozen upper bound and full position. Publication and
+scan progress commit together; rebuild has a separate reset generation. Warm pages
+advance, restarts resume, completed sweeps revisit earlier holes, and a warm sweep
+preserves already-published index readiness. There is no schema/index/sidecar change
+or extra source collection.
+
+Generated dense-stock checks reject the old implementation after 20,000 SQLite VM
+steps and accept the candidate within that bound. Dedicated regressions cover sparse
+history, warm pages, actual worker continuation, restart, append, rebuild and failed
+publication. Full source/artifact gates and live Core activation remain pending.
 
 ## Continued daily reading and lifecycle: active
 
@@ -67,9 +95,8 @@ long-term transport stability or a latency SLO. Generated append/new-reply scena
 the arrival path through real stdio/IPC/Core/edge.
 
 The [SG-061/062](IMPLEMENTATION-PLAN.md) increment is implemented, installed and activated.
-Budget-bounded convergence over a large resident stock remains open: a finite result limit
-and a cancellable query do not establish a bounded scan or restart-safe traversal progress.
-That work, remote cold discovery, scope/coverage explanations and independent retrieval
+Budget-bounded resident traversal is addressed by the source candidate above; its live
+convergence remains unverified. Remote cold discovery, scope/coverage explanations and independent retrieval
 quality remain in the [reading programme](READING-RELIABILITY.md).
 
 ## Daily contact reading: source and activation

@@ -676,6 +676,59 @@ class CoreCaptureTests(unittest.TestCase):
         assert position is not None
         self.assertEqual(position.next_sequence, 5)
 
+    def test_on_demand_catalog_activity_refreshes_without_a_body_capture(self) -> None:
+        self.service.residency.set(self.group, mode="on_demand")
+        preview = self.service.residency.stock_preview(self.group)
+        self.service.residency.release_stock(self.group, plan=preview["plan"])
+        tail_before = self.repository.source_conversation_state(self.group)
+        self.start_edge()
+        self.core.sync_once()
+        account_id = self.repository.account_id_for(self.settings.account_id)
+        before = self.repository.source_catalog_state(account_id)
+        assert before is not None
+
+        with closing(sqlite3.connect(self.source_root / "catalog.db")) as connection:
+            connection.execute(
+                "UPDATE conversations SET last_message_at_utc=? "
+                "WHERE source_conversation_id='conv_group'",
+                ("2026-09-13T09:08:00+00:00",),
+            )
+            connection.commit()
+
+        # A due catalog capture observes source metadata; an on-demand conversation
+        # must not need a body capture merely to refresh its inbox activity.
+        self.core._catalog_due = 0.0
+        original_session = self.provider.session
+        catalog_sessions, body_sessions = [], []
+
+        @contextmanager
+        def catalog_only_session(scope: Any) -> Any:
+            if scope.kind == "catalog":
+                catalog_sessions.append(scope)
+            else:
+                body_sessions.append(scope)
+                raise AssertionError("catalog refresh opened a conversation body session")
+            with original_session(scope) as snapshot:
+                yield snapshot
+
+        with mock.patch.object(self.provider, "session", side_effect=catalog_only_session):
+            self.core.sync_once()
+
+        self.assertEqual(len(catalog_sessions), 1)
+        self.assertEqual(body_sessions, [])
+        self.assertEqual(catalog_sessions[0].kind, "catalog")
+        after = self.repository.source_catalog_state(account_id)
+        assert after is not None
+        self.assertNotEqual(after["last_observed_at"], before["last_observed_at"])
+        inbox = self.call("wechat_read_inbox", kinds=["group"], include_latest="text")
+        self.assertEqual(inbox.get("schema"), "sightglass.inbox-page.v2")
+        item = next(
+            item for item in inbox["items"] if item["conversation_id"] == self.group
+        )
+        self.assertEqual(item["last_message_at"], "2026-09-13T09:08:00.000000+00:00")
+        self.assertEqual(item["latest_state"], "not_resident")
+        self.assertEqual(self.repository.source_conversation_state(self.group), tail_before)
+
     def test_failed_round_robin_conversation_advances_only_the_attempt_cursor(self) -> None:
         self.start_edge()
         self.core.sync_once()

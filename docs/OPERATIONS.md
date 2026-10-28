@@ -215,6 +215,19 @@ Derived readiness／pending probes 也必须位于同一个三秒 operation budg
 budget，取消／deadline 记录为 `SERVICE_TIMEOUT`，未过期的 SQL 错误保留原诊断。这个上限
 保证可中断性，不证明整个 resident stock 的历史 derivative pass 已完成；仍按 coverage 判断。
 
+Derivative traversal 使用已有 `message_resident_timeline` partial index 的完整顺序，
+每 step 先截取至多 100 个 resident positions（repository 上限 200），再逐一检查
+residency/receipt 并只读取待发表的正文。Released skeleton 不参与这个 seek。
+内部 `resident_derivative_scan` 行属于现有 `derived_index_state`，其 versioned recipe
+envelope 记录 frozen upper 与完整五元组 cursor；不用改 schema 或创建 sidecar。
+Publication、checkpoint 与 cursor 在同一短事务提交；失败不越过未发表页。
+Explicit rebuild 在同事务增加独立 scan generation/reset；普通 historical publication
+只增加对应 published index generation，不重置自身遍历。完成后下一次巡检从头开始，
+捕获 cursor 后方旧 receipt/FTS hole、rehydration 与 correction；warm 扫描不会暂时
+关闭已经 ready 的 lexical index。`runtime.derived_worker.scanned_messages` 包含已检查
+的 warm positions，`processed_messages` 只计实际 publication，二者为进程内计数。
+三秒 budget 仍覆盖 probe 与 batch，`scanned_messages` 增长不等于完整 source coverage。
+
 Resource／voice／derived workers 现在先读 durable 状态，只有实际到期或可 claim 的工作
 才取得短 writer transaction；空 resource lease recovery 不取得 writer。每种 worker 有自己的
 Event，新任务、配置／rebuild 通知与最近 retry／lease deadline 驱动等待，默认最长 30 秒

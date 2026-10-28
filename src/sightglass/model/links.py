@@ -13,10 +13,47 @@ from sightglass.contracts.errors import ErrorCode, SightglassError
 from sightglass.source.identity import opaque_id
 from sightglass.source.links import LINK_EXTRACTION_VERSION, ExtractedLink, extract_links
 
-from .current_body import canonical_structured_json, current_body_text, message_view
+from .current_body import (
+    CURRENT_BODY_VERSION,
+    canonical_structured_json,
+    current_body_text,
+    message_view,
+)
 from .db import WindowDB
 from .lexical import LEXICAL_RECIPE, publish_lexical
 from .resident_read import body_is_eligible, resident_body_predicate
+
+SCAN_KIND = "resident_derivative_scan"
+SCAN_VERSION = "sightglass.resident-derivative-scan.v1"
+SCAN_COLUMNS = "conversation_id,sort_primary,sort_seq,sort_tie,source_message_id"
+ScanPosition = tuple[str, str, int, int, str]
+
+
+def _scan_position(row: Any) -> ScanPosition:
+    return tuple(row[k] for k in SCAN_COLUMNS.split(","))  # type: ignore[return-value]
+
+
+def _scan_binding(row: Any) -> tuple[Any, ...] | None:
+    return tuple(row) if row is not None else None
+
+
+def _scan_envelope(position: ScanPosition | None, upper: ScanPosition | None) -> str:
+    # This internal scan kind owns a versioned traversal recipe/envelope in the
+    # existing generic state table. Published links/lexical recipe rows stay separate.
+    return json.dumps({"version": SCAN_VERSION, "links": LINK_EXTRACTION_VERSION,
+                       "lexical": LEXICAL_RECIPE, "body": CURRENT_BODY_VERSION,
+                       "position": position, "upper": upper}, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class _ScanPlan:
+    binding: tuple[Any, ...] | None
+    position: ScanPosition | None
+    upper: ScanPosition | None
+    complete: bool
+    scanned: int
+    rows: tuple[sqlite3.Row, ...]
+    persisted_ready: bool
 
 
 def input_digest(row: Any) -> str:
@@ -31,12 +68,9 @@ def input_digest(row: Any) -> str:
 def needs_publication_predicate(alias: str = "m") -> str:
     """A resident row whose current derivative receipt is missing or stale.
 
-    Ordinary admission publishes a row's link and lexical receipts directly, so
-    the bounded background pass only has to pick up residents that never got a
-    receipt (legacy v10 stock) or whose receipt predates the current recipe
-    (explicit rebuild). A published resident is skipped, so an already-warm
-    resident set costs one index walk and a couple of existence probes per batch
-    instead of a re-publication.
+    Applied only after a bounded resident-position page has been selected.
+    Ordinary admission publishes directly; this repairs legacy/rebuild holes
+    without re-publishing already-current residents or scanning the entire stock.
     """
 
     return (
@@ -207,54 +241,88 @@ class LinkRepository:
         )
 
     def has_pending_backfill(self) -> bool:
-        """Read-only probe; a ready flag alone cannot hide a missing resident receipt."""
-        return bool(self._backfill_candidates(1))
+        """Bounded read-only probe, including warm pages still needing traversal."""
+        plan = self._scan_plan(100)
+        return bool(plan.rows) or not plan.complete or not plan.persisted_ready
 
-    def _backfill_candidates(self, limit: int) -> list[sqlite3.Row]:
+    def _scan_plan(self, limit: int) -> _ScanPlan:
         with self.database.connection() as connection:
-            return connection.execute(
-                f"""SELECT m.* FROM messages AS m INDEXED BY message_resident_timeline
+            scan = connection.execute(
+                "SELECT * FROM derived_index_state WHERE index_kind=?", (SCAN_KIND,)
+            ).fetchone()
+            position = upper = None
+            if scan is not None and scan["state"] == "building":
+                try:
+                    envelope = json.loads(scan["recipe"])
+                    candidate = envelope["position"]
+                    end = envelope["upper"]
+                    def valid(value: Any) -> bool:
+                        return (isinstance(value, list) and len(value) == 5
+                                and all(isinstance(value[i], str) for i in (0, 1, 4))
+                                and all(type(value[i]) is int for i in (2, 3)))
+                    if (valid(candidate) and valid(end)
+                            and json.loads(_scan_envelope(tuple(candidate), tuple(end)))
+                            == envelope):
+                        position, upper = tuple(candidate), tuple(end)
+                except (TypeError, ValueError, KeyError):
+                    pass  # Invalid/old optimization state safely restarts its bounded sweep.
+            if upper is None:
+                last = connection.execute(
+                    "SELECT " + SCAN_COLUMNS + " FROM messages "
+                    "INDEXED BY message_resident_timeline WHERE body_available=1 "
+                    "ORDER BY " + ",".join(c + " DESC" for c in SCAN_COLUMNS.split(","))
+                    + " LIMIT 1"
+                ).fetchone()
+                upper = _scan_position(last) if last is not None else None
+            positions: list[sqlite3.Row] = []
+            if upper is not None:
+                lower = f" AND ({SCAN_COLUMNS})>(?,?,?,?,?)" if position is not None else ""
+                positions = connection.execute(
+                    "SELECT rowid AS scan_rowid," + SCAN_COLUMNS + " FROM messages "
+                    "INDEXED BY message_resident_timeline WHERE body_available=1 "
+                    f"AND ({SCAN_COLUMNS})<=(?,?,?,?,?)" + lower
+                    + " ORDER BY " + SCAN_COLUMNS + " LIMIT ?",
+                    (*upper, *(position or ()), limit),
+                ).fetchall()
+            if not positions:
+                return _ScanPlan(_scan_binding(scan), position, upper, True, 0, (),
+                                 scan is None or scan["state"] == "ready")
+            # LIMIT precedes every eligibility/receipt probe and every payload read.
+            # Both dense warm stock and large released skeleton history stay bounded.
+            rows = connection.execute(
+                f"""SELECT m.* FROM messages AS m NOT INDEXED
                 WHERE m.body_available=1 AND m.current_state='present'
+                  AND m.rowid IN ({','.join('?' for _ in positions)})
                   AND {resident_body_predicate()}
                   AND m.first_observation_seq IS NOT NULL
                   AND m.current_observation_seq IS NOT NULL
-                  AND ({needs_publication_predicate()})
-                ORDER BY m.first_observation_seq, m.message_id LIMIT ?""",
+                  AND ({needs_publication_predicate()})""",
                 (
+                    *(row["scan_rowid"] for row in positions),
                     LINK_EXTRACTION_VERSION,
                     LEXICAL_RECIPE,
-                    limit,
                 ),
             ).fetchall()
+            end = _scan_position(positions[-1])
+            return _ScanPlan(_scan_binding(scan), end, upper,
+                             len(positions) < limit or end == upper, len(positions), tuple(rows),
+                             scan is None or scan["state"] == "ready")
 
     def backfill_batch(self, *, limit: int = 100) -> dict[str, Any]:
         state = self.state()
         bounded = max(1, min(200, int(limit)))
-        # Drive the bounded pass from the resident set itself. The
-        # ``message_resident_timeline`` partial index materialises exactly the
-        # ``body_available=1`` rows, so a fixed small resident set never walks the
-        # durable skeleton history (as an ordered ``message_derived_backfill``
-        # scan would after a rebuild reset its checkpoint to zero). The
-        # eligibility predicate keeps a released/expiring row out of the work
-        # set, and ``needs_publication`` keeps already-published residents out so
-        # an old receipt can never be mistaken for missing coverage.
-        #
-        # Selection is driven purely by ``needs_publication`` ordered by
-        # ``first_observation_seq`` -- deliberately *not* fenced by the stored
-        # checkpoint. That checkpoint is not the index's ordering key, so a
-        # ``first_observation_seq > checkpoint`` fence prunes nothing while it
-        # could permanently skip an eligible resident (e.g. a legacy row whose
-        # receipt is missing) that happens to sit behind a checkpoint a previous
-        # pass already advanced. Convergence is instead guaranteed because every
-        # selected row is published, so the needing-publication set strictly
-        # shrinks each batch until it is empty. The checkpoint remains a
-        # monotonic progress/observability counter.
-        rows = self._backfill_candidates(bounded)
-        if not rows and state["state"] == "ready":
-            return {"processed": 0, **state}
-        prepared = tuple(prepare_links(row) for row in rows)
+        plan = self._scan_plan(bounded)
+        if (not plan.rows and plan.complete and plan.persisted_ready
+                and state["state"] == "ready"):
+            return {"processed": 0, "scanned": plan.scanned, **state}
+        prepared = tuple(prepare_links(row) for row in plan.rows)
         now = utc_now().isoformat(timespec="microseconds")
         with self.database.transaction() as connection:
+            current = connection.execute(
+                "SELECT * FROM derived_index_state WHERE index_kind=?", (SCAN_KIND,)
+            ).fetchone()
+            if _scan_binding(current) != plan.binding:
+                raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
             connection.execute(
                 """INSERT OR IGNORE INTO derived_index_state(index_kind, recipe, updated_at)
                 VALUES ('links', ?, ?)""",
@@ -265,30 +333,52 @@ class LinkRepository:
                     # Roll the entire batch back, including the checkpoint. A subsequent
                     # bounded batch reads the new version rather than skipping the row.
                     raise SightglassError(ErrorCode.SOURCE_GENERATION_CHANGED, retryable=True)
-            checkpoint = prepared[-1].first_observation_seq if prepared else state["checkpoint_seq"]
+            checkpoint = max((item.first_observation_seq for item in prepared),
+                             default=state["checkpoint_seq"])
+            phase = "ready" if plan.complete else "building"
+            # An ordinary warm verification sweep must not disable an already
+            # published lexical index while traversing it. Explicit rebuilds and
+            # recipe changes retain their building state until pass completion.
+            published = ("ready" if plan.complete else state["state"]
+                         if state["recipe"] == LINK_EXTRACTION_VERSION else "building")
             connection.execute(
                 """UPDATE derived_index_state
                 SET checkpoint_seq=MAX(checkpoint_seq, ?), state=?, recipe=?, updated_at=?
                 WHERE index_kind='links'""",
                 (
                     checkpoint,
-                    "building" if len(rows) >= bounded else "ready",
+                    published,
                     LINK_EXTRACTION_VERSION,
                     now,
                 ),
             )
             connection.execute(
                 "UPDATE derived_index_state SET checkpoint_seq=MAX(checkpoint_seq,?), "
-                "state=?, recipe=?, updated_at=? WHERE index_kind='lexical'",
-                (checkpoint, "building" if len(rows) >= bounded else "ready", LEXICAL_RECIPE, now),
+                "state=CASE WHEN ? THEN 'ready' WHEN recipe!=? THEN 'building' ELSE state END, "
+                "recipe=?, updated_at=? WHERE index_kind='lexical'",
+                (checkpoint, plan.complete, LEXICAL_RECIPE, LEXICAL_RECIPE, now),
             )
-        return {"processed": len(rows), **self.state()}
+            connection.execute(
+                """INSERT INTO derived_index_state(index_kind,recipe,state,updated_at)
+                VALUES (?,?,?,?) ON CONFLICT(index_kind) DO UPDATE SET
+                recipe=excluded.recipe,state=excluded.state,updated_at=excluded.updated_at""",
+                (SCAN_KIND, _scan_envelope(plan.position, plan.upper), phase, now),
+            )
+        return {"processed": len(prepared), "scanned": plan.scanned, **self.state(), "state": phase}
 
     def request_rebuild(self, kind: str = "links") -> None:
         # Rebuildable derivatives only; canonical history and reader state are retained.
         # Until each receipt is replaced, its recipe mismatch keeps it out of queries.
         now = utc_now().isoformat(timespec="microseconds")
         with self.database.transaction() as connection:
+            # Separate reset generation: normal historical publication changes the
+            # public index generation and must not reset its own traversal.
+            connection.execute(
+                """INSERT INTO derived_index_state(index_kind,recipe,state,updated_at)
+                VALUES (?,?,'building',?) ON CONFLICT(index_kind) DO UPDATE SET
+                generation=generation+1,recipe=excluded.recipe,state='building',updated_at=?""",
+                (SCAN_KIND, _scan_envelope(None, None), now, now),
+            )
             if kind == "links":
                 connection.execute(
                     "UPDATE message_link_projection SET extraction_version='rebuild-pending'"

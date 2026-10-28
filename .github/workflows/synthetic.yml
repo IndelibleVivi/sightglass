@@ -71,6 +71,7 @@ jobs:
           tests.integration.test_source_discovery_scan.SyntheticDiscoveryScanTests
           tests.unit.test_released_observations tests.integration.test_residency
           tests.integration.test_resident_consolidation
+          tests.integration.test_derived_sweep
           tests.integration.test_compact_candidate tests.integration.test_paired_runtime
           tests.unit.test_cache_control tests.unit.test_v2_decoder tests.unit.test_semantic_benchmark
           tests.unit.test_semantic_runtime tests.unit.test_semantic_service

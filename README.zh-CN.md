@@ -126,7 +126,10 @@ Fresh 只验证这些有界候选，不通过 edge 任意发现从未 admitted �
 身份与 observation episodes。正常 startup 不做 bulk rewrite。
 
 本地 link／lexical reconciliation 只处理仍有驻留资格的正文；release 同时移除其
-本地派生，空闲、重启与 rebuild 不会从历史骨架重建空记录。Resource、voice 与 derived
+本地派生，空闲、重启与 rebuild 不会从历史骨架重建空记录。Derivative sweep 先选有界的
+resident positions，再检查 receipt；publication 与遍历进度同事务提交，重启可续进。
+完成后重新巡检旧位置的缺口；warm verification 保留已发布索引的 readiness。
+这个过程修复已 admission 内容，不收集更多 source 历史。Resource、voice 与 derived
 workers 按新工作、retry／lease deadline 唤醒，保留 30 秒兜底；已 settled 的 on-demand
 metadata 使用同样的低频节奏，keep／recent 保持既有 live-tail 节奏。Native catalog
 连接继续复用，但最多保留 16 个 idle handles，age 阈值为 60 秒；active read 与 narrow

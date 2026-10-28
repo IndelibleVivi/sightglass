@@ -28,6 +28,7 @@ class DerivedIndexWorker:
             "running": False,
             "completed_batches": 0,
             "processed_messages": 0,
+            "scanned_messages": 0,
             "last_error_code": None,
             "paused_for_storage": False,
             **error_fields(),
@@ -91,6 +92,7 @@ class DerivedIndexWorker:
                 self._state.update(
                     completed_batches=self._state["completed_batches"] + 1,
                     processed_messages=self._state["processed_messages"] + result["processed"],
+                    scanned_messages=self._state["scanned_messages"] + result.get("scanned", 0),
                     last_error_code=None,
                     paused_for_storage=False,
                 )
