@@ -30,6 +30,14 @@ limited timeline 与历史缺口，并通过按会话分页补读；这里采用
 新 source 与控制 UI 根据这两条已可使用路径的证据发展。M5/M7 原有范围保留，
 其中没有现实 consumer 的 adapter 不因历史 milestone 编号而优先实现。
 
+2026-10-28 的实际使用进一步收紧这一步的完成标准：Core ready、短窗口 connected、
+一次 fresh 成功都不能替代持续可读。已查实并修复 reboot vault recovery、resident
+derivative 无界遍历与 storage 阻塞、固定 stdio shutdown，以及 tunnel legacy
+initialization 并发交错；仍观察到 edge 自动断连／重连和默认 replica 读取。因此下一轮
+先解释并解决 transport/session 连续性，把 cold/warm、串行/并行、断线恢复和 fresh
+确认纳入同一日常阅读验收，再推进下面的授权连续性与 cold history。不能通过隐藏失败、
+把 replica 计作 fresh 或要求用户反复提供新消息案例来满足这个标准。
+
 远端日用还有 source 授权生命周期的缺口：当前 egress ceiling 是固定 enrollment 集合，
 reader 的 `all_except_denylist` 不能让未来会话自动跨过该边界。后续需要把 scope 的可见
 解释、纳入新会话的流程与 cold source discovery 接到同一条阅读路径。若设计持续账号

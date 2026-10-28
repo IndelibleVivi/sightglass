@@ -73,23 +73,49 @@ operator then explicitly authorized growth of the existing encrypted volume and 
 budget adjustment, preserving the original key/UUID, free floor and recovery. The
 frozen current database remained byte-exact across offline filesystem growth; Core
 and the original automatic-recovery controller resumed. Real-stock warm positions
-now advance across committed batches without a current error. Actual publication
-and whole-pass completion remain separate observations, not a claim of complete
-source/history coverage. There was
+advanced across committed batches without a current error. After the follow-up
+activation, the first live warm pass reached `ready`; subsequent samples left its
+checkpoint unchanged while the worker idled. No new derivative publication was
+observed in that pass. This is not complete source/history coverage. There was
 also a post-upgrade disconnected interval followed by a 16-sample connected window
 and cleared source-worker error. Repeated transport stability remains open.
 
 ## Continued daily reading and lifecycle: active
 
-The current follow-up candidate replaces the fixed Core stdio proxy's blocked
+The activated follow-up replaces the fixed Core stdio proxy's blocked
 stdin daemon thread with a bounded nonblocking descriptor loop, and adds finite
 connection diagnostics to the existing operator snapshot. Generated subprocess
 shutdown, real output backpressure and transient-read tests cover it. Completed
 large warm derivative audits are paced hourly; first/rebuild/unfinished work stays
-immediate and ordinary admission publishes directly. This follow-up is not yet
-the installed Core. It passed 1,687 full local tests, full Pyright/Ruff/compile,
+immediate and ordinary admission publishes directly. Source
+[4cbe963](https://github.com/IndelibleVivi/sightglass/commit/4cbe9638920a985fb774a6dbb422e0c570745398)
+passed 1,687 full local tests, full Pyright/Ruff/compile,
 real output-backpressure bounds and an injected `EAGAIN`/`EINTR` receive regression.
-Built/installed artifact checks, hosted gates and activation remain separate.
+Both hosted jobs in
+[40640890963](https://github.com/IndelibleVivi/sightglass/actions/runs/40640890963)
+passed: 1,687 macOS tests, 1,044 portable tests and both isolated installed-wheel
+gates. Its frozen Linux candidate passed 358 generated installed tests and exact
+138-module/five-rights provenance checks before activation. The current Core retains
+the latest database, configuration/grants, Mac edge process and original tunnel.
+The actual fixed-SSH no-hello shutdown probe now exits zero with empty stderr;
+the previous proxy had a reproducible Python shutdown fatal in that scenario.
+
+Original-plugin acceptance also exposed an external stdio handshake race: parallel
+calls twice returned tunnel-client `409 / mcp_initialization_required`, while a
+sibling call succeeded. The existing tunnel was independently configured with its
+supported initialized-notification shim, preserving its bindings/credentials and
+Core/edge processes. Two subsequent three-call parallel batches passed, including
+links and an image preview. This is bounded interoperability evidence, not a
+change to Sightglass's MCP protocol or a general availability guarantee; see the
+[operator procedure](OPERATIONS.md#tunnel-stdio-initialization).
+
+One fresh cursor attempt after Core activation returned explicit `edge_offline`.
+The edge reconnected automatically; that exact cursor then returned five fresh,
+nonduplicated messages. Inbox, direct-contact fresh recents, anchored local context
+and a known-positive resident text query succeeded. A later ordinary recent selected
+replica during another disconnected interval and must not be counted as fresh.
+Connection diagnostics retained a finite incomplete-frame failure. Intermittent
+edge disconnects remain unresolved; successful calls do not erase those failures.
 
 The active Core retains the behavior introduced in `ea97fc7`: ordinary remote updates
 connect to their selected fresh capture while

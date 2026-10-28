@@ -889,6 +889,33 @@ tunnel-client health --url-file "$TUNNEL_HEALTH_URL_FILE" \
 
 Managed status 缺少 live admin UI snapshot 时可能把 poll health 报为 unknown；上述 health probe 的成功 poll 是独立证据。它仍不能代替一次 named-host authenticated tool call。
 
+### Tunnel stdio initialization
+
+`409 / mcp_initialization_required` 且 error origin 为 `tunnel-client`，表示请求在
+shared stdio child 完成 legacy handshake 前被 transport 拒绝；它不是 Sightglass
+的空消息结果，也不是 `edge_offline`。先核对只有一个实例使用该 tunnel ID，检查
+`GET /health/mcp` 的 same-child lifecycle、child generation 与 initialize epoch。
+Health/poll 成功不能替代 initialized state 或并行 tool acceptance。
+
+标准 FastMCP stdio 在调用方可能遗漏／交错 initialized notification 时，可使用
+installed `tunnel-client` 明确支持的 compatibility option；本项目实际验证的是
+v0.0.16 的 `--mcp.stdio-send-initialized-notification`，或私有 profile 中：
+
+```yaml
+mcp:
+  stdio_send_initialized_notification: true
+```
+
+保留现有 `mcp.commands` 与全部 credential/binding fields，只增加该 field；profile
+before-image 留在 Git 外。停止旧 tunnel owner、原子更新 profile、再启动同一个实例，
+验证原 health/ready/poll 后，用原插件做多次并行 message/search/link/resource 调用。
+失败恢复原 profile 与 owner，不重建 tunnel、不重置 credentials。该 option 在成功的
+forwarded initialize response 后、放行下一条命令前发送 notification，并抑制调用者
+之后的 duplicate；它不替调用者发送 initialize，也不绕过 initialization guard。
+准确版本行为见 [v0.0.16 configuration](https://github.com/openai/tunnel-client/blob/v0.0.16/docs/configuration.md)。
+
+### Managed tunnel and Mac edge
+
 macOS 用户级 launchd 接管必须先停止原 owner，使用 foreground `sightglassd` 与 `tunnel-client run --profile ...`，分别验证唯一 PID、实际 installed runtime、IPC、health/poll 和 host call，失败时恢复原 owner。`RunAtLoad`、异常退出恢复、operator 有意停止和维护命令各有不同语义；不要让自动恢复立即重启一个正在维护的 daemon。后台 owner 还须能读取 runtime 所在卷、private config、Keychain 与已授权 source，并能找到配置所需的外部 processor。仅写入 plist 或显示 process running 不算 activation。锁屏、系统权限或文件打开阻断须先解决并重新验收；不能通过扩大 account policy 或降低保护来绕过。
 
 Mac edge 的 managed process 还要单独验证 macOS App Data 访问；同一 interpreter
