@@ -25,6 +25,84 @@ Linux target 使用已授权的 encrypted storage，key ownership 单独确定�
 VPS 自持 auto-unlock credential 意味着 disk 与该 credential 一起泄露可解密。
 Vault key 不进入 argv、stdout、日志、source tree 或 migration receipt。
 
+## Mac-held vault automatic recovery
+
+这是需要 operator 明确授权的新常驻行为，不能从 source 支持或一次手动解锁推断。
+它沿用现有 Mac Keychain item、已信任且禁止交互的 `emit` helper 和固定 SSH
+forced-command capability，不新增 SSH shell 权限，也不把 key 保存在 VPS。
+Mac offline、Keychain locked、SSH 不通时仍然不能解锁；controller 记录 content-free
+状态并以 60 秒起、最高 900 秒的 backoff 重试，不弹授权提示。
+
+Canonical source 是 `scripts/vault_gateway.py`（Linux）和
+`scripts/vault_recovery.py`（Mac）；二者只依赖 Python standard library。
+它们是独立安装的 operator helper，不改变 Core wheel、数据库、edge spool 或账号授权。
+记录 source commit、安装字节与原入口 before-image 到 Git 外的 operator manifest，
+部署前运行 `python -m unittest tests.unit.test_vault_recovery`。
+
+先在 Linux 为已存在的 vault 建立 root-owned `0600` config。以下都是 placeholder，
+必须取自该 installation 的已验证记录，不能猜 UUID、创建新 image 或重建文件系统：
+
+```json
+{
+  "image": "/private/operator/vault.luks",
+  "uuid": "11111111-1111-1111-1111-111111111111",
+  "mapping": "enrolled-vault",
+  "mount": "/private/encrypted-core",
+  "marker": "/private/encrypted-core/ownership/deployment-ready.json",
+  "services": ["enrolled-core.service", "enrolled-tunnel.service"],
+  "lock": "/private/operator/vault.lock"
+}
+```
+
+保持原 SSH capability/credential/host pinning，把它的 fixed gateway 入口改为
+`exec "$VAULT_PYTHON" "$VAULT_GATEWAY" --config "$VAULT_CONFIG"` 的绝对路径形式；
+这些值由安装者固定，远端 caller 不可传命令/路径。保留可恢复的旧入口，不新增并行
+active implementation。Gateway 验证 image 私有单链常规文件、LUKS UUID、mapping 的
+backing image 和实际 mount；foreign mount/mapping 拒绝。只接受三种 stdin：
+`sightglass-vault-status-v1\n`、原 manual raw 32-byte key、或 `R` 前缀加 32-byte key。
+Config、image 与 lock 必须在 mount 外，避免挂载后更换 lock inode。
+响应仅为有限 booleans/schema/error；所有子命令有 deadline，超时终止其 process group。
+已提交到 systemd 的服务启动由 systemd 管理，controller 必须以之后的 status 确认。
+
+Mac config 也为 `0600`，state directory 为 `0700`，receipt/lock/inhibit 使用同一
+private directory。现有 SSH alias 必须只连这个 fixed capability，并保留独立 key 与
+已 pin 的 known host。`keychain_helper` 必须是已经验证可信的非交互 helper；不能
+为后台恢复自动调用 `authorize`、更改 ACL 或重新编译一个新 binary 来取得权限。
+
+```json
+{
+  "ssh_alias": "enrolled-vault-capability",
+  "keychain_helper": "/private/operator/trusted-keychain-helper",
+  "keychain_account": "existing-item-reference",
+  "receipt": "/private/operator/recovery/state.json",
+  "lock": "/private/operator/recovery/owner.lock",
+  "inhibit": "/private/operator/recovery/inhibit"
+}
+```
+
+先手动运行 `"$MAC_PYTHON" "$VAULT_RECOVERY" --config "$RECOVERY_CONFIG"`。
+Mounted/healthy 状态不读取 Keychain；`services_stopped` 不启动服务；缺 marker 报
+`deployment_not_ready`。只有证明卷未挂载后才读 key，经 SSH stdin 发出 automatic
+frame，并复查 mount/marker/services。Gateway 在锁内再次检查，若已有其他 owner
+挂载，则保留其停机状态。旧 manual 解锁继续保留显式 start 原 services 的行为。
+
+验证后，用用户级 LaunchAgent 指定三个绝对路径组成的 `ProgramArguments`：
+`MAC_PYTHON`、`VAULT_RECOVERY`、`--config`、`RECOVERY_CONFIG`。设 `RunAtLoad=true`、
+`StartInterval=60`；不要加 `KeepAlive`。stdout/stderr 指向 `/dev/null`，有界的
+last-state JSON 是诊断入口，不为每次 probe 积累日志。读取 config 中 `receipt`
+验证实际 managed invocation；agent loaded 不等于已恢复服务。失败不记录异常内容、
+命令输出、路径、Keychain reference 或 key。Controller 不读取微信数据。
+
+**维护与手动恢复：** 有意锁卷前，先创建 config 中的 `inhibit` 文件并停用该
+LaunchAgent，确认已运行的 invocation 退出，再停止原 services/unmount/lock。
+单独创建 inhibit 不能撤回已经发送的 unlock。仅停止 mounted 服务不触发自动
+restart。维护完成后移除 inhibit 并重新启用 agent；若 Keychain 不可非交互读取，
+在交互前台使用原有 manual unlock/authorization 操作，再检查 Core ready、原 tunnel
+health/control-plane poll 和一次插件读取。不要用恢复旧 DB、清 spool 或放宽授权
+来替代恢复挂载。回退 helper 时先停用 controller，恢复记录的旧 fixed 入口；
+不撤销已有 reader state，不重新初始化 vault。完整 VPS reboot drill 另需授权，
+不能为测试这个任务重启无关服务。
+
 保留 usable previous release 和 verified pre-migration recovery。迁移不隐式 retire
 任何 pair/recovery，也不删除旧 active DB 来制造 headroom。按 source、compressed
 recovery、target exact recovery、candidate、WAL/temp 和 free floor 分别计算预算。

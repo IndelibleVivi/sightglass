@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-25. This page owns current source, candidate and publication status.
+Updated: 2026-10-28. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -11,6 +11,26 @@ history belong in private operator records outside Git.
 - Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and source native implementation `sightglass.macos-wechat.sqlcipher.v6.r1`. Native interpretation remains v6; the r1 implementation changes the existing projection/capture epoch recipe. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
+
+## Vault restart recovery: source candidate
+
+A confirmed outage occurred after a host restart left the enrolled encrypted Core
+volume locked. Existing mount/ownership guards correctly kept Core and tunnel down.
+The original Mac-held-key manual recovery restored those services and the original
+plugin, without restoring/reinitializing a database or changing grants. This explains
+that outage, not every stale or missing-message report.
+
+The explicitly authorized automatic-recovery candidate adds standalone standard-library
+operator helpers: a finite fixed-SSH vault status/unlock gateway and a Mac launchd
+one-shot controller. Healthy probes do not read Keychain; automatic recovery preserves
+mounted stopped services, reconfirms the recovered state and supports maintenance
+inhibition with bounded backoff. Vault keys remain Mac-held. Generated regressions
+cover protocol compatibility, recovery failures, concurrency, deadline process-tree
+cleanup, status proof and maintenance races. Installation and live managed invocation
+are separate pending checks. The Core wheel and Mac edge are unchanged by these scripts.
+
+Daily catalog freshness and broader reading acceptance remain under investigation;
+one successful fresh page or a one-minute connected window is not a stability claim.
 
 ## Continued daily reading and lifecycle: active
 

@@ -39,6 +39,14 @@ read-only sessions and one
 deliveries, CAS, processing and MCP. The edge initiates a fixed SSH stdio connection;
 there is no public Sightglass listener or arbitrary provider-method RPC.
 
+When the encrypted Core volume uses a Mac-held key, an explicitly installed Mac
+recovery task can restore the existing vault after a VPS restart. It first probes
+the fixed SSH capability, reads the existing Keychain item only while the vault is
+locked, and leaves an intentionally stopped service alone on a mounted volume.
+The Mac and noninteractive Keychain access must be available. Setup, maintenance
+inhibition and manual recovery are documented in the
+[vault recovery procedure](docs/VPS-MIGRATION.md#mac-held-vault-automatic-recovery).
+
 On macOS, access to another app's protected data container may require the owner
 to confirm an App Data prompt for each new edge process, including a managed
 restart. Verify the actual handshake and fresh read after confirmation; see the

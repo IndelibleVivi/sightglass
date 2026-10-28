@@ -34,6 +34,12 @@ contact 没有消息。Inbox 的 `mode="resident"` 则只查看缓存正文的�
 `window.db`、reader ACK、immutable deliveries、CAS、processing 与 MCP。Edge 主动建立固定
 SSH stdio 连接；Sightglass 没有 public listener，也不开放任意 provider-method RPC。
 
+Core 加密卷由 Mac 持 key 时，可在明确安装后由 Mac 后台恢复任务接住 VPS reboot。
+它先通过固定 SSH capability 查询，只有卷未解锁时才读取已有 Keychain item；卷已挂载、
+服务被有意停止时保留停机状态。恢复仍需要 Mac 在线且 Keychain 可非交互读取。
+安装、维护暂停和手动恢复见
+[vault recovery 操作](docs/VPS-MIGRATION.md#mac-held-vault-automatic-recovery)。
+
 macOS 访问另一个 app 的受保护 data container 时，每个新 edge 进程（包括受管重启）
 都可能需要 owner 亲自确认 App Data 提示。确认后还要验证实际 handshake 与 fresh
 read，见 [操作说明](docs/VPS-MIGRATION.md#owner-activation-与原-tunnel-路由)。

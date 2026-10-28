@@ -11,6 +11,19 @@ declared Mac or synthetic origin. [Linux processing](LINUX-PROCESSING.md) owns
 platform prerequisites and bounded evidence; [current state](current-state.md)
 owns the exact source, artifact and activated-installation status.
 
+An optional explicitly installed Mac vault-recovery controller uses the existing
+fixed SSH vault capability and trusted noninteractive Keychain helper. The server
+accepts only a content-free status frame, a legacy raw 32-byte manual key, or a
+one-byte automatic-recovery prefix followed by that key. It binds the enrolled
+image, LUKS UUID, mapping backing image and mount before acting. Status never
+unlocks or starts services. Automatic recovery rechecks mounted state under its
+lock and preserves already-mounted stopped services; manual unlock retains the
+explicit service-start behavior. The vault key stays in process memory/stdin;
+private configuration and bounded receipts contain no key. This capability
+neither initializes storage nor grants source access. Maintenance must inhibit
+the controller before deliberately locking the vault; see the
+[operator procedure](VPS-MIGRATION.md#mac-held-vault-automatic-recovery).
+
 Controls present now:
 
 - strict/fail-closed source-backed reads plus a separately identified current-epoch materialized read plane; local projection/CAS responses never claim a new live-source confirmation;

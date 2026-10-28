@@ -42,6 +42,7 @@ jobs:
           tests.unit.test_activation tests.unit.test_edge_runtime tests.unit.test_frozen_transfer
           tests.unit.test_edge_rebind
           tests.unit.test_edge_origin_upgrade
+          tests.unit.test_vault_recovery
           tests.unit.test_linux_platform tests.integration.test_capture_edge_relay
           tests.integration.test_capture_reliability
           tests.integration.test_frozen_installation tests.integration.test_replica_reads
@@ -79,7 +80,7 @@ jobs:
           tests.integration.test_search_candidate_window tests.integration.test_m4_daemon
           tests.contract.test_mcp_contract tests.contract.test_mcp_brief
       - run: uv run python -m compileall -q src tests examples
-      - run: uv run ruff check src tests examples/benchmarks
+      - run: uv run ruff check src tests examples/benchmarks scripts/vault_gateway.py scripts/vault_recovery.py
       - run: uv build
       - name: Frozen installed-wheel entrypoints and generated read
         run: uv run python scripts/check-installed-wheel.py
