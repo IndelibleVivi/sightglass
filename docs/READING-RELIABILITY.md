@@ -38,6 +38,17 @@ initialization 并发交错；仍观察到 edge 自动断连／重连和默认 r
 确认纳入同一日常阅读验收，再推进下面的授权连续性与 cold history。不能通过隐藏失败、
 把 replica 计作 fresh 或要求用户反复提供新消息案例来满足这个标准。
 
+2026-10-29 的 Edge 诊断定位到一个具体断连机制：source 尚未返回、没有 stop request
+时，独立的一秒 control reply 期限先于已选 source 预算耗尽。已激活的修复让该 reply
+使用既有剩余预算，并保留 source 到期附近已发 exchange 的短 drain；取消、source
+执行期限与 exact terminal/ACK 边界不变。新的 Mac 进程还实际等待了 App Data 提示，
+owner 确认后同进程恢复，Chat 中自然接续请求显示了五条 fresh 消息；短窗口内未新增
+连接错误。该结果补上一个已证明的失败原因，持续日用与 unattended restart 仍待
+验证。后续继续围绕同一阅读路径收敛：Mac runtime/权限连续性、发送者身份与方向的
+独立证据，以及 capture complete 与历史 coverage 的准确解释。不能凭消息文风改方向，
+也不能把一次成功回执解释为全账号历史完整。具体 gates 与 activation 见
+[current-state](current-state.md)。
+
 远端日用还有 source 授权生命周期的缺口：当前 egress ceiling 是固定 enrollment 集合，
 reader 的 `all_except_denylist` 不能让未来会话自动跨过该边界。后续需要把 scope 的可见
 解释、纳入新会话的流程与 cold source discovery 接到同一条阅读路径。若设计持续账号

@@ -13,12 +13,34 @@ bytes, source/contracts, original settings/grants and pending spool were preserv
 the current Core remains `4cbe963`. Live diagnostics then identified repeated
 `reply_receive / edge_relay_read_timeout` before source return, without a stop request.
 
-The current repair candidate replaces the independent one-second control read limit
-with the already-selected source deadline and existing short final-exchange drain.
-It never extends source work, restarts an expired capture or changes ACK/interpretation.
-Real duplex-socket tests reject the old short-read behavior for a delayed legal reply
-and retain short-budget expiry, partial reply, explicit stop and exact-spool behavior.
-Source/candidate/live verification remain separate; this repair is not yet activated.
+The Edge repair in source
+[d44e0a9](https://github.com/IndelibleVivi/sightglass/commit/d44e0a98adff75c81e2fb8e6e46385bd6f1a1430)
+replaces the independent one-second control read limit with the already-selected
+source deadline and existing short final-exchange drain. It never extends source
+work, restarts an expired capture or changes ACK/interpretation. Real duplex-socket
+tests reject the old short-read behavior for a delayed legal reply and retain
+short-budget expiry, partial reply, explicit stop and exact-spool behavior.
+Both hosted jobs in
+[40874158926](https://github.com/IndelibleVivi/sightglass/actions/runs/40874158926)
+passed: 1,699 macOS tests, 1,044 portable tests, typing/lint/build and both isolated
+installed-wheel gates. The frozen Mac candidate passed 105 installed generated tests
+with exact 138-module/five-rights provenance and unchanged frozen dependencies,
+native binaries, source/contracts and SQLite before activation. Only the Mac Edge
+advanced to `d44e0a9`; Core remains `4cbe963`, with the original settings, grants,
+pending spool and origin. The temporary passive SSH entry probe was restored to its
+exact original entry before the final acceptance.
+
+The new Edge initially waited for the operator's macOS App Data confirmation.
+After that confirmation, the same process recovered without another restart.
+Direct fresh recent/context reads succeeded, and an actual ChatGPT conversation
+continued a previously failed contact read and displayed five fresh messages.
+A subsequent 150-second window recorded 50/50 connected samples, 14 additional
+source-worker polls, no current source error and no increase in Core/Edge connection
+errors. These are bounded post-confirmation observations. They do not establish
+unattended App Data permission, all-day stability, complete history, newly arrived
+message parity or a latency SLO. The displayed result also raised a sender-direction
+question; no native direction defect has yet been established from independent
+evidence. A complete capture receipt must not be described as complete account history.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
@@ -128,8 +150,10 @@ The edge reconnected automatically; that exact cursor then returned five fresh,
 nonduplicated messages. Inbox, direct-contact fresh recents, anchored local context
 and a known-positive resident text query succeeded. A later ordinary recent selected
 replica during another disconnected interval and must not be counted as fresh.
-Connection diagnostics retained a finite incomplete-frame failure. Intermittent
-edge disconnects remain unresolved; successful calls do not erase those failures.
+Connection diagnostics retained a finite incomplete-frame failure. At that stage,
+intermittent edge disconnects remained unresolved. The subsequently activated Edge
+repair above addresses one confirmed control-read timeout cause; it does not erase
+the earlier failures or establish sustained availability.
 
 The active Core retains the behavior introduced in `ea97fc7`: ordinary remote updates
 connect to their selected fresh capture while
