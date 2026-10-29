@@ -14,7 +14,7 @@ from mcp.types import EmbeddedResource, TextResourceContents
 
 from sightglass.contracts.voice import VoiceReadSettings
 from sightglass.mcp.bridge import DaemonReaderTools
-from sightglass.mcp.projection import BRIEF_PROFILE, project_result
+from sightglass.mcp.projection import BRIEF_PROFILE, next_actions, project_result
 from sightglass.mcp.server import create_server
 from sightglass.mcp.tools import ReaderTools
 from sightglass.model.links import LinkRepository
@@ -65,6 +65,17 @@ class McpBriefTests(unittest.TestCase):
                 self.assertIsInstance(value, str, action)
                 self.assertTrue(value, action)
                 self.assertIn(action["parameter"], {"cursor", "reading_token"})
+
+    def test_catalog_cursor_actions_work_without_a_host_view_parameter(self) -> None:
+        for tool in ("wechat_read_inbox", "wechat_find_conversations"):
+            with self.subTest(tool=tool):
+                actions = next_actions(tool, {
+                    "page": {"next_cursor": "signed-catalog-cursor"},
+                    "source_receipt": {"view": "fresh"},
+                }, {})
+                self.assertEqual(actions[0]["parameter"], "cursor")
+                self.assertTrue(actions[0]["reuse_arguments"])
+                self.assertNotIn("view", actions[0].get("arguments", {}))
 
     def test_complete_catalog_matches_and_registered_calls_default_to_brief(self) -> None:
         # Raw ReaderTools has the production default, without the legacy fixture shim.

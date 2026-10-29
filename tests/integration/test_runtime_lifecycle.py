@@ -569,7 +569,12 @@ class RuntimeLifecycleTests(unittest.TestCase):
         self.assertTrue(self.daemon._runtime_closed)
         self.assertIsNone(self.daemon._lock_handle)
         with database.connection() as connection:
-            count = connection.execute("SELECT COUNT(*) FROM access_receipts").fetchone()[0]
+            # Catalog capture has its own synchronous durable ledger rows. The
+            # asynchronous writer must drain this one reader access exactly once.
+            count = connection.execute(
+                "SELECT COUNT(*) FROM access_receipts WHERE tool_name = ?",
+                ("wechat_find_conversations",),
+            ).fetchone()[0]
             self.assertEqual(count, 1)
 
     def test_candidate_status_receipt_stays_dormant_before_startup_recovery(self):

@@ -79,6 +79,36 @@ remains a separate implementation and owner-authorization boundary.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
+## Foreground catalog and persistent source access: source candidates
+
+New remote recent-inbox and conversation-discovery calls now select a catalog
+capture when connected. Offline, explicit replica and resident inbox requests stay
+local; signed continuations preserve their original plane and fact time. Foreground
+and background share the catalog-state admission owner and the existing transaction-bound
+receive/ACK path. Metadata refresh neither imports message history nor certifies the
+freshness of cached body previews. The independent background catalog cadence remains.
+Canonical integration passed 1,754 tests, full Ruff/Pyright and compilation. The
+no-background catalog journey covers generated stdio/IPC/Core/Edge calls; signed
+continuations also work on hosts that expose only the cursor parameter. This source
+candidate has not yet replaced the activated `9e7dae8` Core; frozen installation and
+hosted gates are separate next steps.
+
+The optional [macOS source-access helper](SOURCE-ACCESS.md) uses protocol v3,
+one exact account-directory grant, authenticated implicit-bookmark transfer and a
+lease covering the source lifetime. Preparation is grant-only or a new shadow config;
+there is no in-place configuration rewrite or automatic activation. Native origin,
+schema, transport, keys and egress policy are unchanged. Generated tests cover the
+Swift/Python protocol, fragmented input, nullable fields, correlated errors, scope
+and proof failures, before-images and teardown. Non-granting compiled sandbox checks
+ran on macOS using a separate generated-test bundle identity. The 29 focused bridge
+and Edge tests passed, including a real compiled Swift DTO/parser/encoder harness;
+the earlier malformed framing, nullable-field and error-correlation behaviors were
+rejected by the new regression. A compiled production-writer probe also covers first
+publication, replacement, private permissions and uncertain post-publication failure.
+It caught and now rejects the Foundation directory-open failure; publication uses an
+explicit directory descriptor and fsync. A real account-directory grant, second-process access and persistence
+after restart remain separate owner-authorized acceptance; this helper is not active.
+
 ## Vault restart recovery: installed
 
 A confirmed outage occurred after a host restart left the enrolled encrypted Core

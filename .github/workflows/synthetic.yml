@@ -42,6 +42,7 @@ jobs:
           tests.unit.test_activation tests.unit.test_edge_runtime tests.unit.test_frozen_transfer
           tests.unit.test_edge_rebind
           tests.unit.test_edge_origin_upgrade
+          tests.unit.test_source_access tests.unit.test_edge_source_access
           tests.unit.test_vault_recovery
           tests.unit.test_linux_platform tests.integration.test_capture_edge_relay
           tests.integration.test_capture_reliability
@@ -52,6 +53,7 @@ jobs:
           tests.integration.test_backfill_stale_jobs tests.integration.test_caller_cancellation
           tests.integration.test_remote_caller_cancellation
           tests.integration.test_daily_recents
+          tests.integration.test_foreground_catalog
           tests.integration.test_native_identity_window
           tests.unit.test_delivery_durability tests.unit.test_resource_reliability
           tests.unit.test_legacy_cas_recovery tests.unit.test_voice_workspace_recovery

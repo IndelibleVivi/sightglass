@@ -3,8 +3,8 @@
 Server name: `sightglass`. Responses are JSON-compatible mappings with explicit schema versions. The bridge exposes only:
 
 - `wechat_status(detail="summary"|"sources"|"capabilities")`
-- `wechat_find_conversations(query, account_id?, kinds?, recent_only?, limit?, cursor?)`
-- `wechat_read_inbox(account_id?, after?, before?, kinds?, unread_only?, include_latest="metadata", cursor?, limit=50, mode="recent"|"resident")`
+- `wechat_find_conversations(query, account_id?, kinds?, recent_only?, limit?, cursor?, view?)`
+- `wechat_read_inbox(account_id?, after?, before?, kinds?, unread_only?, include_latest="metadata", cursor?, limit=50, mode="recent"|"resident", view?)`
 - `wechat_find_participants(conversation_id, query, active_after?, detail_level?, limit?, cursor?)`
 - `wechat_read_messages(mode, conversation_id?, message_id?, anchor?, before?, after?, limit?, direction?, cursor?, ack_delivery_id?, participant_ids?, speaker_view?, time_after?, time_before?, query?, projection?, include_resources?, system_policy?, voice?, refresh?, view?, request_id?)`
 - `wechat_read_transcripts(reading_token, cursor?, wait_ms?)`
@@ -47,9 +47,23 @@ Each item retains conversation ID/kind/title/time/unread count and adds:
 
 Coverage uses `message_scope="catalog_activity"`, `activity_conversations` for the
 filtered activity total and `indexed_conversations` for the subset with a readable
-preview. The materialized receipt always reports bounded-stale freshness, never new
-source confirmation. `complete` refers to catalog coverage, never complete messages
-or history. A conflicted conversation may retain a catalog entry, but exposes no
+preview. New remote recent inbox and conversation discovery calls without an explicit
+`view` select `fresh` when the edge is connected, using the existing typed catalog
+capture. `view="replica"` and offline defaults stay local and bounded-stale; resident
+inbox always stays local (`view="fresh"` with resident mode is invalid). A selected
+fresh request fails on disconnect, deadline or capture rejection without stale fallback.
+No keep setting, message capture, history traversal or IR is required. Background
+catalog capture retains its existing 30-second due schedule independently of keep;
+foreground priority, bounded work and failure backoff can delay background refresh.
+
+Fresh receipt `freshness_scope="catalog_metadata"` and
+`freshness.live_refresh_confirmed=true` confirm only that request's catalog capture.
+An inbox's `preview_freshness="bounded_stale"` describes its separate resident preview;
+source catalog activity never establishes current message text or sender evidence.
+`fresh_as_of` / `coverage.catalog_fresh_as_of` retain the source snapshot's fact time
+(native main/WAL modification time), not a fabricated confirmation wall clock. Repeated
+successful captures of unchanged native facts may retain the same time. `complete`
+refers to catalog coverage, never complete messages or history. A conflicted conversation may retain a catalog entry, but exposes no
 conflicted body/sender preview. Local catalog readability does not wait for all tails
 to complete a projection refresh.
 
@@ -58,6 +72,11 @@ operation, not complete conversation or account history. Preserve the separate
 coverage and continuation limits when explaining a result to the reader.
 
 Recent pagination binds the complete authorized activity/preview projection and mode.
+New catalog/inbox cursors also sign the selected view and original catalog fact time.
+Continuations validate locally and retain that plane and snapshot when transport changes;
+they do not recapture catalog or claim a new live confirmation. Explicit view mismatch
+is `CURSOR_INVALID`; legacy replica cursors retain their replica meaning. Catalog changes
+may return `CURSOR_STALE` under the existing digest fence; no durable list snapshot is added.
 Catalog activity, unread, title, visibility or projected preview changes make a cursor
 stale; it never silently loses a contact that moved ahead. Bodies appended after its
 observation watermark cannot enter a later preview. `mode="resident"` explicitly
@@ -108,7 +127,7 @@ automatically acknowledges a delivery or deletes an already committed winner.
 
 ## Read views and operation capture
 
-消息读取、literal search、`find_links` 和 `retrieve` 接受可选 `view="replica"|"fresh"`。
+消息读取、literal search、`find_links`、`retrieve`、inbox 与 conversation discovery 接受可选 `view="replica"|"fresh"`。
 `ReaderService(default_view="auto")` 保留既有本机默认行为：符合条件的 message/cache reads
 使用本地 projection，普通 search/cold discovery 沿用下面的 source preparation contract。
 配置为 replica 的 core 使用 `default_view="replica"`，省略 `view` 时通常读取已 admitted 的当前

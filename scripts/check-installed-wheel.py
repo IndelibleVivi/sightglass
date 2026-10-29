@@ -29,6 +29,11 @@ from pathlib import Path
 
 ENTRYPOINTS = {"sightglassctl", "sightglassd", "sightglass-mcp", "sightglass-pair"}
 RUNTIME_EXTRAS = ("macos-wechat", "voice")
+SOURCE_ACCESS_HELPER_ASSETS = {
+    "Info.plist",
+    "SightglassSourceAccess.entitlements",
+    "SightglassSourceAccess.swift",
+}
 
 
 def clean_environment() -> dict[str, str]:
@@ -86,6 +91,40 @@ def validate_wheel(wheel: Path, repository: Path) -> dict:
             "wheel": wheel.name, "wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
             "package_source_files": len(expected), "license_files": licenses,
             "entrypoints": scripts}
+
+
+def validate_sdist(repository: Path, sdist: Path | None = None) -> dict:
+    """Require the helper source, app plist, entitlements and build script."""
+    import tarfile
+
+    source = repository / "swift" / "sightglass-source-access"
+    expected = {
+        f"swift/sightglass-source-access/{name}": (source / name).read_bytes()
+        for name in SOURCE_ACCESS_HELPER_ASSETS
+    }
+    expected["scripts/build-source-access-helper.sh"] = (
+        repository / "scripts" / "build-source-access-helper.sh"
+    ).read_bytes()
+    archives = [sdist] if sdist is not None else sorted((repository / "dist").glob("*.tar.gz"))
+    if len(archives) != 1:
+        raise RuntimeError("select exactly one built sdist (or a clean dist/)")
+    with tarfile.open(archives[0], "r:gz") as archive:
+        members = {member.name: member for member in archive.getmembers() if member.isfile()}
+        roots = {name.split("/", 1)[0] for name in members}
+        if len(roots) != 1:
+            raise RuntimeError("sdist has an unexpected archive root")
+        root = next(iter(roots))
+        for relative, body in expected.items():
+            member = members.get(f"{root}/{relative}")
+            handle = archive.extractfile(member) if member is not None else None
+            if handle is None or handle.read() != body:
+                raise RuntimeError(f"sdist helper payload changed: {relative}")
+    return {
+        "sdist": archives[0].name,
+        "sdist_sha256": hashlib.sha256(archives[0].read_bytes()).hexdigest(),
+        "source_access_assets": sorted(expected),
+    }
+
 
 
 def installed_probe(root: Path) -> None:
@@ -172,29 +211,32 @@ def installed_probe(root: Path) -> None:
                       "mcp_tools": tool_count, "synthetic_read": observed}, sort_keys=True))
 
 
-def check(wheel: Path, repository: Path, python: str) -> dict:
+def check(wheel: Path, repository: Path, python: str, sdist: Path | None = None,
+          *, offline: bool = False) -> dict:
     identity = validate_wheel(wheel, repository)
+    identity.update(validate_sdist(repository, sdist))
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv is required for frozen runtime installation")
     env = clean_environment()
+    uv_command = [uv, *(["--offline"] if offline else [])]
     with tempfile.TemporaryDirectory(prefix="sightglass-installed-wheel-") as directory:
         root = Path(directory)
         empty = root / "empty"
         empty.mkdir()
         requirements = root / "requirements.txt"
-        subprocess.run([uv, "export", "--frozen", "--no-dev", "--no-default-groups",
+        subprocess.run([*uv_command, "export", "--frozen", "--no-dev", "--no-default-groups",
                         "--extra", RUNTIME_EXTRAS[0], "--extra", RUNTIME_EXTRAS[1],
                         "--no-emit-project", "--output-file", str(requirements)],
                        cwd=repository, env=env, capture_output=True, text=True, check=True)
         runtime = root / "runtime"
-        subprocess.run([uv, "venv", "--python", python, str(runtime)], cwd=empty,
+        subprocess.run([*uv_command, "venv", "--python", python, str(runtime)], cwd=empty,
                        env=env, capture_output=True, text=True, check=True)
         interpreter = runtime / "bin" / "python"
-        subprocess.run([uv, "pip", "sync", "--python", str(interpreter),
+        subprocess.run([*uv_command, "pip", "sync", "--python", str(interpreter),
                         "--require-hashes", str(requirements)], cwd=empty, env=env,
                        capture_output=True, text=True, check=True)
-        subprocess.run([uv, "pip", "install", "--python", str(interpreter), "--no-deps",
+        subprocess.run([*uv_command, "pip", "install", "--python", str(interpreter), "--no-deps",
                         str(wheel)], cwd=empty, env=env, capture_output=True, text=True, check=True)
         shutil.copyfile(__file__, root / "probe.py")
         shutil.copyfile(repository / "examples" / "synthetic_read.py", root / "synthetic_read.py")
@@ -209,6 +251,8 @@ def check(wheel: Path, repository: Path, python: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", type=Path)
+    parser.add_argument("--sdist", type=Path)
+    parser.add_argument("--offline", action="store_true", help="use cached dependencies only")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--probe", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -220,7 +264,10 @@ def main() -> None:
     if len(wheels) != 1:
         parser.error("select exactly one built wheel with --wheel (or a clean dist/)")
     try:
-        print(json.dumps(check(wheels[0].resolve(), repository, args.python), indent=2))
+        print(json.dumps(check(
+            wheels[0].resolve(), repository, args.python,
+            args.sdist.resolve() if args.sdist is not None else None, offline=args.offline,
+        ), indent=2))
     except subprocess.CalledProcessError as error:
         raise RuntimeError(f"installed-wheel command failed: {error.cmd}\n"
                            f"{error.stdout}\n{error.stderr}") from error

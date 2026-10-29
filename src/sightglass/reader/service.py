@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 import re
 import sys
@@ -367,6 +368,142 @@ class ReaderService:
                  or self.capture_transport_state() == "edge_connected")
         return {**arguments, "view": "fresh" if fresh else "replica"}
 
+    def catalog_managed_request(self, arguments: dict[str, Any]) -> bool:
+        if self.default_view == "replica" or arguments.get("view") is not None:
+            return True
+        cursor = arguments.get("cursor")
+        if isinstance(cursor, str) and cursor:
+            try:
+                return self.token_codec.decode(cursor).get("snapshot", {}).get("view") == "fresh"
+            except SightglassError:
+                return False
+        return False
+
+    def bind_catalog_view(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Choose once before lane admission; signed continuations never reacquire."""
+        selected = {key: value for key, value in arguments.items() if key != "response_profile"}
+        method = self.read_inbox if name == "wechat_read_inbox" else self.find_conversations
+        try:
+            bound = inspect.signature(method).bind(**selected)
+            bound.apply_defaults()
+            values = bound.arguments
+            if values["kinds"] is None:
+                values["kinds"] = ("direct", "group")
+            self.reader.require_active()
+            if not self.reader.policy.messages:
+                raise SightglassError(ErrorCode.POLICY_DENIED)
+            if (type(values["limit"]) is not int or values["limit"] < 1
+                    or not isinstance(values["kinds"], (list, tuple))
+                    or any(kind not in {"direct", "group"} for kind in values["kinds"])):
+                raise SightglassError(ErrorCode.QUERY_INVALID)
+            self.reader.bound_limit(values["limit"])
+            if name == "wechat_read_inbox":
+                if (values["mode"] not in {"recent", "resident"}
+                        or values["include_latest"] not in {"metadata", "text"}
+                        or type(values["unread_only"]) is not bool):
+                    raise SightglassError(ErrorCode.QUERY_INVALID)
+                for key in ("after", "before"):
+                    if values[key] is not None:
+                        to_utc_iso(values[key])
+            elif not isinstance(values["query"], str) or type(values["recent_only"]) is not bool:
+                raise SightglassError(ErrorCode.QUERY_INVALID)
+            account = values["account_id"]
+            if account is not None and not isinstance(account, str):
+                raise SightglassError(ErrorCode.QUERY_INVALID)
+            from sightglass.source.remote import RemoteCaptureProvider
+
+            if isinstance(self._provider, RemoteCaptureProvider):
+                expected = self.repository.account_id_for(self._provider.settings.account_id)
+                if account is not None and account != expected:
+                    raise SightglassError(ErrorCode.ACCOUNT_NOT_FOUND)
+            elif account is not None and account not in self.repository.active_account_ids():
+                raise SightglassError(ErrorCode.ACCOUNT_NOT_FOUND)
+            view = values["view"]
+            if view is not None and view not in {"replica", "fresh"}:
+                raise SightglassError(ErrorCode.QUERY_INVALID)
+            cursor = values["cursor"]
+            if cursor is not None:
+                if not isinstance(cursor, str) or not cursor:
+                    raise SightglassError(ErrorCode.CURSOR_INVALID)
+                payload = self.token_codec.decode(cursor)
+                original = payload.get("snapshot", {}).get("view", "replica")
+                if original not in {"replica", "fresh"} or (view is not None and view != original):
+                    raise SightglassError(ErrorCode.CURSOR_INVALID)
+                view = original
+            if name == "wechat_read_inbox" and values["mode"] == "resident":
+                if view == "fresh":
+                    raise SightglassError(ErrorCode.QUERY_INVALID)
+                view = "replica"
+            if view is None:
+                view = ("fresh" if self._operation_provider.get() is not None
+                        or self.capture_transport_state() == "edge_connected" else "replica")
+            return {**arguments, "view": view}
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise SightglassError(ErrorCode.QUERY_INVALID) from exc
+
+    def _catalog_replica(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        values = {key: value for key, value in arguments.items() if key != "response_profile"}
+        method = self.read_inbox if name == "wechat_read_inbox" else self.find_conversations
+        bound = inspect.signature(method).bind(**values)
+        bound.apply_defaults()
+        values = dict(bound.arguments)
+        values["kinds"] = tuple(values["kinds"] or ("direct", "group"))
+        if name == "wechat_find_conversations":
+            result = self.replica.find_conversations(**values)
+            if values["view"] == "fresh":
+                result["source_receipt"]["freshness_scope"] = "catalog_metadata"
+            return result
+        values["bounded"] = self.reader.bound_limit(values.pop("limit", 50))
+        values["after_utc"] = to_utc_iso(values.pop("after")) if values.get("after") else None
+        values.pop("after", None)
+        values["before_utc"] = to_utc_iso(values.pop("before")) if values.get("before") else None
+        values.pop("before", None)
+        result = self.replica.read_inbox(**values)
+        if values["view"] == "fresh":
+            result["source_receipt"]["freshness_scope"] = "catalog_metadata"
+            result["source_receipt"]["preview_freshness"] = "bounded_stale"
+        return result
+
+    def local_catalog_read_ready(self, name: str, arguments: dict[str, Any]) -> bool:
+        try:
+            bound = self.bind_catalog_view(name, arguments)
+            if bound.get("cursor") is not None:
+                self._catalog_replica(name, bound)  # full signature/scope/policy/epoch preflight
+                return True
+            return bound["view"] == "replica"
+        except SightglassError:
+            return True
+
+    def _read_fresh_catalog(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        with self._source_read() as (stack, snapshot):
+            catalog = self._read_catalog(snapshot)
+            with self._admission(stack):
+                self._admit_catalog_metadata(catalog, snapshot)
+                result = self._catalog_replica(name, arguments)
+                result["source_receipt"]["freshness"].update(
+                    state="live_validated", live_refresh_confirmed=True,
+                )
+                return result
+
+    def _admit_catalog_metadata(self, catalog: _CatalogRead, snapshot: SourceSnapshot) -> None:
+        """One foreground/background owner for catalog facts, never body coverage."""
+        self._persist_catalog(catalog, snapshot)
+        facts = self._catalog_facts(snapshot)
+        epoch = self._projection_inventory_epoch()
+        for account_id, _ in catalog.accounts:
+            current = {entry.conversation_id for entry in catalog.catalog
+                       if entry.account_id == account_id
+                       and self.reader.policy.permits(entry.conversation_id)}
+            handled = self._catalog_handled_ids(account_id, projection_epoch=epoch)
+            previous = self.repository.source_catalog_state(account_id)
+            self.repository.record_source_catalog_state(
+                account_id=account_id,
+                inventory_epoch=epoch if current <= handled else snapshot.inventory_digest,
+                coverage_state="complete" if facts.complete else "partial",
+                observed_at=snapshot.fresh_as_of,
+                next_cursor_token=previous["next_cursor_token"] if previous else None,
+            )
+
     @staticmethod
     def _view_scope(scope_key: str, view: str) -> str:
         return scope_key if view == "auto" else opaque_id("wxviewscope", scope_key, view)
@@ -536,6 +673,10 @@ class ReaderService:
         existing foreground exclusion. The check never guesses from the tool name alone.
         """
 
+        if name in {"wechat_read_inbox", "wechat_find_conversations"} and (
+            self.catalog_managed_request(arguments)
+        ):
+            return self.local_catalog_read_ready(name, arguments)
         if name == "wechat_read_messages":
             return self.local_message_read_ready(arguments)
         if name in {"wechat_search_messages", "wechat_find_links", "wechat_retrieve"}:
@@ -1861,14 +2002,18 @@ class ReaderService:
         recent_only: bool = False,
         limit: int = 20,
         cursor: str | None = None,
+        view: str | None = None,
     ) -> dict[str, Any]:
         self.reader.require_active()
         bounded = self.reader.bound_limit(limit)
-        if self.default_view == "replica":
-            return self.replica.find_conversations(
-                query, account_id=account_id, kinds=kinds, recent_only=recent_only,
-                limit=bounded, cursor=cursor,
-            )
+        if self.catalog_managed_request({"view": view, "cursor": cursor}):
+            arguments = self.bind_catalog_view("wechat_find_conversations", dict(
+                query=query, account_id=account_id, kinds=kinds, recent_only=recent_only,
+                limit=bounded, cursor=cursor, view=view,
+            ))
+            if arguments["view"] == "fresh" and cursor is None:
+                return self._read_fresh_catalog("wechat_find_conversations", arguments)
+            return self._catalog_replica("wechat_find_conversations", arguments)
         with self._source_read() as (stack, snapshot):
             catalog_read = self._read_catalog(snapshot)
             mappings = catalog_read.mappings
@@ -2014,6 +2159,7 @@ class ReaderService:
         cursor: str | None = None,
         limit: int = 50,
         mode: str = "recent",
+        view: str | None = None,
     ) -> dict[str, Any]:
         self.reader.require_active()
         if mode not in {"recent", "resident"}:
@@ -2025,12 +2171,20 @@ class ReaderService:
         after_utc = to_utc_iso(after) if after else None
         before_utc = to_utc_iso(before) if before else None
         bounded = self.reader.bound_limit(limit)
-        # Recent contacts belong to the observed catalog, independently of body
-        # residency or background tail/history completion. Reading catalog activity
-        # neither opens the source nor imports bodies.
+        # Catalog activity is independent of body residency or tail completion.
+        # A managed fresh request acquires metadata only; previews remain resident.
         accounts = self.repository.active_account_ids()
         catalog_account = account_id or (accounts[0] if len(accounts) == 1 else None)
-        if self.default_view == "replica" or (
+        if self.catalog_managed_request({"view": view, "cursor": cursor}):
+            arguments = self.bind_catalog_view("wechat_read_inbox", dict(
+                account_id=account_id, after=after, before=before, kinds=kinds,
+                unread_only=unread_only, include_latest=include_latest, cursor=cursor,
+                limit=bounded, mode=mode, view=view,
+            ))
+            if arguments["view"] == "fresh" and cursor is None:
+                return self._read_fresh_catalog("wechat_read_inbox", arguments)
+            return self._catalog_replica("wechat_read_inbox", arguments)
+        if (
             mode == "recent" and catalog_account in accounts
             and self.repository.source_catalog_state(str(catalog_account)) is not None
         ):
@@ -2315,6 +2469,7 @@ class ReaderService:
         live_warning_codes: tuple[str, ...] = (),
         projection_epoch: str | None = None,
         activity: bool = False,
+        view: str = "replica",
     ) -> dict[str, Any]:
         scope_key = self._scope_digest(
             {
@@ -2324,7 +2479,7 @@ class ReaderService:
                 "unread_only": bool(unread_only),
                 "include_latest": include_latest,
                 **({"mode": "recent"} if activity else {}),
-                **({"view": "replica", "projection_epoch": projection_epoch}
+                **({"view": view, "projection_epoch": projection_epoch}
                    if projection_epoch is not None else {}),
             }
         )
@@ -2341,6 +2496,7 @@ class ReaderService:
                 policy_revision=policy_revision,
             )
             cursor_snapshot = payload["snapshot"]
+            catalog_fresh_as_of = payload["snapshot"].get("catalog_as_of", catalog_fresh_as_of)
             observation_seq = payload["snapshot"].get("observation_seq")
             if not isinstance(observation_seq, int) or observation_seq < 0:
                 raise SightglassError(ErrorCode.CURSOR_INVALID)
@@ -2447,6 +2603,8 @@ class ReaderService:
                 snapshot={
                     "observation_seq": observation_seq,
                     "inbox_epoch": inbox_epoch,
+                    "view": view,
+                    "catalog_as_of": catalog_fresh_as_of,
                 },
             )
             if has_more and page_rows

@@ -83,10 +83,12 @@ def next_actions(
     selected_view = receipt.get("view") or arguments.get("view")
     view_arguments = {"view": selected_view} if selected_view in {"replica", "fresh"} else {}
     for action in actions:
-        if view_arguments and name != "wechat_read_messages":
+        if view_arguments and name not in {
+            "wechat_read_messages", "wechat_read_inbox", "wechat_find_conversations",
+        }:
             action["arguments"] = dict(view_arguments)
         if name == "wechat_read_messages" and arguments.get("refresh"):
-            # A signed message cursor carries its view, including on existing
+            # Signed message and catalog cursors carry their view, including on existing
             # hosts that expose refresh without a separate view parameter.
             action["clear_arguments"].append("refresh")
     continuation = receipt.get("source_continuation", {}).get("reading_token")

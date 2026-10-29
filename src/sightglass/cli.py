@@ -121,6 +121,35 @@ def _parser() -> argparse.ArgumentParser:
     )
     edge_rebind.add_argument("--settings", type=Path, required=True)
     edge_rebind.add_argument("--same-account", action="store_true", required=True)
+    source_access = commands.add_parser(
+        "source-access",
+        help="explicit macOS account-folder bookmark authorization; never opens a source",
+    )
+    source_access_commands = _subcommands(
+        source_access, dest="source_access_command", required=True
+    )
+    source_access_check = source_access_commands.add_parser(
+        "check", help="validate a built source-access helper without opening a picker"
+    )
+    source_access_check.add_argument("--helper", type=Path, required=True)
+    source_access_preview = source_access_commands.add_parser(
+        "preview", help="show exact account and optional shared-file grant scopes"
+    )
+    source_access_preview.add_argument("--settings", type=Path, required=True)
+    source_access_preview.add_argument("--include-shared-config", action="store_true")
+    source_access_authorize = source_access_commands.add_parser(
+        "authorize",
+        help="open the explicit account-folder picker; binding is a separate step",
+    )
+    source_access_authorize.add_argument("--settings", type=Path, required=True)
+    source_access_authorize.add_argument("--helper", type=Path, required=True)
+    source_access_authorize.add_argument("--include-shared-config", action="store_true")
+    source_access_authorize.add_argument("--output", type=Path)
+    source_access_authorize.add_argument(
+        "--bind",
+        action="store_true",
+        help="write the helper binding to a new --output shadow settings file",
+    )
 
     edge_inspect = commands.add_parser(
         "edge-recovery-inspect", help="private cached loss identity; stopped edge only"
@@ -630,7 +659,9 @@ def _legacy_cache_links(args: argparse.Namespace, store: ConfigStore) -> dict[st
     try:
         with frozen_object_bindings(config.window_db_path) as binding:
             return ResourceObjectStore(config.window_db_path).legacy_links(
-                binding, digest=args.digest, expect=args.expect if repair else None,
+                binding,
+                digest=args.digest,
+                expect=args.expect if repair else None,
             )
     finally:
         release_runtime_lock(runtime_lock)
@@ -1177,6 +1208,51 @@ def main(argv: list[str] | None = None) -> None:
             from sightglass.runtime.edge_runtime import rebind_edge
 
             _print(rebind_edge(args.settings, same_account=args.same_account))
+            return
+        if args.command == "source-access":
+            from sightglass.runtime.edge_runtime import (
+                EdgeSettings,
+                source_access_scope_preview,
+            )
+            from sightglass.runtime.edge_runtime import (
+                authorize_source_access as authorize_edge_source_access,
+            )
+            from sightglass.runtime.source_access import (
+                HELPER_VERSION,
+                check_helper,
+                validate_helper,
+            )
+
+            if args.source_access_command == "check":
+                artifact = validate_helper(args.helper)
+                report = check_helper(artifact.app_path)
+                _print(
+                    {
+                        "schema": "sightglass.source-access-check.v1",
+                        "helper_version": HELPER_VERSION,
+                        "helper_digest": artifact.digest,
+                        "entitlement_ready": report.entitlement_ready,
+                        "grants_access": False,
+                        "capability_present": report.capability_present,
+                    }
+                )
+            elif args.source_access_command == "preview":
+                _print(
+                    source_access_scope_preview(
+                        EdgeSettings.load(args.settings),
+                        include_shared_config=args.include_shared_config,
+                    )
+                )
+            else:
+                _print(
+                    authorize_edge_source_access(
+                        args.settings,
+                        helper_path=args.helper,
+                        include_shared_config=args.include_shared_config,
+                        output_path=args.output,
+                        bind=args.bind,
+                    )
+                )
             return
         if args.command in {"edge-recovery-inspect", "edge-recover"}:
             from sightglass.runtime.capture_recovery import (

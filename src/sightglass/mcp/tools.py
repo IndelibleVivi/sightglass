@@ -161,9 +161,13 @@ class ReaderTools:
         recent_only: bool = False,
         limit: int = 20,
         cursor: str | None = None,
+        view: Literal["replica", "fresh"] | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
-        """Find coverage-aware conversation candidates without auto-selecting ambiguity."""
+        """Find authorized conversations; new remote calls refresh catalog when connected.
+
+        Explicit replica stays local; signed continuation retains its original view.
+        """
         return self._safe(
             "wechat_find_conversations",
             lambda: self.service.find_conversations(
@@ -173,6 +177,7 @@ class ReaderTools:
                 recent_only=recent_only,
                 limit=limit,
                 cursor=cursor,
+                view=view,
             ),
             scope_values=tuple(value for value in (account_id,) if value),
         )
@@ -188,12 +193,14 @@ class ReaderTools:
         cursor: str | None = None,
         limit: int = 50,
         mode: Literal["recent", "resident"] = "recent",
+        view: Literal["replica", "fresh"] | None = None,
         *, response_profile: ResponseProfile = "brief",
     ) -> dict[str, Any]:
         """List recent contacts/groups, including conversations without cached bodies.
 
         Open an item's read_action to read its recent messages. mode=resident lists
-        only cached message activity. Catalog recents never import message history.
+        only cached message activity. New remote recent calls refresh catalog when
+        connected; explicit replica stays local. Catalog recents never import history.
         """
         return self._safe(
             "wechat_read_inbox",
@@ -205,6 +212,7 @@ class ReaderTools:
                 unread_only=unread_only,
                 include_latest=include_latest,
                 cursor=cursor,
+                view=view,
                 limit=limit,
                 mode=mode,
             ),

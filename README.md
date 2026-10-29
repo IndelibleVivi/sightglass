@@ -53,6 +53,13 @@ sender mappings remain unresolved while the message stays readable. Independent
 native self-username binding, including reliable self-dialog attribution, remains
 an open limitation; see [source identity](docs/SOURCE-ADAPTER.md#stable-source-identity).
 
+An optional [macOS source-access helper](docs/SOURCE-ACCESS.md) is a source candidate
+for persistent, read-only access to the single configured account directory. It uses
+an explicit system picker and authenticated bookmark handoff, reusing the existing
+Edge credential without sending that credential to the helper. Preparation writes a
+new shadow config; real directory authorization and restart acceptance are separate
+operator steps. It is not enabled by default or installed by a normal package upgrade.
+
 When the encrypted Core volume uses a Mac-held key, an explicitly installed Mac
 recovery task can restore the existing vault after a VPS restart. It first probes
 the fixed SSH capability, reads the existing Keychain item only while the vault is
@@ -79,6 +86,13 @@ pending updates and committed request retries replay locally before any source w
 explicitly local. Cursor-free non-update reads can use `refresh=true` to require
 source evidence even when offline; updates use explicit `view="fresh"` for new work.
 Failure after selecting fresh never falls back to cache.
+New remote recent-inbox and conversation-discovery requests also refresh catalog
+metadata when connected, using the existing catalog capture rather than collecting
+message history. Their signed continuations retain the original plane and snapshot;
+offline, explicit replica and resident inbox reads stay local. A fresh catalog receipt
+confirms activity metadata; cached body previews remain bounded-stale. Native catalog
+fact time may stay unchanged across successful confirmations when source files do not
+change. See the [reading contract](docs/MCP-CONTRACT.md#everyday-recents).
 Read longer spans through the returned cursor and `next_actions`; clear `refresh`
 on continuation. A signed source cursor retains its fresh view even on hosts that
 expose `refresh` without `view`. Each page is independently validated. Exact
@@ -326,7 +340,9 @@ Both CI jobs run the same [installed-wheel gate](scripts/check-installed-wheel.p
 after building. It checks exact source/license payload, installs frozen runtime extras
 in a fresh noneditable environment, runs the four real entrypoints from an empty cwd,
 and reads generated messages using installed imports. It does not activate an installation.
-Use `--wheel /path/to/candidate.whl` to select a separate candidate artifact.
+Use `--wheel /path/to/candidate.whl --sdist /path/to/candidate.tar.gz` for separate
+candidate artifacts. `--offline` uses only cached dependencies; ordinary CI retains
+its normal dependency access.
 
 The suite uses generated fixtures, including encrypted SQLCipher databases when the native extra is installed. Hosted gates separate portable Linux synthetic daemon/bridge checks from the full macOS fixture suite; native WeChat access remains macOS-only. Full macOS resource coverage also needs `sips` and Poppler. Real Apple speech testing is opt-in and uses synthesized audio; no real conversations or recordings belong in Git. [Current state](docs/current-state.md) records the verified source scope and remaining limits.
 

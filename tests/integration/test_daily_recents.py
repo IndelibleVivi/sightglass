@@ -327,9 +327,7 @@ class DailyRecentsTests(unittest.TestCase):
         self.assertFalse(inbox["source_receipt"]["freshness"]["live_refresh_confirmed"])
         self.assertEqual(repository.observation_watermark(), 0)
 
-    def test_real_stdio_opens_a_body_free_direct_contact_without_refresh_arguments(self):
-        target = self.append_direct()
-        self.release_bodies()
+    def prepare_catalog_daemon(self):
         self.core.close()
         settings_path = self.root / "enrollment" / "remote.json"
         self.settings.write(settings_path)
@@ -352,10 +350,27 @@ class DailyRecentsTests(unittest.TestCase):
         with patch.object(self.daemon.source_worker, "start"):
             self.start_daemon()
         self.start_edge()
+
+    def test_real_stdio_opens_a_body_free_direct_contact_without_refresh_arguments(self):
+        target = self.append_direct()
+        self.release_bodies()
+        self.prepare_catalog_daemon()
+        with closing(sqlite3.connect(self.source_root / "catalog.db")) as connection:
+            connection.execute("UPDATE conversations SET title=?,last_message_at_utc=? "
+                               "WHERE source_conversation_id='conv_direct'",
+                               ("Synthetic stdio current contact", "2026-10-30T00:00:00+00:00"))
+            connection.commit()
         env = {**os.environ, "SIGHTGLASS_CONFIG": str(self.store.path),
                "SIGHTGLASS_SYNTHETIC_TEST_SECRETS": "1",
                "SIGHTGLASS_TEST_READER_TOKEN": "synthetic-reader",
                "SIGHTGLASS_TEST_OPERATOR_TOKEN": "synthetic-operator"}
+
+        operations = []
+        execute = self.executor._execute
+
+        def observe(request, snapshot):
+            operations.append(request.operation)
+            return execute(request, snapshot)
 
         def unwrap(result):
             self.assertFalse(result.isError, result)
@@ -378,6 +393,18 @@ class DailyRecentsTests(unittest.TestCase):
                             "kinds": ["direct"], "include_latest": "text",
                         }))
                         item = inbox["items"][0]
+                        self.assertEqual(item["title"], "Synthetic stdio current contact")
+                        self.assertEqual(operations, ["catalog"])
+                        self.assertEqual(inbox["source_receipt"]["view"], "fresh")
+                        self.assertTrue(inbox["source_receipt"]["freshness"]["live_refresh_confirmed"])
+                        self.assertIn("view", inbox_tool.inputSchema["properties"])
+                        discovered = unwrap(await session.call_tool("wechat_find_conversations", {
+                            "query": "Synthetic stdio current contact",
+                        }))
+                        self.assertEqual(discovered["source_receipt"]["view"], "fresh")
+                        self.assertEqual(operations, ["catalog", "catalog"])
+                        self.assertEqual(discovered["candidates"][0]["conversation_id"],
+                                         item["conversation_id"])
                         self.assertEqual(item["latest_state"], "not_resident")
                         action = item["read_action"]
                         self.assertNotIn("refresh", action["arguments"])
@@ -431,4 +458,5 @@ class DailyRecentsTests(unittest.TestCase):
                         self.assertEqual(self.daemon.tools.service.repository.delivery(ack)["status"],
                                          "acknowledged")
 
-        anyio.run(consumer)
+        with patch.object(self.executor, "_execute", side_effect=observe):
+            anyio.run(consumer)

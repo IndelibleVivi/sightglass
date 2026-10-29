@@ -45,6 +45,12 @@ Native 私聊先使用同 shard 的 sender identity，再解释 status hint；�
 正文仍可读。独立 native self username binding（包括可靠的本人会话归属）仍未完成；
 具体边界见 [source identity](docs/SOURCE-ADAPTER.md#stable-source-identity)。
 
+可选的 [macOS source-access helper](docs/SOURCE-ACCESS.md) 是用于持久只读访问单个
+已配置账号目录的 source candidate。它通过明确的系统 picker 和经过认证的 bookmark
+交接工作，复用现有 Edge credential，原凭据不会交给 helper。准备阶段只生成新的
+shadow config；真实目录授权与重启验收仍是独立 operator 步骤。它默认不启用，普通
+package upgrade 也不会安装或授权它。
+
 Core 加密卷由 Mac 持 key 时，可在明确安装后由 Mac 后台恢复任务接住 VPS reboot。
 它先通过固定 SSH capability 查询，只有卷未解锁时才读取已有 Keychain item；卷已挂载、
 服务被有意停止时保留停机状态。恢复仍需要 Mac 在线且 Keychain 可非交互读取。
@@ -65,7 +71,13 @@ message 的当前 resident bindings；正文过期或已 released 时返回 `SOU
 自动选择 fresh source evidence。Recent cursor 保留原 plane；pending updates 与 committed
 request 重试优先本地 exact replay。显式 `view="replica"` 始终本地读取。无 cursor 的非 updates 读取可以使用 `refresh=true`
 在离线时也要求 source evidence；updates 的显式 source 要求使用 `view="fresh"`。
-已选定 fresh 后失败不会退回缓存。长段读取按返回的
+已选定 fresh 后失败不会退回缓存。
+新的 remote recent inbox 和会话发现请求在 connected 时也会刷新 catalog metadata，
+复用已有 catalog capture，不收集消息历史。Signed continuation 保持原 plane 和 snapshot；
+离线、显式 replica 与 resident inbox 仍在本地完成。Fresh catalog receipt 确认的是活动
+元数据，缓存正文 preview 仍为 bounded-stale。Source 文件未变化时，native catalog fact
+time 可以在多次成功确认中保持相同；具体见 [阅读 contract](docs/MCP-CONTRACT.md#everyday-recents)。
+长段读取按返回的
 cursor 和 `next_actions` 继续，并在 continuation 中清除 `refresh`。Signed source cursor
 会保留 fresh view，也适用于只暴露 `refresh`、未暴露 `view` 的 host；每页独立验证。
 已支持 build 的升级使用 stopped、verified 的
@@ -276,7 +288,9 @@ git diff --check
 两个 CI jobs 在 build 后调用相同的 [installed-wheel gate](scripts/check-installed-wheel.py)：
 核对 exact source／license payload，在全新 noneditable environment 中安装 frozen runtime
 extras，从 empty cwd 执行四个真实 entrypoints，再用 installed imports 读取 generated messages。
-该 gate 不激活安装；单独 candidate 可用 `--wheel /path/to/candidate.whl` 指定。
+该 gate 不激活安装；单独 candidate 可用
+`--wheel /path/to/candidate.whl --sdist /path/to/candidate.tar.gz` 指定。
+`--offline` 只使用已有 dependency cache；普通 CI 保留原有 dependency 访问方式。
 
 Suite 使用生成的 fixtures；安装 native extra 后还覆盖加密 SQLCipher fixture。Hosted gates 分开执行 portable Linux synthetic daemon／bridge 与完整 macOS fixture suite；native 微信访问仍只支持 macOS。完整 macOS resource 验证需要 `sips` 和 Poppler。真实 Apple speech test 默认跳过，显式运行时也只用合成音频；真实对话或录音不得进入 Git。[Current state](docs/current-state.md) 记录已验证的 source scope 与剩余限制。
 

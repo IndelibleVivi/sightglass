@@ -66,6 +66,19 @@ class McpContractTests(unittest.TestCase):
                     read.assert_not_called()
         client.call.assert_not_called()
 
+    def test_catalog_tools_publish_optional_view_on_local_and_daemon_surfaces(self):
+        client = Mock(spec=IPCClient)
+        for tools in (self.tools, DaemonReaderTools(client)):
+            registered = {tool.name: tool
+                          for tool in create_server(tools)._tool_manager.list_tools()}
+            self.assertEqual(len(registered), 13)
+            for name in ("wechat_read_inbox", "wechat_find_conversations"):
+                schema = registered[name].parameters
+                self.assertNotIn("view", schema.get("required", []))
+                self.assertIn("view", schema["properties"])
+                self.assertNotIn("refresh", schema["properties"])
+                self.assertIn('"fresh"', json.dumps(schema["properties"]["view"]))
+
     def test_exact_account_wide_tool_surface_and_typed_json_schema(self):
         server = create_server(self.tools)
         registered = {tool.name: tool for tool in server._tool_manager.list_tools()}

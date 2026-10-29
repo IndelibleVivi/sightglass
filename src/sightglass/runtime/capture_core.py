@@ -455,6 +455,8 @@ class CoreCapture:
     def call(self, name: str, arguments: dict[str, Any], invoke: Callable[[], Any]) -> Any:
         if self.service.local_only_tool_call(name, arguments):
             return invoke()
+        if name in {"wechat_read_inbox", "wechat_find_conversations"}:
+            return self.catalog_call(invoke)
         if name == "wechat_read_resource":
             return invoke()  # ResourceService acquires its exact locator once below.
         search_ids: tuple[str, ...] | None = None
@@ -515,32 +517,8 @@ class CoreCapture:
         ):
             with self.service._source_read() as (stack, snapshot):
                 catalog = self.service._read_catalog(snapshot)
-                facts = self.service._catalog_facts(snapshot)
                 with self.service._admission(stack):
-                    self.service._persist_catalog(catalog, snapshot)
-                    for account_id, _ in catalog.accounts:
-                        current = {
-                            entry.conversation_id
-                            for entry in catalog.catalog
-                            if entry.account_id == account_id
-                            and self.service.reader.policy.permits(entry.conversation_id)
-                        }
-                        handled = self.service._catalog_handled_ids(
-                            account_id,
-                            projection_epoch=self.expected.origin_epoch,
-                        )
-                        previous = self.service.repository.source_catalog_state(account_id)
-                        self.service.repository.record_source_catalog_state(
-                            account_id=account_id,
-                            inventory_epoch=(
-                                self.expected.origin_epoch
-                                if current <= handled
-                                else snapshot.inventory_digest
-                            ),
-                            coverage_state="complete" if facts.complete else "partial",
-                            observed_at=snapshot.fresh_as_of,
-                            next_cursor_token=(previous["next_cursor_token"] if previous else None),
-                        )
+                    self.service._admit_catalog_metadata(catalog, snapshot)
 
     def sync_once(self) -> dict[str, Any]:
         result = {

@@ -1578,6 +1578,14 @@ class SightglassDaemon:
                         # selected view, including an offline replica decision.
                         params = {**params, "arguments": self.tools.service.bind_recent_view(
                             params["arguments"])}
+                    if (params.get("name") in {"wechat_read_inbox", "wechat_find_conversations"}
+                            and isinstance(params.get("arguments"), dict)
+                            and self.tools.service.catalog_managed_request(params["arguments"])):
+                        try:
+                            params = {**params, "arguments": self.tools.service.bind_catalog_view(
+                                params["name"], params["arguments"])}
+                        except SightglassError as exc:
+                            return exc.as_dict()
                     if params.get("name") == "wechat_read_resource":
                         # The resource service changes lanes at the acquisition and
                         # derivation boundaries; keeping a top-level slot here would

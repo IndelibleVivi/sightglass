@@ -642,7 +642,8 @@ class ReplicaReader:
 
     def find_conversations(
         self, query: str, *, account_id: str | None, kinds: tuple[str, ...],
-        recent_only: bool, limit: int, cursor: str | None,
+        recent_only: bool = False, limit: int = 20, cursor: str | None = None,
+        view: str = "replica",
     ) -> dict[str, Any]:
         with self.repository.database.read_snapshot():
             account = self._account(account_id)
@@ -671,14 +672,17 @@ class ReplicaReader:
                 for item in candidates)
             total = len(candidates)
             scope = self.service._scope_digest({"query": query.casefold(), "kinds": sorted(kinds),
-                                               "recent_only": recent_only, "view": "replica"})
+                                               "recent_only": recent_only, "view": view})
             epoch = self.service._scope_digest({"candidates": candidates})
             revision = self.service._materialized_cursor_revision()
+            catalog = self.repository.source_catalog_state(account)
+            catalog_as_of = str(catalog["last_observed_at"]) if catalog else ""
             if cursor:
                 payload = self.service.account_cursors.verify(
                     cursor, kind="catalog", reader_id=self.service.reader.reader_id,
                     account_id=account, scope_key=scope, policy_revision=revision,
                 )
+                catalog_as_of = payload["snapshot"].get("catalog_as_of", catalog_as_of)
                 if payload["snapshot"].get("catalog_epoch") != epoch:
                     raise SightglassError(ErrorCode.CURSOR_STALE)
                 positioned = [item for item in positioned if item[0] > payload["position"]]
@@ -698,18 +702,19 @@ class ReplicaReader:
                     self.service.account_cursors.issue(
                         kind="catalog", reader_id=self.service.reader.reader_id, account_id=account,
                         scope_key=scope, policy_revision=revision, position=selected[-1][0],
-                        snapshot={"catalog_epoch": epoch, "view": "replica"},
+                        snapshot={"catalog_epoch": epoch, "view": view,
+                                  "catalog_as_of": catalog_as_of},
                     ) if has_more and selected else None)},
                 "coverage": {"catalog": coverage, "conversation": "observed_catalog",
                              "notes": ["not_found_is_coverage_bounded"]},
-                "source_receipt": {"served_from": "window_db", "view": "replica",
-                                   "complete": False,
+                "source_receipt": {"served_from": "window_db", "view": view,
+                                   "fresh_as_of": catalog_as_of, "complete": False,
                                    "freshness": {"state": "bounded_stale",
                                                  "live_refresh_confirmed": False}},
             }
 
-    def read_inbox(self, *, account_id: str | None, mode: str = "recent",
-                   **arguments: Any) -> dict[str, Any]:
+    def read_inbox(self, *, account_id: str | None = None, mode: str = "recent",
+                   view: str = "replica", **arguments: Any) -> dict[str, Any]:
         with self.repository.database.read_snapshot():
             account = self._account(account_id)
             epoch = self.service._projection_inventory_epoch()
@@ -731,9 +736,9 @@ class ReplicaReader:
                 catalog_fresh_as_of=str(state["last_observed_at"]) if state else "",
                 epoch_conversation_ids=ids - degraded, degraded_conversation_ids=degraded,
                 live_refresh_available=available,
-                projection_epoch=epoch, activity=mode == "recent", **arguments,
+                projection_epoch=epoch, activity=mode == "recent", view=view, **arguments,
             )
-            result["source_receipt"]["view"] = "replica"
+            result["source_receipt"]["view"] = view
             return result
 
     def search_messages(

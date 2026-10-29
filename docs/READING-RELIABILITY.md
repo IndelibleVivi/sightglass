@@ -60,6 +60,22 @@ stopped settlement／加密 recovery 执行，原插件的 fresh recent/context 
 不可用而未完成；不能把插件成功替代为浏览器成功。持久目录授权与无人值守重启
 仍需独立完成，不能靠频繁替换 Python runtime 取得持久 macOS App Data 权限。
 
+2026-10-30 的接续把目录与正文的新鲜度拆开验证：普通 remote inbox／会话发现此前
+始终读 replica，虽然后台已有独立约 30 秒的 catalog due 刷新。新的 source candidate
+把 connected 时的新前台请求接到同一 typed catalog capture／admission；offline、显式
+replica、resident inbox 和已有 cursor 继续本地读取。后台关闭后，合成 stdio→IPC→Core→
+Edge journey 仍能在普通 inbox 看到变更后的活动信息，且不 capture 正文、不推进 tail／
+history。Fresh catalog 只确认 metadata，preview 仍受 current epoch／resident／conflict
+限制，不能因此变成 fresh body。Native catalog fact time 来自 main/WAL mtime，未变的
+文件可以在多次成功确认中保留同一时间；旧时间本身不是漏消息或后台失败的证据。
+
+重启后的 source 权限连续性由独立的可选 sandbox helper candidate 承接：operator
+通过系统 picker 明确选择单个账号目录，helper 持久保存只读 bookmark；后续 Edge 用
+现有 credential 派生的 proof 取得 implicit bookmark，并在 source 全寿命内持有 scope。
+它不改 TCC／Keychain ACL，不引入全盘授权或新 secret，也不扩大 source egress。
+真实目录 grant 与退出／重启后免 UI 续用仍需实际授权验收，不能由编译或 generated
+protocol tests 替代。操作边界见 [SOURCE-ACCESS](SOURCE-ACCESS.md)。
+
 远端日用还有 source 授权生命周期的缺口：当前 egress ceiling 是固定 enrollment 集合，
 reader 的 `all_except_denylist` 不能让未来会话自动跨过该边界。后续需要把 scope 的可见
 解释、纳入新会话的流程与 cold source discovery 接到同一条阅读路径。若设计持续账号
