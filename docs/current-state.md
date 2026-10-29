@@ -1,6 +1,6 @@
 # Current state
 
-Updated: 2026-10-29. This page owns current source, candidate and publication status.
+Updated: 2026-10-30. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
@@ -10,7 +10,7 @@ Mac-side connection/control diagnostics from source `8b4f657` passed both hosted
 jobs in [40869985781](https://github.com/IndelibleVivi/sightglass/actions/runs/40869985781)
 and 101 generated installed Mac tests before activation. Frozen dependencies/native
 bytes, source/contracts, original settings/grants and pending spool were preserved;
-the current Core remains `4cbe963`. Live diagnostics then identified repeated
+Core stayed at `4cbe963` at that stage. Live diagnostics then identified repeated
 `reply_receive / edge_relay_read_timeout` before source return, without a stop request.
 
 The Edge repair in source
@@ -26,7 +26,7 @@ passed: 1,699 macOS tests, 1,044 portable tests, typing/lint/build and both isol
 installed-wheel gates. The frozen Mac candidate passed 105 installed generated tests
 with exact 138-module/five-rights provenance and unchanged frozen dependencies,
 native binaries, source/contracts and SQLite before activation. Only the Mac Edge
-advanced to `d44e0a9`; Core remains `4cbe963`, with the original settings, grants,
+advanced to `d44e0a9`; Core stayed at `4cbe963`, with the original settings, grants,
 pending spool and origin. The temporary passive SSH entry probe was restored to its
 exact original entry before the final acceptance.
 
@@ -42,7 +42,7 @@ message parity or a latency SLO. The displayed result also raised a sender-direc
 question; the subsequent native check and source correction are described below.
 A complete capture receipt must not be described as complete account history.
 
-### Native direct sender correction: source candidate
+### Native direct sender correction: activated
 
 Further same-scope, read-only native point checks established that a direct peer's
 same-shard `Name2Id` mapping can coexist with status `3`. The earlier classifier
@@ -51,14 +51,31 @@ projections faithfully retained the mistake. Source revision `v6.r2` now gives a
 exact peer mapping priority over status, keeps unexplained non-peer/nonzero-unmapped
 native sender evidence unresolved and preserves the existing status-only compatibility
 path only for rows without native sender identity. System and group rules remain
-separate. The source change passes generated native/admission/compact and epoch
-regressions; it is not yet installed or activated. It requires an explicitly
-authorized stopped origin transition, exact old pending settlement and independent
-post-upgrade acceptance. Native self-username binding remains an open limitation.
+separate. Source
+[9e7dae8](https://github.com/IndelibleVivi/sightglass/commit/9e7dae8aca4e5574145d49abb7884745fbedaa02)
+passed 1,704 local tests, typing/lint, and both hosted jobs in
+[40888630672](https://github.com/IndelibleVivi/sightglass/actions/runs/40888630672).
+Its frozen Mac and Linux candidates passed 247 and 358 installed generated tests,
+respectively, before activation.
+
+The explicitly authorized stopped transition settled old pending work, independently
+matched the Core committed stream position to the empty Edge spool, and verified
+encrypted database, semantic-sidecar and spool recovery before changing origin.
+Both Core and Edge now use `9e7dae8`, preserving stream and sequence continuity,
+schema, account, credentials and authorization scope. Bounded fresh reads through the original
+plugin retained message IDs and corrected peer attribution; fresh context also
+succeeded. Further progress on the preserved stream was observed after resume. The semantic
+worker retains its original exact scope and uses the new generation; old remote
+namespaces were not deleted. Native self-username binding remains an open limitation.
+
+This is bounded plugin acceptance, not sustained daily reliability or a new ordinary
+ChatGPT browser acceptance: the previously used Chrome control connection was
+unavailable during that follow-up. Persistent macOS source-folder permission also
+remains a separate implementation and owner-authorization boundary.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
-- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and source native implementation `sightglass.macos-wechat.sqlcipher.v6.r2` (installed origin still r1 pending the transition above). Native interpretation remains v6; implementation revisions feed the existing projection/capture epoch recipe. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
+- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and source native implementation `sightglass.macos-wechat.sqlcipher.v6.r2` (source and activated origin). Native interpretation remains v6; implementation revisions feed the existing projection/capture epoch recipe. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 

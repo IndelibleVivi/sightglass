@@ -50,12 +50,15 @@ owner 确认后同进程恢复，Chat 中自然接续请求显示了五条 fresh
 [current-state](current-state.md)。
 
 后续 exact native point 核对已证明 direct peer mapping 可以和 status 3 同时存在，
-旧 status-only classifier 因而把联系人错归 self。r2 source candidate 让同 shard 的
+旧 status-only classifier 因而把联系人错归 self。已激活的 r2 让同 shard 的
 精确 peer identity 优先；非 peer 或未解析的非零 native sender 保持 unresolved，
 只有没有 native sender identity 的旧行保留原 status compatibility。原生 self username
 仍未独立绑定，不能从“非 peer”或 self principal 已存在推导本人身份。修复已通过
-detail/compact admission 与 r1→r2 epoch 回归；真实 origin 切换和后续 Chat 验收仍需
-按既有 stopped settlement／operator authority 继续。
+detail/compact admission 与 r1→r2 epoch 回归；真实 origin 切换在明确授权后按既有
+stopped settlement／加密 recovery 执行，原插件的 fresh recent/context 验证了 peer
+归属和 message ID 连续性。普通 ChatGPT 浏览器的本轮接续验收因 Chrome 控制连接
+不可用而未完成；不能把插件成功替代为浏览器成功。持久目录授权与无人值守重启
+仍需独立完成，不能靠频繁替换 Python runtime 取得持久 macOS App Data 权限。
 
 远端日用还有 source 授权生命周期的缺口：当前 egress ceiling 是固定 enrollment 集合，
 reader 的 `all_except_denylist` 不能让未来会话自动跨过该边界。后续需要把 scope 的可见

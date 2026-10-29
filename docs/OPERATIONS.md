@@ -1005,7 +1005,13 @@ promotion intent。Installation-specific commands、before-images 和 receipts �
 
 大库的 stopped-only backup create/plan/retire 会执行离线 SQLite 完整性检查与 snapshot digest verification，可能需要数分钟。它们不使用普通 reader 的 25 秒 deadline；进程仍健康且处于该校验时，保留原操作，不因没有中间输出重复执行、重启 daemon 或删除待验证文件。
 
-大库 compressed snapshot 默认相邻保存并计入预算。若需移到单独的 private backup directory，目标必须在已经确认加密的本地卷上；先复制 artifact **及其 manifest**、fsync，并用 `sightglass.model.backups.verify_compressed_snapshot` 完整验证 copied bytes，再通过 stopped-only `storage backup retire --artifact ... --ack ...` 的 exact plan 退休相邻副本。保留实际恢复位置、old wheel/config 和恢复步骤；只移动备份不修改 live DB、CAS paths 或 policy。未加密卷不能接收真实账号的 plaintext DB/backup。
+大库首次启动或 lifecycle reload 也可能超过 operator client 的等待窗口。Client timeout 不证明 `pause`／`resume` 未提交；先以原 config、supervisor、可用 status 和 durable intent/receipt 核实实际状态，再决定后续阶段。远端操作已完成而 SSH 回程失联时，先通过独立只读观察确认完成及 owner 已退出，只收回自己的失联 transport，不重复执行已完成的状态变更。
+
+大库 compressed snapshot 默认相邻保存并计入预算。若需移到单独的 private backup directory，目标必须在已经确认加密的本地卷上。跨文件系统归档先复制 artifact **及其 manifest**、fsync，并用 `sightglass.model.backups.verify_compressed_snapshot` 完整验证 copied bytes，再通过 stopped-only `storage backup retire --artifact ... --ack ...` 的 exact plan 退休相邻副本。
+
+若两份 compressed snapshot 会突破 configured free floor，可在所有 owner 已停止、相邻快照已完整验证、源与目标确属同一加密文件系统时，用显式 operator procedure 归档同一份文件：先持久化 exact source/target artifact 与 manifest 名称、raw/compressed digests 和冻结 cut，再逐项同文件系统 rename、fsync 两个目录，并在目标完整复验。两个 rename 不是一个原子事务；中断后按 durable intent 核实每一项的实际位置再继续，不能盲重放、覆盖现有目标或删除唯一 recovery。Verifier 的 database path 在归档目录中仅提供原数据库 basename／相邻校验上下文，不表示该目录存在 live database。该流程不新增普通启动时的自动移动行为。
+
+保留实际恢复位置、old wheel/config 和恢复步骤；只移动备份不修改 live DB、CAS paths 或 policy。未加密卷不能接收真实账号的 plaintext DB/backup。
 
 使用新 release 的 `sightglassctl daemon start`，核对 schema、ready、workers、storage，以及 configured provider/current policy 未扩大；仅在原实例未暂停时恢复 `resume`。稳定 command links（例如私有 bin directory 中的 `sightglassctl`、`sightglassd`、`sightglass-mcp`）应全部选择同一 release。用 installed MCP command 完成 initialize/list/call smoke，确认十三个 tools、正常 status 和 retrieval/resource 调用后，重启原有 Sightglass tunnel 并检查 health/ready/control-plane poll。不要创建第二个 tunnel 或把其他服务一起 restart。新的 source，不会自动刷新旧的 long-running daemon/bridge。 `ready=true` 只证明可用 read plane；它不证明 link/lexical 历史 backfill 完成。按 generation/checkpoint 与调用自己的 coverage 判断结果；验证一个已知 positive link、一个 admitted message 和一个可解码 resource，旧样本的 cold context 超时须单独保留为未完成验收。Host 可能仍缓存旧 tool metadata；新 stdio 的十三项列表与 named host 实际显示/消费是分别验证的事实。
 
