@@ -157,6 +157,15 @@ the file alone proves neither process liveness nor fresh source access. A succes
 reconnect clears the current error and retains the previous control failure.
 Diagnostic write failure does not release pending data or change protocol/ACK.
 
+An Edge `control.reason="edge_relay_read_timeout"` in `reply_receive` distinguishes
+the first transport timer from the later source cancellation/publication wrapper.
+Current source uses one selected source deadline for that reply, retaining only the
+existing short drain for an already-issued exchange after source expiry. It does
+not extend source execution or begin a new exchange after the deadline. Older edges
+can terminate a healthy request after a one-second network round trip; follow the
+frozen-wheel same-origin upgrade procedure and verify actual calls, rather than
+changing account grants, clearing pending state or tuning a new timeout option.
+
 Daemon status includes `lifecycle_state` (`starting`, `reloading`, `ready`,
 `degraded`, `stopping`, or `stopped`). Reload first stops every old worker and
 confirms quiescence before replacing its owner. A partial stop/start failure

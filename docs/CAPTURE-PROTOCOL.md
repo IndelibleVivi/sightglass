@@ -245,10 +245,16 @@ exchanges `working` and `continue`/`cancel` while the source executes, waiting
 up to 50 ms between exchanges. The core validates each `working` against the
 currently selected request and authenticated core generation. The edge validates
 each reply against that same exact binding. A mismatched control, disconnect or
-edge stop signals cooperative source cancellation. Each control send and receive
-has its own one-second absolute I/O budget; partial frames, send-lock contention
-and backpressure do not reset it. After source execution ends, the edge signals
-the control thread to stop and joins it for at most 2.1 seconds. Source handles
+edge stop signals cooperative source cancellation. Control sends retain a one-second
+absolute bound, shortened by the remaining selected source budget. The edge fixes
+one source deadline from the smaller of selection-time remaining budget and executor
+cap. A reply may use that remaining budget, rather than a separate one-second
+network round-trip limit. The already-issued exchange retains its existing one-second
+drain allowance when the source expires; this cannot extend or restart source work.
+Partial frames, send-lock contention and backpressure do not reset deadlines.
+After source execution ends, the edge signals the control thread to stop and drains
+that exact reply, joining until the source deadline plus the existing 2.1-second
+cleanup allowance. Stop still interrupts fd I/O. Source handles
 and SQLite connections are not closed from the control thread.
 
 When the last waiting caller departs after selection, the core records a sticky
@@ -543,8 +549,10 @@ Framed fd I/O uses nonblocking raw short reads/writes with stop/cancel checks an
 one absolute deadline per frame, including send-lock waits and write backpressure.
 Receive limits are 30 seconds for handshake, 60 seconds for idle/work response,
 and 180 seconds for capture/ACK transfer; ordinary sends default to 180 seconds.
-Revision-2 control-thread sends and receives, and the core's `continue`/`cancel`
-sends, use the separate one-second limit. Partial input does not reset the
+Revision-2 control-thread sends and the core's `continue`/`cancel` sends retain
+the one-second local write limit. Edge control receives use the selected source
+deadline with the bounded final-reply drain described above; older installed edges
+retain their separate one-second read limit until explicitly upgraded. Partial input does not reset the
 deadline. Broker shutdown cancels finalization waits without an early ACK, and
 joins its listener and connection owners before releasing the runtime;
 failure to quiesce aborts replacement. The outgoing SSH connector owns a dedicated

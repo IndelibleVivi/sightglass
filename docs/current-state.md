@@ -6,12 +6,19 @@ history belong in private operator records outside Git.
 
 ## Source and supported scope
 
-The current follow-up adds bounded Mac-side connection/control diagnostics while
-retaining source interpretation, transport, pending replay and reader grants.
-Real duplex-socket tests distinguish timely continue/cancel and source completion
-from withheld/partial control replies. This is a diagnostic candidate, not an
-activated fix for intermittent disconnects; artifact and live acceptance follow
-the current repair procedure. The previous Core increment remains active below.
+Mac-side connection/control diagnostics from source `8b4f657` passed both hosted
+jobs in [40869985781](https://github.com/IndelibleVivi/sightglass/actions/runs/40869985781)
+and 101 generated installed Mac tests before activation. Frozen dependencies/native
+bytes, source/contracts, original settings/grants and pending spool were preserved;
+the current Core remains `4cbe963`. Live diagnostics then identified repeated
+`reply_receive / edge_relay_read_timeout` before source return, without a stop request.
+
+The current repair candidate replaces the independent one-second control read limit
+with the already-selected source deadline and existing short final-exchange drain.
+It never extends source work, restarts an expired capture or changes ACK/interpretation.
+Real duplex-socket tests reject the old short-read behavior for a delayed legal reply
+and retain short-budget expiry, partial reply, explicit stop and exact-spool behavior.
+Source/candidate/live verification remain separate; this repair is not yet activated.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.

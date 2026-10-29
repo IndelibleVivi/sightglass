@@ -1187,6 +1187,7 @@ class EdgeSession:
         if (type(remaining) not in (int, float) or not math.isfinite(remaining)
                 or not 0 <= remaining <= 120):
             raise CaptureProtocolError("edge_work_envelope_invalid")
+        deadline = time.monotonic() + min(float(remaining), self.executor.timeout_seconds)
         cancelled, done = threading.Event(), threading.Event()
         failures: list[BaseException] = []
         control_failure: list[dict[str, Any]] = []
@@ -1199,14 +1200,26 @@ class EdgeSession:
                     if stop.is_set():
                         cancelled.set()
                         return
+                    available = deadline - time.monotonic()
+                    if available <= 0:
+                        cancelled.set()
+                        return
                     phase = "working_send"
                     channel.send({
                         "schema": CAPTURE_VERSION, "kind": "working",
                         "request_id": request.request_id,
                         "core_generation": self.core_generation,
-                    }, timeout=RELAY_CONTROL_TIMEOUT_SECONDS)
+                    }, timeout=min(RELAY_CONTROL_TIMEOUT_SECONDS, available))
                     phase = "reply_receive"
-                    reply = channel.receive(timeout=RELAY_CONTROL_TIMEOUT_SECONDS)
+                    # A control round trip crosses SSH/the network. The one-second
+                    # local write bound is not evidence that this stream died.
+                    # Keep the frame intact through the selected source budget.
+                    # A source expiring just after send still drains this one
+                    # reply within the existing short cleanup allowance; that
+                    # grants no extra source work. Stop still interrupts fd I/O.
+                    reply = channel.receive(timeout=max(
+                        RELAY_CONTROL_TIMEOUT_SECONDS, deadline - time.monotonic(),
+                    ))
                     phase = "reply_validate"
                     if (not isinstance(reply, dict)
                             or set(reply) != {"schema", "kind", "request_id", "core_generation"}
@@ -1237,12 +1250,15 @@ class EdgeSession:
             envelope = self.executor.capture(
                 request, stream_epoch=self.spool.stream_epoch,
                 sequence=self.spool.next_sequence, cancelled=cancelled,
-                timeout_seconds=float(remaining),
+                timeout_seconds=max(0.0, deadline - time.monotonic()),
             )
             source_returned.set()
         finally:
             done.set()
-            owner.join(timeout=2 * RELAY_CONTROL_TIMEOUT_SECONDS + .1)
+            # A source may finish while its final working reply is in transit.
+            # Drain that exact exchange before handing the stream to spool/ACK.
+            owner.join(timeout=max(0.0, deadline - time.monotonic())
+                       + 2 * RELAY_CONTROL_TIMEOUT_SECONDS + .1)
         self._require_owned()
         self.spool.store(envelope)
         if owner.is_alive() or failures:

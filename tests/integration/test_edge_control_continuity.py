@@ -25,7 +25,7 @@ class EdgeControlContinuityTests(unittest.TestCase):
     setUp = fixtures.CaptureBoundaryTests.setUp
     request = fixtures.CaptureBoundaryTests.request
 
-    def exchange(self, behavior):
+    def exchange(self, behavior, remaining=2.):
         request = self.request()
         spool = EdgeSpool.initialize(
             self.root / 'spool', source_instance_id=self.executor.source_instance_id,
@@ -39,23 +39,35 @@ class EdgeControlContinuityTests(unittest.TestCase):
         streams = [s.makefile(mode, buffering=0) for s in (a, b) for mode in ('rb', 'wb')]
         for stream in streams:
             self.addCleanup(stream.close)
-        channel = FramedStream(cast(Any, streams[0]), cast(Any, streams[1]))
+        control_stop = threading.Event()
+        channel = FramedStream(cast(Any, streams[0]), cast(Any, streams[1]), stop=control_stop)
         peer = FramedStream(cast(Any, streams[2]), cast(Any, streams[3]))
-        working, source_done, release = (threading.Event() for _ in range(3))
+        working, source_done, release, reply_sent = (threading.Event() for _ in range(4))
         peer_errors = []
+        receiving = threading.Event()
+        original_receive = channel.receive
+
+        def receive(**kwargs):
+            receiving.set()
+            return original_receive(**kwargs)
 
         def serve():
             try:
                 while not release.is_set():
                     try:
-                        frame = peer.receive(timeout=.1)
-                    except RelayDisconnected as exc:
-                        if str(exc) == 'edge_relay_read_timeout':
-                            continue
+                        frame = peer.receive(timeout=2)
+                    except RelayDisconnected:
+                        if release.is_set():
+                            return
                         raise
                     assert isinstance(frame, dict)
                     self.assertEqual(frame['kind'], 'working')
                     working.set()
+                    if behavior == 'stop':
+                        self.assertTrue(receiving.wait(2))
+                        control_stop.set()
+                        release.wait(2)
+                        return
                     if behavior in ('withhold', 'partial'):
                         if behavior == 'partial':
                             b.sendall(b'\x00\x00')
@@ -63,9 +75,14 @@ class EdgeControlContinuityTests(unittest.TestCase):
                         return
                     if behavior == 'finish_before_reply':
                         self.assertTrue(source_done.wait(2))
+                    if behavior in ('delayed_reply', 'short_deadline'):
+                        release.wait(.1 if behavior == 'short_deadline' else .3)
+                        if release.is_set():
+                            return
                     peer.send({'schema': CAPTURE_VERSION,
                                'kind': 'cancel' if behavior == 'cancel' else 'continue',
                                'request_id': request.request_id, 'core_generation': ''})
+                    reply_sent.set()
             except BaseException as exc:
                 peer_errors.append(exc)
 
@@ -76,7 +93,10 @@ class EdgeControlContinuityTests(unittest.TestCase):
 
         def execute(*args, **kwargs):
             self.assertTrue(working.wait(2))
-            if behavior in ('cancel', 'withhold', 'partial'):
+            if behavior in ('delayed_reply', 'short_deadline'):
+                while not reply_sent.wait(.002):
+                    check_operation_budget()
+            if behavior in ('cancel', 'withhold', 'partial', 'stop'):
                 while True:
                     check_operation_budget()
                     release.wait(.002)
@@ -92,16 +112,18 @@ class EdgeControlContinuityTests(unittest.TestCase):
                               connection_observer=status)
         failure = None
         try:
-            with mock.patch.object(self.executor, '_execute', side_effect=execute), \
+            with mock.patch.object(channel, 'receive', side_effect=receive), \
+                 mock.patch.object(self.executor, '_execute', side_effect=execute), \
                  mock.patch.object(self.executor, 'capture', side_effect=capture_returned), \
                  mock.patch('sightglass.runtime.edge_relay.RELAY_CONTROL_TIMEOUT_SECONDS', .2):
                 try:
-                    session._capture_controlled(channel, request, 2., threading.Event())
+                    session._capture_controlled(channel, request, remaining, control_stop)
                 except RelayDisconnected as exc:
                     failure = exc
                     session._observe_connection('disconnected', exc)
         finally:
             release.set()
+            peer.cancel()
             thread.join(3)
         self.assertFalse(thread.is_alive())
         self.assertEqual(peer_errors, [])
@@ -132,11 +154,12 @@ class EdgeControlContinuityTests(unittest.TestCase):
         pending, failure, session, status = self.exchange(behavior)
         assert isinstance(failure, RelayDisconnected)
         self.assertEqual(str(failure.__cause__), 'edge_relay_read_timeout')
-        self.assertEqual(pending.document().receipt.terminal, 'cancelled')
+        self.assertIn(pending.document().receipt.terminal, {'cancelled', 'rejected'})
+        self.assertEqual(pending.document().receipt.reason, 'SERVICE_TIMEOUT')
         value = json.loads(status.path.read_text())
         self.assertEqual(value['control']['phase'], 'reply_receive')
         self.assertEqual(value['control']['reason'], 'edge_relay_read_timeout')
-        self.assertFalse(value['control']['source_returned'])
+        self.assertIsInstance(value['control']['source_returned'], bool)
         self.assertTrue(value['control']['spooled'])
         self.assertFalse(value['control']['owner_alive'])
         self.assertEqual(value['last_error_location']['function'], '_read_exact')
@@ -197,3 +220,42 @@ class EdgeControlContinuityTests(unittest.TestCase):
         session._observe_connection('connected')
         self.assertEqual(path.read_text(), '{"schema":')
         self.assertEqual(pending.document().receipt.terminal, 'complete')
+
+    def test_delayed_legal_reply_within_source_budget_keeps_connection(self):
+        # The .3s round trip exceeds the injected .2s local write deadline,
+        # but fits the source request's 2s budget. It must not cancel a capture.
+        pending, failure, _session, _status = self.exchange('delayed_reply')
+        self.assertIsNone(failure)
+        self.assertEqual(pending.document().receipt.terminal, 'complete')
+
+    def test_stop_interrupts_reply_wait_without_spending_source_budget(self):
+        pending, failure, _session, status = self.exchange('stop')
+        assert isinstance(failure, RelayDisconnected)
+        self.assertEqual(str(failure.__cause__), 'edge_relay_read_cancelled')
+        self.assertEqual(pending.document().receipt.terminal, 'cancelled')
+        state = json.loads(status.path.read_text())
+        self.assertTrue(state['control']['stop_requested'])
+        self.assertTrue(state['control']['spooled'])
+
+    def test_expired_selection_does_not_start_control_or_source_work(self):
+        spool = EdgeSpool.initialize(
+            self.root / 'expired', source_instance_id=self.executor.source_instance_id,
+            account_id=self.ceiling.account_id, origin_epoch=self.executor.origin_epoch,
+            stream_epoch='fixture-stream',
+        )
+        self.addCleanup(spool.close)
+        channel = mock.Mock()
+        session = EdgeSession(self.executor, spool, token='synthetic-secret')
+        with mock.patch.object(self.executor, '_execute') as execute:
+            envelope = session._capture_controlled(channel, self.request(), 0., threading.Event())
+        execute.assert_not_called()
+        channel.send.assert_not_called()
+        channel.receive.assert_not_called()
+        self.assertNotEqual(envelope.document().receipt.terminal, 'complete')
+        self.assertIsNotNone(spool.pending())
+
+    def test_short_expired_source_drains_reply_in_existing_cleanup_grace(self):
+        pending, failure, _session, _status = self.exchange('short_deadline', remaining=.05)
+        self.assertIsNone(failure)
+        self.assertIn(pending.document().receipt.terminal, {'cancelled', 'rejected'})
+        self.assertEqual(pending.document().receipt.reason, 'SERVICE_TIMEOUT')
