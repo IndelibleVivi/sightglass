@@ -47,6 +47,12 @@ Remote capture is limited to its enrolled conversation set. A reader's
 `all_except_denylist` policy does not extend that independent source-egress grant;
 new conversations need operator enrollment before remote discovery/reading.
 
+Native direct messages use same-shard sender identity before status hints. A mapped
+peer is not relabeled as self because of its message status; other unverified native
+sender mappings remain unresolved while the message stays readable. Independent
+native self-username binding, including reliable self-dialog attribution, remains
+an open limitation; see [source identity](docs/SOURCE-ADAPTER.md#stable-source-identity).
+
 When the encrypted Core volume uses a Mac-held key, an explicitly installed Mac
 recovery task can restore the existing vault after a VPS restart. It first probes
 the fixed SSH capability, reads the existing Keychain item only while the vault is

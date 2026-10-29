@@ -39,12 +39,26 @@ source-worker polls, no current source error and no increase in Core/Edge connec
 errors. These are bounded post-confirmation observations. They do not establish
 unattended App Data permission, all-day stability, complete history, newly arrived
 message parity or a latency SLO. The displayed result also raised a sender-direction
-question; no native direction defect has yet been established from independent
-evidence. A complete capture receipt must not be described as complete account history.
+question; the subsequent native check and source correction are described below.
+A complete capture receipt must not be described as complete account history.
+
+### Native direct sender correction: source candidate
+
+Further same-scope, read-only native point checks established that a direct peer's
+same-shard `Name2Id` mapping can coexist with status `3`. The earlier classifier
+incorrectly attributed that peer to self; persisted observations and reader
+projections faithfully retained the mistake. Source revision `v6.r2` now gives an
+exact peer mapping priority over status, keeps unexplained non-peer/nonzero-unmapped
+native sender evidence unresolved and preserves the existing status-only compatibility
+path only for rows without native sender identity. System and group rules remain
+separate. The source change passes generated native/admission/compact and epoch
+regressions; it is not yet installed or activated. It requires an explicitly
+authorized stopped origin transition, exact old pending settlement and independent
+post-upgrade acceptance. Native self-username binding remains an open limitation.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
-- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and source native implementation `sightglass.macos-wechat.sqlcipher.v6.r1`. Native interpretation remains v6; the r1 implementation changes the existing projection/capture epoch recipe. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
+- Config v2, source-ID-v2, window schema v10, parser `sightglass.wechat-parser.v2` and source native implementation `sightglass.macos-wechat.sqlcipher.v6.r2` (installed origin still r1 pending the transition above). Native interpretation remains v6; implementation revisions feed the existing projection/capture epoch recipe. Native access supports the exact WeChat **4.1.13 / build 269602 / arm64** and **4.1.15 / build 270115 / arm64** profiles on macOS; one exact account and verified keys require explicit operator authorization.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 

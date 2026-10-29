@@ -86,10 +86,9 @@ _MESSAGE_COLUMNS = {
     "packed_info_data",
 }
 
-# The supported macOS WeChat build uses 0/1 for received rows and 2/3 for
-# account-sent rows. A content-free live lookup confirmed that the exact
-# owner-sent row reported by named-host acceptance has status 3, so testing
-# equality against only 2 silently reattributed it to the direct-chat peer.
+# These are legacy direction hints for rows without native sender identity.
+# Status 3 occurs on both peer- and account-sent rows: an exact same-shard
+# Name2Id mapping must be interpreted before this compatibility fallback.
 _OUTGOING_MESSAGE_STATUSES = frozenset({2, 3})
 _RECEIVED_MESSAGE_STATUSES = frozenset({0, 1})
 # System and recall rows are conversation events, not utterances. Their stored
@@ -133,7 +132,7 @@ _ACTIVE_SCOPED_SESSION: contextvars.ContextVar[_ScopedSession | None] = contextv
 
 
 def _message_direction(status: Any) -> str:
-    """Classify a native row as ``outgoing``, ``incoming``, or ``unknown``.
+    """Classify a legacy status hint as ``outgoing``, ``incoming``, or ``unknown``.
 
     Unrecognized states stay ``unknown`` so callers fail closed rather than
     asserting a human sender that the row's direction evidence cannot support.
@@ -498,7 +497,7 @@ class MacOSWeChatSourceProvider:
     def descriptor(self) -> SourceProviderDescriptor:
         return SourceProviderDescriptor(
             kind="macos-wechat",
-            implementation="sightglass.macos-wechat.sqlcipher.v6.r1",
+            implementation="sightglass.macos-wechat.sqlcipher.v6.r2",
             source_mode="live",
             platform=("darwin",),
             supports_incremental=True,
@@ -1575,7 +1574,7 @@ class MacOSWeChatSourceProvider:
         *,
         row_alias: str,
     ) -> str:
-        """SQL expression for the stable group sender mapped by ``real_sender_id``.
+        """SQL expression for the native sender mapped by same-shard ``Name2Id``.
 
         Older direct-chat fixtures and unsupported source shapes may lack ``Name2Id``;
         those rows deliberately project no mapped sender instead of guessing from text.
@@ -2456,6 +2455,16 @@ class MacOSWeChatSourceProvider:
         content = str(content or "")
         direction = _message_direction(row["status"])
         mapped_sender = str(row["real_sender_username"] or "") or None
+        direct_peer = (
+            conversation.kind == "direct"
+            and mapped_sender == conversation.source_conversation_id
+        )
+        # Only an exact peer match is identified without an independent native
+        # self binding. Other mappings, including a missing Name2Id target for
+        # a nonzero raw sender, must not become self by status or complement.
+        direct_sender_evidence = conversation.kind == "direct" and bool(
+            mapped_sender or row["real_sender_source_id"]
+        )
         group_prefix = (
             content.split(":\n", 1)[0]
             if conversation.kind == "group" and ":\n" in content
@@ -2479,6 +2488,7 @@ class MacOSWeChatSourceProvider:
             direction == "outgoing"
             and verified_group_sender is None
             and not conflicting_group_envelope
+            and not direct_sender_evidence
         )
         sender_id: str | None = None
         current_label: str | None = None
@@ -2496,7 +2506,11 @@ class MacOSWeChatSourceProvider:
             sender_id = f"self:{self.settings.source_account_key}"
             current_label = "我"
             current_label_kind = "account_nickname"
-        elif conversation.kind == "direct" and direction == "incoming":
+        elif direct_peer or (
+            conversation.kind == "direct"
+            and not direct_sender_evidence
+            and direction == "incoming"
+        ):
             sender_id = conversation.source_conversation_id
             nickname, remark = (state.contacts or {}).get(sender_id, ("", ""))
             current_label = remark or nickname or None
@@ -2513,7 +2527,8 @@ class MacOSWeChatSourceProvider:
                     sender_id,
                     "stable",
                     True,
-                    "macos-wechat.message-envelope",
+                    ("macos-wechat.message-name2id" if direct_peer
+                     else "macos-wechat.message-envelope"),
                 ),
             )
             if sender_id

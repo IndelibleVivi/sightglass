@@ -40,6 +40,11 @@ request ID 或 source 路径。它是已观察状态，不能单独证明连接�
 Remote capture 受已 enrollment 的固定会话集合限制。Reader 的 `all_except_denylist`
 不会扩大独立的 source-egress grant；新会话需 operator 纳入后才能远端发现和读取。
 
+Native 私聊先使用同 shard 的 sender identity，再解释 status hint；已映射到联系人的
+消息不会因 status 被归成自己。其他无法核实的原生 sender mapping 保持 unresolved，
+正文仍可读。独立 native self username binding（包括可靠的本人会话归属）仍未完成；
+具体边界见 [source identity](docs/SOURCE-ADAPTER.md#stable-source-identity)。
+
 Core 加密卷由 Mac 持 key 时，可在明确安装后由 Mac 后台恢复任务接住 VPS reboot。
 它先通过固定 SSH capability 查询，只有卷未解锁时才读取已有 Keychain item；卷已挂载、
 服务被有意停止时保留停机状态。恢复仍需要 Mac 在线且 Keychain 可非交互读取。

@@ -52,9 +52,12 @@ class NativeContextWindowTests(unittest.TestCase):
     def test_v6_revision_revalidates_pre_reconciliation_materialized_cache(self) -> None:
         self._assert_implementation_epoch_transition("sightglass.macos-wechat.sqlcipher.v6")
 
+    def test_sender_revision_revalidates_r1_materialized_cache(self) -> None:
+        self._assert_implementation_epoch_transition("sightglass.macos-wechat.sqlcipher.v6.r1")
+
     def _assert_implementation_epoch_transition(self, previous: str) -> None:
         current = self.provider.descriptor
-        self.assertEqual(current.implementation, "sightglass.macos-wechat.sqlcipher.v6.r1")
+        self.assertEqual(current.implementation, "sightglass.macos-wechat.sqlcipher.v6.r2")
         with patch.object(type(self.provider), "descriptor", new_callable=PropertyMock,
                           return_value=replace(
                               current, implementation=previous

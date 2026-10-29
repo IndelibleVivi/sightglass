@@ -454,6 +454,7 @@ class NativeSourceProviderTests(unittest.TestCase):
         status: int = 0,
         local_type: int = 1,
         packed_info_data: bytes | None = None,
+        real_sender_id: int = 0,
     ) -> None:
         message = self._connect_new(relative)
         try:
@@ -465,7 +466,7 @@ class NativeSourceProviderTests(unittest.TestCase):
                     server_id,
                     local_type,
                     sort_seq,
-                    0,
+                    real_sender_id,
                     create_time,
                     status,
                     content,
@@ -2967,6 +2968,109 @@ class NativeSourceProviderTests(unittest.TestCase):
 
         self.assertEqual(message["sender"]["label"], "我")
         self.assertTrue(message["sender"]["is_self"])
+
+    def _install_direct_sender_mapping(self) -> None:
+        connection = self._connect_new("message/message_0.db")
+        try:
+            connection.execute("CREATE TABLE Name2Id(user_name TEXT UNIQUE)")
+            connection.executemany(
+                "INSERT INTO Name2Id(rowid,user_name) VALUES (?,?)",
+                ((1, self.conversation), (2, "synthetic-unverified-sender")),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_direct_mapped_peer_outranks_status_through_reader_projection(self) -> None:
+        self._install_direct_sender_mapping()
+        contents = []
+        for number, status in enumerate((0, 1, 2, 3, 4), start=51):
+            content = f"mapped peer status {status}"
+            contents.append(content)
+            self._insert_message(
+                local_id=number, server_id=100 + number, sort_seq=number,
+                create_time=1_725_000_000 + number, content=content,
+                status=status, real_sender_id=1,
+            )
+        self._insert_message(
+            local_id=56, server_id=156, sort_seq=56, create_time=1_725_000_056,
+            content="<msg><appmsg><title>mapped peer card</title><type>5</type>"
+                    "<url>https://example.invalid/synthetic-card</url></appmsg></msg>",
+            local_type=49, status=3, real_sender_id=1,
+        )
+        tools = self._reader_tools()
+        conversation_id = self._direct_conversation_id()
+        detail = tools.wechat_read_messages(
+            mode="recent", conversation_id=conversation_id, projection="detail", limit=20,
+        )
+        peer_rows = [item for item in detail["messages"]
+                     if item.get("text") in contents or item["kind"] == "link"]
+        self.assertEqual(len(peer_rows), 6)
+        for message in peer_rows:
+            self.assertEqual(message["sender"]["label"], "Fixture Remark")
+            self.assertFalse(message["sender"]["is_self"])
+        compact = tools.wechat_read_messages(
+            mode="recent", conversation_id=conversation_id, projection="compact", limit=20,
+        )
+        who = compact["fields"].index("who")
+        ids = compact["fields"].index("id")
+        peer_ids = {item["message_id"] for item in peer_rows}
+        selected = [row for row in compact["messages"] if row[ids] in peer_ids]
+        self.assertEqual(len(selected), 6)
+        self.assertTrue(all(not compact["people"][row[who]]["self"] for row in selected))
+
+    def test_direct_nonpeer_mapping_never_becomes_unproved_self(self) -> None:
+        self._install_direct_sender_mapping()
+        for number, status in enumerate((0, 2, 3, 4), start=61):
+            self._insert_message(
+                local_id=number, server_id=100 + number, sort_seq=number,
+                create_time=1_725_000_000 + number, content=f"unproved sender {status}",
+                status=status, real_sender_id=2,
+            )
+        page = self._reader_tools().wechat_read_messages(
+            mode="recent", conversation_id=self._direct_conversation_id(),
+            projection="detail", limit=20,
+        )
+        rows = [item for item in page["messages"]
+                if str(item.get("text", "")).startswith("unproved sender")]
+        self.assertEqual(len(rows), 4)
+        for message in rows:
+            self.assertFalse(message["sender"]["is_self"])
+            self.assertEqual(message["sender"]["identity_state"], "alias_only")
+            self.assertEqual(message["sender"]["label_source"], "opaque_fallback")
+
+    def test_direct_unmapped_native_sender_never_uses_status_fallback(self) -> None:
+        self._install_direct_sender_mapping()
+        self._insert_message(
+            local_id=71, server_id=171, sort_seq=71, create_time=1_725_000_071,
+            content="missing mapping for native sender", status=3, real_sender_id=99,
+        )
+        page = self._reader_tools().wechat_read_messages(
+            mode="recent", conversation_id=self._direct_conversation_id(),
+            projection="detail", limit=20,
+        )
+        message = next(item for item in page["messages"]
+                       if item.get("text") == "missing mapping for native sender")
+        self.assertFalse(message["sender"]["is_self"])
+        self.assertEqual(message["sender"]["identity_state"], "alias_only")
+
+    def test_direct_mapped_system_event_stays_without_human_sender(self) -> None:
+        self._install_direct_sender_mapping()
+        for number, local_type in enumerate((10000, 10002), start=75):
+            self._insert_message(
+                local_id=number, server_id=100 + number, sort_seq=number,
+                create_time=1_725_000_000 + number, content="synthetic system event",
+                status=3, real_sender_id=1, local_type=local_type,
+            )
+        with self.provider.session(SourceScope.conversation(
+            self.account_key, self.conversation,
+        )) as snapshot:
+            page = self.provider.read_recent(
+                self.account_key, self.conversation, 20, snapshot,
+            )
+        rows = [item for item in page.messages if item.wechat_type in (10000, 10002)]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(not item.sender_keys and not item.is_outgoing for item in rows))
 
     def test_direct_row_with_unrecognized_status_fails_closed(self) -> None:
         self._insert_message(

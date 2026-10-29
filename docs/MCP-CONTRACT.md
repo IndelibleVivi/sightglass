@@ -53,6 +53,10 @@ or history. A conflicted conversation may retain a catalog entry, but exposes no
 conflicted body/sender preview. Local catalog readability does not wait for all tails
 to complete a projection refresh.
 
+For message reads, `source_receipt.complete` confirms the requested bounded source
+operation, not complete conversation or account history. Preserve the separate
+coverage and continuation limits when explaining a result to the reader.
+
 Recent pagination binds the complete authorized activity/preview projection and mode.
 Catalog activity, unread, title, visibility or projected preview changes make a cursor
 stale; it never silently loses a contact that moved ahead. Bodies appended after its

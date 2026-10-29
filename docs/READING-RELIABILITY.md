@@ -49,6 +49,14 @@ owner 确认后同进程恢复，Chat 中自然接续请求显示了五条 fresh
 也不能把一次成功回执解释为全账号历史完整。具体 gates 与 activation 见
 [current-state](current-state.md)。
 
+后续 exact native point 核对已证明 direct peer mapping 可以和 status 3 同时存在，
+旧 status-only classifier 因而把联系人错归 self。r2 source candidate 让同 shard 的
+精确 peer identity 优先；非 peer 或未解析的非零 native sender 保持 unresolved，
+只有没有 native sender identity 的旧行保留原 status compatibility。原生 self username
+仍未独立绑定，不能从“非 peer”或 self principal 已存在推导本人身份。修复已通过
+detail/compact admission 与 r1→r2 epoch 回归；真实 origin 切换和后续 Chat 验收仍需
+按既有 stopped settlement／operator authority 继续。
+
 远端日用还有 source 授权生命周期的缺口：当前 egress ceiling 是固定 enrollment 集合，
 reader 的 `all_except_denylist` 不能让未来会话自动跨过该边界。后续需要把 scope 的可见
 解释、纳入新会话的流程与 cold source discovery 接到同一条阅读路径。若设计持续账号

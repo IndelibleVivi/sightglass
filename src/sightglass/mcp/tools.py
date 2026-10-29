@@ -280,6 +280,8 @@ class ReaderTools:
         view=replica stays local; refresh forces source evidence for non-update reads.
         Updates request_id gives bounded durable replay after a committed response is lost.
         Compact columns use fields/people; next_actions gives each continuation slot.
+        source_receipt.complete confirms this bounded read, not complete conversation history;
+        use coverage and continuation fields to describe history limits.
         A signed timeline cursor retains fresh view; clear refresh when continuing it.
         Default recent limit is 30. diagnostic preserves full receipts; updates replay exactly.
         """

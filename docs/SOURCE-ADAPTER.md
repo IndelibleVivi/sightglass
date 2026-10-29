@@ -87,9 +87,9 @@ index, these exact queries may still scan source positions; bounded payload work
 is not a constant-time claim.
 
 The native interpretation remains v6; its implementation identity is
-`sightglass.macos-wechat.sqlcipher.v6.r1` (parser
+`sightglass.macos-wechat.sqlcipher.v6.r2` (parser
 `sightglass.wechat-parser.v2`). That implementation identity feeds the existing
-projection/origin epoch, so pre-reconciliation v6 materialized projections cannot
+projection/origin epoch, so pre-r2 sender/context materialized projections cannot
 remain current and their timeline/search cursors become stale. Revalidation uses
 the existing bounded source paths; startup performs no bulk history migration or
 refill. This is a source contract, not an installation receipt: a remote core
@@ -195,7 +195,7 @@ Conversation discovery returns whether the current-source catalog is complete an
 - The repository independently whitelists principal key kinds; provider booleans cannot promote a mutable handle into canonical identity.
 - Conversation-local sender tokens are scoped keys and cannot link across conversations.
 - `public_handle`, remark, nickname, group card, and surface display names are observations only.
-- On the supported native build, direct statuses `0|1` are received and `2|3` are account-sent；other values stay unresolved rather than falling back to the peer. Outgoing rows resolve to the explicit self principal even if a group message has no sender prefix.
+- Direct sender identity first resolves `real_sender_id` through the same message shard's `Name2Id`. An exact conversation-peer username supplies peer identity, including with status `2|3` or an unknown status. A non-peer mapping, or a nonzero native sender ID without a mapping, stays unresolved; neither proves account self. Only rows without native sender identity retain the existing compatibility hints `0|1` incoming and `2|3` outgoing. Status `3` alone is not independent sender proof. The native account has no independently bound self username, so reliable self-dialog attribution remains unimplemented. Group envelope rules remain separate; verified member evidence still outranks status and conflicting envelopes stay unresolved.
 - System/recall rows are conversation events without human sender evidence and never match a participant speaker filter.
 - Account self is created during account bootstrap even when no roster/outgoing row currently exposes it. Contradictory outgoing sender evidence fails closed.
 
