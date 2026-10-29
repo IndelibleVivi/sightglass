@@ -34,6 +34,9 @@ contact 没有消息。Inbox 的 `mode="resident"` 则只查看缓存正文的�
 `window.db`、reader ACK、immutable deliveries、CAS、processing 与 MCP。Edge 主动建立固定
 SSH stdio 连接；Sightglass 没有 public listener，也不开放任意 provider-method RPC。
 
+Edge 保留一份有界的私有连接诊断 snapshot，区分 control 阶段错误，不保存聊天内容、
+request ID 或 source 路径。它是已观察状态，不能单独证明连接在线或消息已刷新。
+
 Remote capture 受已 enrollment 的固定会话集合限制。Reader 的 `all_except_denylist`
 不会扩大独立的 source-egress grant；新会话需 operator 纳入后才能远端发现和读取。
 

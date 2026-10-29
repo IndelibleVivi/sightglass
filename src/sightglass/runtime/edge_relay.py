@@ -1058,11 +1058,35 @@ class EdgeSession:
         token: str,
         core_generation: str = "",
         ownership_guard: Callable[[], None] | None = None,
+        connection_observer: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if not token:
             raise ValueError("a separate edge capability is required")
         self.executor, self.spool, self.token = executor, spool, token
         self.core_generation, self.ownership_guard = core_generation, ownership_guard
+        self._connection_observer = connection_observer
+        self._connection_state: dict[str, Any] = {
+            "schema": "sightglass.edge-connection.v1", "phase": "starting",
+            "last_error_code": None, "last_error_type": None, "last_error_location": None,
+            "historical_error_count": 0, "historical_error_code": None,
+            "historical_error_type": None, "historical_error_location": None,
+            "control": None,
+        }
+
+    def _observe_connection(self, phase: str, exc: Exception | None = None) -> None:
+        self._connection_state["phase"] = phase
+        if exc is not None:
+            reason = str(exc) if isinstance(exc, RelayDisconnected) else None
+            code = reason if reason in _RELAY_DIAGNOSTIC_REASONS else "relay_disconnected"
+            record_error(self._connection_state, exc, code)
+        elif phase == "connected":
+            clear_error(self._connection_state)
+        if self._connection_observer is not None:
+            try:
+                self._connection_observer(dict(self._connection_state))
+            except (OSError, CaptureProtocolError):
+                # Diagnostic persistence is not a transport/publication authority.
+                pass
 
     def _require_owned(self) -> None:
         if self.ownership_guard is not None:
@@ -1096,6 +1120,7 @@ class EdgeSession:
             "transport_revision": RELAY_TRANSPORT_REVISION,
         }:
             raise CaptureProtocolError("edge_session_handshake_rejected")
+        self._observe_connection("connected")
         while not stop.is_set():
             self._require_owned()
             pending = self.spool.pending()
@@ -1164,19 +1189,25 @@ class EdgeSession:
             raise CaptureProtocolError("edge_work_envelope_invalid")
         cancelled, done = threading.Event(), threading.Event()
         failures: list[BaseException] = []
+        control_failure: list[dict[str, Any]] = []
+        source_returned = threading.Event()
 
         def control() -> None:
+            phase = "working_send"
             try:
                 while not done.is_set():
                     if stop.is_set():
                         cancelled.set()
                         return
+                    phase = "working_send"
                     channel.send({
                         "schema": CAPTURE_VERSION, "kind": "working",
                         "request_id": request.request_id,
                         "core_generation": self.core_generation,
                     }, timeout=RELAY_CONTROL_TIMEOUT_SECONDS)
+                    phase = "reply_receive"
                     reply = channel.receive(timeout=RELAY_CONTROL_TIMEOUT_SECONDS)
+                    phase = "reply_validate"
                     if (not isinstance(reply, dict)
                             or set(reply) != {"schema", "kind", "request_id", "core_generation"}
                             or reply["schema"] != CAPTURE_VERSION
@@ -1189,6 +1220,13 @@ class EdgeSession:
                     done.wait(RELAY_CANCEL_POLL_SECONDS)
             except BaseException as exc:
                 failures.append(exc)
+                reason = str(exc) if isinstance(exc, RelayDisconnected) else None
+                control_failure.append({
+                    "phase": phase,
+                    "reason": reason if reason in _RELAY_DIAGNOSTIC_REASONS else None,
+                    "source_returned": source_returned.is_set(),
+                    "stop_requested": stop.is_set(),
+                })
                 cancelled.set()
 
         owner = threading.Thread(target=control, name="capture-control", daemon=True)
@@ -1201,13 +1239,20 @@ class EdgeSession:
                 sequence=self.spool.next_sequence, cancelled=cancelled,
                 timeout_seconds=float(remaining),
             )
+            source_returned.set()
         finally:
             done.set()
             owner.join(timeout=2 * RELAY_CONTROL_TIMEOUT_SECONDS + .1)
         self._require_owned()
         self.spool.store(envelope)
         if owner.is_alive() or failures:
-            raise RelayDisconnected("capture_control_disconnected")
+            self._connection_state["control"] = {
+                **(control_failure[0] if control_failure else {"phase": "join"}),
+                "owner_alive": owner.is_alive(), "spooled": True,
+            }
+            raise RelayDisconnected("capture_control_disconnected") from (
+                failures[0] if failures else None
+            )
         return envelope
 
     def reconnect(
@@ -1223,10 +1268,12 @@ class EdgeSession:
         backoff = initial_backoff
         while not stop.is_set():
             try:
+                self._observe_connection("connecting")
                 with connect() as channel:
                     self.run(channel, stop=stop)
                 return
-            except (RelayDisconnected, OSError):
+            except (RelayDisconnected, OSError) as exc:
+                self._observe_connection("disconnected", exc)
                 if stop.wait(random.uniform(0.8 * backoff, backoff)):
                     return
                 backoff = min(max_backoff, max(initial_backoff, backoff * 2))

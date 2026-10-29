@@ -39,6 +39,10 @@ read-only sessions and one
 deliveries, CAS, processing and MCP. The edge initiates a fixed SSH stdio connection;
 there is no public Sightglass listener or arbitrary provider-method RPC.
 
+The edge keeps one bounded private connection snapshot for operator diagnosis,
+including control-stage failures without chat content, request IDs or source paths.
+This observed state does not certify a live connection or fresh messages.
+
 Remote capture is limited to its enrolled conversation set. A reader's
 `all_except_denylist` policy does not extend that independent source-egress grant;
 new conversations need operator enrollment before remote discovery/reading.

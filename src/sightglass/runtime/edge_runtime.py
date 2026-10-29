@@ -23,12 +23,40 @@ from sightglass.source.capture.codec import SealedCapture
 from sightglass.source.direct_wechat import SyntheticSourceProvider
 
 from .activation import require_activation
+from .capture_recovery import read_private_json, write_private_json
 from .edge import EdgeSpool
 from .edge_relay import EdgeSession, SSHRelayConnector
 from .secrets import SecretStore, default_secret_store
 
 EDGE_CONFIG_SCHEMA = "sightglass.edge-config.v1"
 MAX_EDGE_CONFIG_BYTES = 512 * 1024
+
+
+class EdgeConnectionStatus:
+    """One bounded private snapshot beside, never inside, the pending spool."""
+
+    def __init__(self, spool_directory: Path) -> None:
+        self.path = spool_directory.with_name(spool_directory.name + ".connection.json")
+
+    def _previous(self) -> dict[str, Any] | None:
+        previous = read_private_json(self.path) if self.path.exists() else None
+        if previous is not None and previous.get("schema") != (
+            "sightglass.edge-connection.v1"
+        ):
+            raise CaptureProtocolError("edge_connection_status_invalid")
+        return previous
+
+    def __call__(self, value: dict[str, Any]) -> None:
+        from sightglass.contracts.common import utc_now
+
+        value = {**value, "pid": os.getpid(), "observed_at": utc_now().isoformat()}
+        try:
+            previous = self._previous()
+            write_private_json(self.path, value, expected=previous)
+        except (OSError, ValueError, RuntimeError, CaptureProtocolError):
+            # A damaged/foreign diagnostic cannot block startup or pending replay.
+            # Preserve it for the operator; this owner grants no repair authority.
+            return
 
 
 @dataclass(frozen=True)
@@ -244,6 +272,7 @@ def run_edge(
             token=token,
             core_generation=settings.core_generation,
             ownership_guard=settings.require_active,
+            connection_observer=EdgeConnectionStatus(settings.spool_directory),
         ).reconnect(connector.connect, stop=stop)
     finally:
         for number, handler in previous_handlers.items():

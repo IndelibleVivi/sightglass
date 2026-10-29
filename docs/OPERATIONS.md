@@ -145,6 +145,18 @@ freshness. The fixed stdio proxy has bounded buffers/write waits and exits on br
 EOF even if the stdin producer stays open; EOF is distinct from transient nonblocking
 readiness. Do not reset a spool or stream to clear a connection error.
 
+The Mac edge independently writes one private sibling of its spool directory,
+`<spool_directory>.connection.json`. This bounded replacement snapshot retains the
+current connection phase and last historical failure. `control` distinguishes
+`working_send`, `reply_receive`, `reply_validate` and join failure, the existing
+finite reason, whether source capture had returned, whether stop was requested,
+and whether the sealed batch was spooled. Underlying error type/public location
+survives publication wrappers. It contains no request/account IDs or content.
+Check its PID and observation time against the managed edge before using it;
+the file alone proves neither process liveness nor fresh source access. A successful
+reconnect clears the current error and retains the previous control failure.
+Diagnostic write failure does not release pending data or change protocol/ACK.
+
 Daemon status includes `lifecycle_state` (`starting`, `reloading`, `ready`,
 `degraded`, `stopping`, or `stopped`). Reload first stops every old worker and
 confirms quiescence before replacing its owner. A partial stop/start failure

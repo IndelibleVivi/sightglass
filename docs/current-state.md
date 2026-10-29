@@ -1,10 +1,17 @@
 # Current state
 
-Updated: 2026-10-28. This page owns current source, candidate and publication status.
+Updated: 2026-10-29. This page owns current source, candidate and publication status.
 Installation authorization, account metrics, host details, receipts and operational
 history belong in private operator records outside Git.
 
 ## Source and supported scope
+
+The current follow-up adds bounded Mac-side connection/control diagnostics while
+retaining source interpretation, transport, pending replay and reader grants.
+Real duplex-socket tests distinguish timely continue/cancel and source completion
+from withheld/partial control replies. This is a diagnostic candidate, not an
+activated fix for intermittent disconnects; artifact and live acceptance follow
+the current repair procedure. The previous Core increment remains active below.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
