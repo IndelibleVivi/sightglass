@@ -56,12 +56,11 @@ owner 确认后同进程恢复，Chat 中自然接续请求显示了五条 fresh
 仍未独立绑定，不能从“非 peer”或 self principal 已存在推导本人身份。修复已通过
 detail/compact admission 与 r1→r2 epoch 回归；真实 origin 切换在明确授权后按既有
 stopped settlement／加密 recovery 执行，原插件的 fresh recent/context 验证了 peer
-归属和 message ID 连续性。普通 ChatGPT 浏览器的本轮接续验收因 Chrome 控制连接
-不可用而未完成；不能把插件成功替代为浏览器成功。持久目录授权与无人值守重启
-仍需独立完成，不能靠频繁替换 Python runtime 取得持久 macOS App Data 权限。
+归属和 message ID 连续性。该阶段 Chrome 控制连接不可用，未完成浏览器接续验收；
+后续的持久目录授权与多客户端观察见下，不能用早期插件证据替代新的实际验收。
 
 2026-10-30 的接续把目录与正文的新鲜度拆开验证：普通 remote inbox／会话发现此前
-始终读 replica，虽然后台已有独立约 30 秒的 catalog due 刷新。新的 source candidate
+始终读 replica，虽然后台已有独立约 30 秒的 catalog due 刷新。已激活的 `fb0fb73`
 把 connected 时的新前台请求接到同一 typed catalog capture／admission；offline、显式
 replica、resident inbox 和已有 cursor 继续本地读取。后台关闭后，合成 stdio→IPC→Core→
 Edge journey 仍能在普通 inbox 看到变更后的活动信息，且不 capture 正文、不推进 tail／
@@ -69,12 +68,19 @@ history。Fresh catalog 只确认 metadata，preview 仍受 current epoch／resi
 限制，不能因此变成 fresh body。Native catalog fact time 来自 main/WAL mtime，未变的
 文件可以在多次成功确认中保留同一时间；旧时间本身不是漏消息或后台失败的证据。
 
-重启后的 source 权限连续性由独立的可选 sandbox helper candidate 承接：operator
+重启后的 source 权限连续性由独立的可选 sandbox helper 承接：operator
 通过系统 picker 明确选择单个账号目录，helper 持久保存只读 bookmark；后续 Edge 用
 现有 credential 派生的 proof 取得 implicit bookmark，并在 source 全寿命内持有 scope。
 它不改 TCC／Keychain ACL，不引入全盘授权或新 secret，也不扩大 source egress。
-真实目录 grant 与退出／重启后免 UI 续用仍需实际授权验收，不能由编译或 generated
-protocol tests 替代。操作边界见 [SOURCE-ACCESS](SOURCE-ACCESS.md)。
+此次明确授权的真实账号目录 grant、两个独立 receiver 进程读取，以及正式 Edge 退出／
+重启后的 fresh 消息与目录确认均已通过。固定 helper 不随普通 Python wheel 更新重建。
+这仍不能替代系统重启、锁定 Keychain、睡眠／唤醒与全天延迟验证；也不扩大 source
+egress。操作边界见 [SOURCE-ACCESS](SOURCE-ACCESS.md)。
+
+普通 GPT-6 Chat 的服务端 inbox／message receipts 成功，operator 同时确认手机显示了
+正常结果；受控 Chrome 页面仍显示“无法加载此回复”。手机显示是 operator 提供的验收
+事实，本轮没有独立手机画面。对真实日用应同时看工具调用、回复交付和所用客户端，
+不能把任一层的失败直接归因给 source，也不能用后端成功掩盖仍失败的客户端体验。
 
 远端日用还有 source 授权生命周期的缺口：当前 egress ceiling 是固定 enrollment 集合，
 reader 的 `all_except_denylist` 不能让未来会话自动跨过该边界。后续需要把 scope 的可见

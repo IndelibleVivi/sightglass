@@ -45,8 +45,8 @@ Native 私聊先使用同 shard 的 sender identity，再解释 status hint；�
 正文仍可读。独立 native self username binding（包括可靠的本人会话归属）仍未完成；
 具体边界见 [source identity](docs/SOURCE-ADAPTER.md#stable-source-identity)。
 
-可选的 [macOS source-access helper](docs/SOURCE-ACCESS.md) 是用于持久只读访问单个
-已配置账号目录的 source candidate。它通过明确的系统 picker 和经过认证的 bookmark
+可选的 [macOS source-access helper](docs/SOURCE-ACCESS.md) 可持久只读访问单个
+已配置账号目录。它通过明确的系统 picker 和经过认证的 bookmark
 交接工作，复用现有 Edge credential，原凭据不会交给 helper。准备阶段只生成新的
 shadow config；真实目录授权与重启验收仍是独立 operator 步骤。它默认不启用，普通
 package upgrade 也不会安装或授权它。

@@ -61,17 +61,17 @@ respectively, before activation.
 The explicitly authorized stopped transition settled old pending work, independently
 matched the Core committed stream position to the empty Edge spool, and verified
 encrypted database, semantic-sidecar and spool recovery before changing origin.
-Both Core and Edge now use `9e7dae8`, preserving stream and sequence continuity,
-schema, account, credentials and authorization scope. Bounded fresh reads through the original
+Both Core and Edge advanced to `9e7dae8` at that transition, preserving stream and
+sequence continuity, schema, account, credentials and authorization scope. Bounded fresh reads through the original
 plugin retained message IDs and corrected peer attribution; fresh context also
 succeeded. Further progress on the preserved stream was observed after resume. The semantic
 worker retains its original exact scope and uses the new generation; old remote
 namespaces were not deleted. Native self-username binding remains an open limitation.
 
-This is bounded plugin acceptance, not sustained daily reliability or a new ordinary
-ChatGPT browser acceptance: the previously used Chrome control connection was
-unavailable during that follow-up. Persistent macOS source-folder permission also
-remains a separate implementation and owner-authorization boundary.
+That stage established bounded plugin acceptance. Chrome control was unavailable
+during its immediate follow-up; the subsequent activation and client observations
+below supersede that temporary acceptance boundary. None of these bounded checks
+establishes sustained daily reliability.
 
 - Development preview `0.1.0.dev1`; Python 3.11+ (Linux voice candidate uses 3.12), SQLite 3.43+ with FTS5 trigram and `contentless_delete`. No public package or tagged release.
 - Thirteen read-only stdio MCP tools communicate with the policy-enforcing daemon over authenticated local IPC. The [MCP contract](MCP-CONTRACT.md) owns arguments, projections and continuation semantics.
@@ -79,7 +79,7 @@ remains a separate implementation and owner-authorization boundary.
 - Optional speech recognition uses macOS 26 with the Apple helper/assets, or an operator-prepared whisper.cpp multilingual model inside an isolated Linux systemd scope. Optional semantic recall uses BGE-M3 + Vectorize, is disabled by default, and requires separate exact-scope external-data consent.
 - The [complete coverage ledger](IMPLEMENTATION-PLAN.md) retains every accepted M0–M7 outcome. An implemented tranche does not complete that programme.
 
-## Foreground catalog and persistent source access: source candidates
+## Foreground catalog and persistent source access: activated
 
 New remote recent-inbox and conversation-discovery calls now select a catalog
 capture when connected. Offline, explicit replica and resident inbox requests stay
@@ -87,11 +87,22 @@ local; signed continuations preserve their original plane and fact time. Foregro
 and background share the catalog-state admission owner and the existing transaction-bound
 receive/ACK path. Metadata refresh neither imports message history nor certifies the
 freshness of cached body previews. The independent background catalog cadence remains.
-Canonical integration passed 1,754 tests, full Ruff/Pyright and compilation. The
+Source [fb0fb73](https://github.com/IndelibleVivi/sightglass/commit/fb0fb73179c68165301fd4aaca3708ac40f7f325)
+passed both hosted jobs in
+[40930836056](https://github.com/IndelibleVivi/sightglass/actions/runs/40930836056):
+1,755 macOS tests (four skips), 1,095 portable tests (20 skips), typing/lint,
+build and the installed-wheel gates. Local canonical integration passed 1,754 tests
+before the final additional compiled-writer regression; the final 29 focused
+helper/Edge tests also passed. The
 no-background catalog journey covers generated stdio/IPC/Core/Edge calls; signed
 continuations also work on hosts that expose only the cursor parameter. This source
-candidate has not yet replaced the activated `9e7dae8` Core; frozen installation and
-hosted gates are separate next steps.
+revision is now active on Core and Edge after their frozen candidates passed 409
+Linux tests (three macOS-only skips) and 306 Mac tests, with exact 139-module/five-rights
+artifact provenance and unchanged frozen dependencies. Source/contracts, model,
+storage, residency, semantic and resource code retained byte parity. The stopped
+same-schema promotion retained the latest database, original pending spool,
+origin, stream and authorization scope; an old pending capture received its exact
+durable terminal ACK after restart. No old database or spool was restored.
 
 The optional [macOS source-access helper](SOURCE-ACCESS.md) uses protocol v3,
 one exact account-directory grant, authenticated implicit-bookmark transfer and a
@@ -106,8 +117,32 @@ the earlier malformed framing, nullable-field and error-correlation behaviors we
 rejected by the new regression. A compiled production-writer probe also covers first
 publication, replacement, private permissions and uncertain post-publication failure.
 It caught and now rejects the Foundation directory-open failure; publication uses an
-explicit directory descriptor and fsync. A real account-directory grant, second-process access and persistence
-after restart remain separate owner-authorized acceptance; this helper is not active.
+explicit directory descriptor and fsync.
+
+The separately approved account-directory grant is now active through a fixed
+helper and new shadow Edge settings. Two independently started receiver processes
+read an already authorized conversation through noninteractive leases. The installed
+Edge then exited and restarted with the same helper; fresh message reads and a
+confirmed catalog refresh succeeded afterward. Optional shared sticker-configuration
+files were not granted. This verifies process-restart continuity for the tested
+installation, not system reboot, locked-Keychain, sleep/wake or all-day behavior.
+
+Live original-plugin checks confirmed ordinary recent inbox and conversation
+discovery through fresh catalog capture, cursor-only continuation on its original
+plane, and fresh messages retaining IDs and corrected peer attribution. The original
+stdio command lists thirteen tools and the new optional catalog view parameters;
+already connected clients may still cache older optional-parameter metadata.
+An ordinary GPT-6 Chat run produced successful server-side inbox/message receipts.
+The operator reported completed replies on mobile while the controlled Chrome page
+showed reply-load failures, including on a separate explicit-plugin request. Mobile
+display was operator-observed, not independently captured by this run. Browser
+rendering and successful tool execution remain separate observations.
+
+A bounded post-restart window kept Core, Edge and tunnel available in every sample;
+one background timeout was observed and later status recovered. Daily latency,
+new-message arrival parity and all-day reliability remain unproven. Existing remote
+conversation enrollment still limits which newly created contacts can appear; the
+filesystem grant does not extend source-egress consent.
 
 ## Vault restart recovery: installed
 

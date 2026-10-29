@@ -53,8 +53,8 @@ sender mappings remain unresolved while the message stays readable. Independent
 native self-username binding, including reliable self-dialog attribution, remains
 an open limitation; see [source identity](docs/SOURCE-ADAPTER.md#stable-source-identity).
 
-An optional [macOS source-access helper](docs/SOURCE-ACCESS.md) is a source candidate
-for persistent, read-only access to the single configured account directory. It uses
+An optional [macOS source-access helper](docs/SOURCE-ACCESS.md) provides persistent,
+read-only access to the single configured account directory. It uses
 an explicit system picker and authenticated bookmark handoff, reusing the existing
 Edge credential without sending that credential to the helper. Preparation writes a
 new shadow config; real directory authorization and restart acceptance are separate
