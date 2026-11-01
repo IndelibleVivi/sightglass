@@ -908,10 +908,13 @@ tool and two fixed strict arguments leave the catalog; a 12 KiB / 70-field targe
 has not been reached.
 
 GitHub Actions owns CI. Portable checks run on code pushes and PRs; the full macOS
-suite runs on main pushes, PRs and manual dispatch. Documentation-only changes skip
-automatic jobs. The published public `main` registers this workflow and runs both portable and
-macOS gates on code pushes. Feature-branch pushes run portable checks;
-full macOS coverage requires a PR or manual run on a registered default branch.
+suite runs on main pushes, PRs and manual dispatch.
+Documentation-only changes run a Linux build/installed-wheel packaging check instead
+of the product suites; benchmark JSON, diagrams/assets and configuration remain full. Main and non-PR runs use per-run concurrency, so a newer commit
+cannot cancel an earlier pending run; superseded PR runs may be cancelled. The
+published public `main` registers this workflow and runs both portable and macOS
+gates on code pushes. Feature-branch pushes run portable checks; full macOS coverage
+requires a PR or a manual run on a registered default branch.
 [Public hosted results](https://github.com/IndelibleVivi/sightglass/actions/workflows/synthetic.yml)
 belong to their exact commit and repository; local validation and installed-runtime
 acceptance remain separate evidence.
@@ -944,3 +947,9 @@ The owner selected AGPL-3.0-only for software/functional materials and CC BY-NC-
 4.0 for independent explanations/artwork; the [licensing map](../LICENSING.md)
 binds their paths. [Notices](../NOTICE.md) and the [WGO reuse map](WGO-REUSE-MAP.md)
 preserve the AGPL provenance boundary and separate installed-dependency terms.
+
+## 2026-11-01 CI optimization candidate
+
+The optimization branch changes concurrency, uv setup/cache and native dependency setup; source is not yet merged. Prose-only selection still invokes the canonical packaging gate. Manual dispatch always exercises both product platforms; no schedule was added. Hosted acceptance is recorded on the optimization PR.
+
+Hosted candidate verification exposed the scheduled macOS 14 image brownout before any runner steps started. The image retires on 2026-11-02 ([runner-images notice](https://github.com/actions/runner-images/issues/13518)); the candidate now pins `macos-15` while preserving Python 3.13 and every native test/build/wheel check. This is an image-availability repair, not a product test failure or a change to product runtime support.

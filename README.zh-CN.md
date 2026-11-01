@@ -285,9 +285,11 @@ uv run python scripts/check-installed-wheel.py
 git diff --check
 ```
 
-两个 CI jobs 在 build 后调用相同的 [installed-wheel gate](scripts/check-installed-wheel.py)：
+两个 product CI jobs 在 build 后调用相同的 [installed-wheel gate](scripts/check-installed-wheel.py)：
 核对 exact source／license payload，在全新 noneditable environment 中安装 frozen runtime
 extras，从 empty cwd 执行四个真实 entrypoints，再用 installed imports 读取 generated messages。
+Documentation-only change 会保留Linux build／installed-wheel packaging gate；benchmark JSON、图、asset 和 config 仍运行 product suite；
+新的 main commit 不会取消先前 pending main run，但 superseded PR run 可被替换。
 该 gate 不激活安装；单独 candidate 可用
 `--wheel /path/to/candidate.whl --sdist /path/to/candidate.tar.gz` 指定。
 `--offline` 只使用已有 dependency cache；普通 CI 保留原有 dependency 访问方式。
