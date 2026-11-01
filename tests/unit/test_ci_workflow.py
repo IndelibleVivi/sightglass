@@ -52,6 +52,10 @@ class CIWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("pip install uv", self.workflow)
         self.assertNotIn("actions/cache", self.workflow)
 
+    def test_native_runner_uses_the_supported_macos_image(self) -> None:
+        self.assertIn("runs-on: macos-15", self.workflow)
+        self.assertNotIn("runs-on: macos-14", self.workflow)
+
     def test_macos_keeps_full_tools_without_sqlcipher_source_build(self) -> None:
         self.assertIn("brew install poppler", self.workflow)
         self.assertNotIn("brew install sqlcipher", self.workflow)

@@ -951,3 +951,5 @@ preserve the AGPL provenance boundary and separate installed-dependency terms.
 ## 2026-11-01 CI optimization candidate
 
 The optimization branch changes concurrency, uv setup/cache and native dependency setup; source is not yet merged. Prose-only selection still invokes the canonical packaging gate. Manual dispatch always exercises both product platforms; no schedule was added. Hosted acceptance is recorded on the optimization PR.
+
+Hosted candidate verification exposed the scheduled macOS 14 image brownout before any runner steps started. The image retires on 2026-11-02 ([runner-images notice](https://github.com/actions/runner-images/issues/13518)); the candidate now pins `macos-15` while preserving Python 3.13 and every native test/build/wheel check. This is an image-availability repair, not a product test failure or a change to product runtime support.
