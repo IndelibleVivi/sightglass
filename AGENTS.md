@@ -110,7 +110,7 @@ Feature-branch pushes run portable checks until a PR or manual macOS run.
 The portable job includes generated residency, offline compact, paired-runtime
 and released-observation regressions, plus same-account rebind and refresh-only
 host paging; it does not open a native account.
-Documentation-only pushes/PRs skip both jobs. Manual dispatch can select a ref
+Prose-only pushes/PRs use a Linux packaging gate (build, canonical installed-wheel validation and CI selector regressions); JSON benchmarks, diagrams/assets, config and unknown paths retain product checks. All events create terminal checks. PR runs may cancel an older run for that PR; non-PR runs use unique run IDs so pending main verification cannot be replaced. `setup-uv` owns the uv dependency cache; native SQLCipher uses the frozen wheel and Poppler remains installed. Manual dispatch can select a ref
 once this workflow is registered on the default branch; until then use a PR
 for hosted native coverage. Do not promote product source merely to enable dispatch.
 Both jobs build and invoke `scripts/check-installed-wheel.py` as the canonical installed-artifact gate: exact package/license payload, a fresh noneditable runtime-only frozen environment, four real entrypoints from an empty cwd and generated synthetic reads. Provider YAML must call that entry rather than duplicate its logic. No hosted job reads a real account.

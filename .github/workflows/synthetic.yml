@@ -1,27 +1,67 @@
 name: Synthetic source gates
 on:
-  push:
-    paths-ignore:
-      - 'docs/**'
-      - 'README.md'
-      - 'README.zh-CN.md'
-      - 'AGENTS.md'
-      - 'NOTICE.md'
-  pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - 'README.md'
-      - 'README.zh-CN.md'
-      - 'AGENTS.md'
-      - 'NOTICE.md'
+  push: {}
+  pull_request: {}
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: synthetic-${{ github.ref }}
-  cancel-in-progress: true
+  group: >-
+    synthetic-${{ github.workflow }}-${{
+      github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number)
+        || format('{0}-{1}', github.event_name, github.run_id)
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Detect code, workflow, packaging and documentation changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BASE_SHA"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            base="$BEFORE_SHA"
+          fi
+          python scripts/ci_changes.py --event "$EVENT_NAME" --base "$base" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+  docs:
+    needs: classify
+    if: needs.classify.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen --extra dev --extra macos-wechat --extra voice
+      - run: uv run python -m unittest tests.unit.test_ci_workflow
+      - run: uv build
+      - name: Frozen installed-wheel entrypoints and generated read
+        run: uv run python scripts/check-installed-wheel.py
   portable:
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,7 +72,10 @@ jobs:
         with:
           # Linux voice uses the functional upstream cp312 SILK wheel in uv.lock.
           python-version: '3.12'
-      - run: python -m pip install uv
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - run: uv sync --frozen --extra dev --extra macos-wechat --extra voice
       - name: Portable policy, migrations, recovery, links, retrieval and IPC
         run: >-
@@ -82,13 +125,17 @@ jobs:
           tests.integration.test_reading_resilience tests.integration.test_materialized_read_plane
           tests.integration.test_search_candidate_window tests.integration.test_m4_daemon
           tests.contract.test_mcp_contract tests.contract.test_mcp_brief
+          tests.unit.test_ci_workflow
       - run: uv run python -m compileall -q src tests examples
       - run: uv run ruff check src tests examples/benchmarks scripts/vault_gateway.py scripts/vault_recovery.py
       - run: uv build
       - name: Frozen installed-wheel entrypoints and generated read
         run: uv run python scripts/check-installed-wheel.py
   macos:
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    needs: classify
+    if: >-
+      needs.classify.outputs.docs_only != 'true' &&
+      (github.event_name != 'push' || github.ref == 'refs/heads/main')
     runs-on: macos-14
     timeout-minutes: 30
     steps:
@@ -98,13 +145,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: brew install sqlcipher poppler
-      - run: python -m pip install uv
+      - run: brew install poppler
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - name: Install optional native fixture dependencies
-        run: |
-          CPPFLAGS="-I$(brew --prefix sqlcipher)/include" \
-          LDFLAGS="-L$(brew --prefix sqlcipher)/lib" \
-          uv sync --frozen --extra dev --extra macos-wechat --extra voice
+        run: uv sync --frozen --extra dev --extra macos-wechat --extra voice
       - run: uv run python -m unittest discover -s tests -t . -p 'test_*.py'
       - run: uv run pyright
       - run: uv build

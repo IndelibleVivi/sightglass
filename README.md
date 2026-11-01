@@ -331,10 +331,11 @@ git diff --check
 ```
 
 Code pushes and PRs run the portable gate. The full macOS gate runs on main
-pushes, PRs, or manual `Synthetic source gates` dispatch; a feature-branch push
-alone does not run macOS. Documentation-only changes skip automatic CI. GitHub
-requires the workflow on the default branch before enabling manual dispatch;
-until promotion, use a PR for hosted macOS coverage.
+pushes, PRs or manual `Synthetic source gates` dispatch; a
+feature-branch push alone does not run macOS. Documentation-only changes retain
+a Linux build and installed-wheel packaging gate; code, config, benchmark JSON and diagram inputs retain product suites. Pending main runs
+are never cancelled by a newer commit, while superseded PR runs can be replaced.
+GitHub requires the workflow on the default branch before enabling manual dispatch; until promotion, use a PR for hosted macOS coverage.
 
 Both CI jobs run the same [installed-wheel gate](scripts/check-installed-wheel.py)
 after building. It checks exact source/license payload, installs frozen runtime extras
